@@ -12,17 +12,20 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/pem"
 	"testing"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
 	"github.com/hyperledger/fabric-lib-go/bccsp/signer"
+	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	"github.com/hyperledger/fabric-lib-go/bccsp/utils"
 	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -137,12 +140,14 @@ func TestSignatureAlgorithms(t *testing.T) {
 		ed25519SigningIdentity, _ := newSigningIdentity(
 			ed25519Cert,
 			ed25519FabricPubKey,
+			nil,
 			ed25519Signer,
 			mspImpl.(*bccspmsp))
 
 		ecdsaSigningIdentity, _ := newSigningIdentity(
 			ecdsaCert,
 			ecdsaFabricPubKey,
+			nil,
 			ecdsaSigner,
 			mspImpl.(*bccspmsp))
 
@@ -192,8 +197,8 @@ func TestIdentityValidation(t *testing.T) {
 		ed25519FabricPubKey, _ := bccspDefault.KeyImport(ed25519Cert, &bccsp.X509PublicKeyImportOpts{Temporary: true})
 		ecdsaFabricPubKey, _ := bccspDefault.KeyImport(ecdsaCert, &bccsp.X509PublicKeyImportOpts{Temporary: true})
 
-		ed25519Identity, _ := newIdentity(ed25519Cert, ed25519FabricPubKey, mspImpl.(*bccspmsp))
-		ecdsaIdentity, _ := newIdentity(ecdsaCert, ecdsaFabricPubKey, mspImpl.(*bccspmsp))
+		ed25519Identity, _ := newIdentity(ed25519Cert, ed25519FabricPubKey, nil, mspImpl.(*bccspmsp))
+		ecdsaIdentity, _ := newIdentity(ecdsaCert, ecdsaFabricPubKey, nil, mspImpl.(*bccspmsp))
 
 		err := mspImpl.Validate(ed25519Identity)
 		gt.Expect(err).To(gomega.HaveOccurred())
@@ -204,12 +209,63 @@ func TestIdentityValidation(t *testing.T) {
 		mspImpl.(*bccspmsp).cryptoConfig = cryptoConfig
 		mspImpl.Setup(&msp.MSPConfig{Config: mspConfigBytes})
 
-		ed25519Identity, _ = newIdentity(ed25519Cert, ed25519FabricPubKey, mspImpl.(*bccspmsp))
-		ecdsaIdentity, _ = newIdentity(ecdsaCert, ecdsaFabricPubKey, mspImpl.(*bccspmsp))
+		ed25519Identity, _ = newIdentity(ed25519Cert, ed25519FabricPubKey, nil, mspImpl.(*bccspmsp))
+		ecdsaIdentity, _ = newIdentity(ecdsaCert, ecdsaFabricPubKey, nil, mspImpl.(*bccspmsp))
 
 		err = mspImpl.Validate(ed25519Identity)
 		gt.Expect(err).NotTo(gomega.HaveOccurred())
 		err = mspImpl.Validate(ecdsaIdentity)
 		gt.Expect(err).NotTo(gomega.HaveOccurred())
 	})
+}
+
+func TestHybridSigningIdentitySignAndVerify(t *testing.T) {
+	bccspDefault, err := sw.NewDefaultSecurityLevel(t.TempDir())
+	require.NoError(t, err)
+	mspImpl, _ := newBccspMsp(MSPv3_0, bccspDefault)
+	mspImpl.(*bccspmsp).cryptoConfig = &msp.FabricCryptoConfig{
+		SignatureHashFamily:            "SHA2",
+		IdentityIdentifierHashFunction: "SHA256",
+	}
+
+	ecdsaDer, _ := pem.Decode([]byte(ecdsaCertPem))
+	ecdsaCert, _ := x509.ParseCertificate(ecdsaDer.Bytes)
+	ecdsaPrivKeyDer, _ := pem.Decode([]byte(ecdsaPrivPem))
+
+	ecdsaFabricPubKey, _ := bccspDefault.KeyImport(ecdsaCert, &bccsp.X509PublicKeyImportOpts{Temporary: true})
+	ecdsaFabricPrivKey, _ := bccspDefault.KeyImport(ecdsaPrivKeyDer.Bytes, &bccsp.ECDSAPrivateKeyImportOpts{Temporary: false})
+
+	ecdsaSigner, _ := signer.New(bccspDefault, ecdsaFabricPrivKey)
+
+	// Reuse the classical key as qPk in this unit test to deterministically exercise
+	// the hybrid signature packing and verification flow.
+	hybridSigningIdentity, err := newSigningIdentity(
+		ecdsaCert,
+		ecdsaFabricPubKey,
+		ecdsaFabricPubKey,
+		ecdsaSigner,
+		mspImpl.(*bccspmsp),
+	)
+	require.NoError(t, err)
+
+	msg := []byte("TEST")
+	sig, err := hybridSigningIdentity.Sign(msg)
+	require.NoError(t, err)
+
+	var unpacked hybridSignatureUnpack
+	_, err = asn1.Unmarshal(sig, &unpacked)
+	require.NoError(t, err)
+	require.NotEmpty(t, unpacked.ClassicalSign.Bytes)
+	require.NotEmpty(t, unpacked.QuantumSign.Bytes)
+
+	err = hybridSigningIdentity.Verify(msg, sig)
+	require.NoError(t, err)
+
+	err = hybridSigningIdentity.Verify([]byte("TESX"), sig)
+	require.Error(t, err)
+
+	// Ensure qPk survives in the signing identity and is not dropped.
+	internalID, ok := hybridSigningIdentity.(*signingidentity)
+	require.True(t, ok)
+	require.NotNil(t, internalID.identity.qPk)
 }

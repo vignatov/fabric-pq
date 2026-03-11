@@ -320,6 +320,7 @@ func newSigningIdentity(cert *x509.Certificate, pk bccsp.Key, qPk bccsp.Key, sig
 			cert: mspId.(*identity).cert,
 			msp:  mspId.(*identity).msp,
 			pk:   mspId.(*identity).pk,
+			qPk:  mspId.(*identity).qPk,
 		},
 		signer: signer,
 	}, nil
@@ -355,6 +356,38 @@ func (id *signingidentity) Sign(msg []byte) ([]byte, error) {
 	if id.identity.cert.PublicKeyAlgorithm != x509.Ed25519 {
 		mspIdentityLogger.Debugf("Sign: digest: %X \n", digestOrMsg)
 	}
+	if id.identity.qPk != nil {
+		qPrivKey, err := id.msp.bccsp.GetKey(id.identity.qPk.SKI())
+		if err != nil {
+			return nil, errors.WithMessage(err, "could not get quantum-safe private key")
+		}
+
+		qSig, err := id.msp.bccsp.Sign(qPrivKey, digestOrMsg, nil)
+		if err != nil {
+			return nil, errors.WithMessage(err, "could not produce quantum-safe signature")
+		}
+
+		hybridDigest := append(append([]byte{}, digestOrMsg...), qSig...)
+		hashOpt, err := bccsp.GetHashOpt(bccsp.SHA384)
+		if err != nil {
+			return nil, errors.WithMessage(err, "failed getting hybrid hash function options")
+		}
+		digestOrMsg, err = id.msp.bccsp.Hash(hybridDigest, hashOpt)
+		if err != nil {
+			return nil, errors.WithMessage(err, "failed computing hybrid digest")
+		}
+
+		classicalSig, err := id.signer.Sign(rand.Reader, digestOrMsg, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		return asn1.Marshal(hybridSignatureUnpack{
+			ClassicalSign: asn1.BitString{Bytes: classicalSig, BitLength: len(classicalSig) * 8},
+			QuantumSign:   asn1.BitString{Bytes: qSig, BitLength: len(qSig) * 8},
+		})
+	}
+
 	// Sign digest for ECDSA or msg for ED25519
 	return id.signer.Sign(rand.Reader, digestOrMsg, nil)
 }

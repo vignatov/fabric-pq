@@ -176,11 +176,7 @@
 
    END OF TERMS AND CONDITIONS
 
-<<<<<<<< HEAD:vendor/github.com/moby/patternmatcher/LICENSE
-   Copyright 2013-2018 Docker, Inc.
-========
    Copyright The containerd Authors
->>>>>>>> main:vendor/github.com/containerd/errdefs/pkg/LICENSE
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.

@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:vendor/go.uber.org/zap/internal/pool/pool.go
-// Copyright (c) 2023 Uber Technologies, Inc.
-========
 // Copyright (c) 2017 Uber Technologies, Inc.
->>>>>>>> main:vendor/github.com/onsi/ginkgo/v2/ginkgo/automaxprocs/runtime.go
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -22,45 +18,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-<<<<<<<< HEAD:vendor/go.uber.org/zap/internal/pool/pool.go
-// Package pool provides internal pool utilities.
-package pool
-
-import (
-	"sync"
-)
-
-// A Pool is a generic wrapper around [sync.Pool] to provide strongly-typed
-// object pooling.
-//
-// Note that SA6002 (ref: https://staticcheck.io/docs/checks/#SA6002) will
-// not be detected, so all internal pool use must take care to only store
-// pointer types.
-type Pool[T any] struct {
-	pool sync.Pool
-}
-
-// New returns a new [Pool] for T, and will use fn to construct new Ts when
-// the pool is empty.
-func New[T any](fn func() T) *Pool[T] {
-	return &Pool[T]{
-		pool: sync.Pool{
-			New: func() any {
-				return fn()
-			},
-		},
-	}
-}
-
-// Get gets a T from the pool, or creates a new one if the pool is empty.
-func (p *Pool[T]) Get() T {
-	return p.pool.Get().(T)
-}
-
-// Put returns x into the pool.
-func (p *Pool[T]) Put(x T) {
-	p.pool.Put(x)
-========
 package automaxprocs
 
 import "math"
@@ -80,5 +37,4 @@ const (
 // DefaultRoundFunc is the default function to convert CPU quota from float to int. It rounds the value down (floor).
 func DefaultRoundFunc(v float64) int {
 	return int(math.Floor(v))
->>>>>>>> main:vendor/github.com/onsi/ginkgo/v2/ginkgo/automaxprocs/runtime.go
 }

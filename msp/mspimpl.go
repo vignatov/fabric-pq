@@ -210,6 +210,18 @@ func (msp *bccspmsp) getIdentityFromConf(idBytes []byte) (mspId Identity, pK bcc
 	// also attempt to get an alternate (aka, post-quantum) key
 	// If not present, this will return nil with no error.
 	certQPubK, err := msp.bccsp.KeyImport(cert, &bccsp.X509AltPublicKeyImportOpts{Temporary: true})
+	if err != nil {
+		// Enforce strict behavior for hybrid certificates: if an alternate key extension
+		// is present but cannot be imported, fail fast instead of silently downgrading.
+		altPub, parseErr := oqs.ParseSubjectAltPublicKeyInfoExtension(cert.Extensions)
+		if parseErr != nil {
+			return nil, nil, nil, errors.WithMessage(parseErr, "failed to parse certificate alternate public key extension")
+		}
+		if altPub != nil {
+			return nil, nil, nil, errors.WithMessage(err, "found an alternate public key but failed to import it")
+		}
+		certQPubK = nil
+	}
 	if certQPubK != nil {
 		mspLogger.Debug("Successfully imported quantum-safe public key from certificate")
 	}
@@ -265,7 +277,7 @@ func (msp *bccspmsp) getSigningIdentityFromConf(sidInfo *m.SigningIdentityInfo) 
 	}
 
 	// get the peer signer
-	peerSigner, err := signer.New(msp.bccsp, privKey, qPrivKey)
+	peerSigner, err := signer.New(msp.bccsp, privKey)
 	if err != nil {
 		return nil, errors.WithMessage(err, "getIdentityFromBytes error: Failed initializing bccspCryptoSigner")
 	}
@@ -449,7 +461,16 @@ func (msp *bccspmsp) deserializeIdentityInternal(serializedIdentity []byte) (Ide
 	// If this is a classical (non-hybrid) cert, this will return a nil key without error.
 	qPub, err := msp.bccsp.KeyImport(cert, &bccsp.X509AltPublicKeyImportOpts{Temporary: true})
 	if err != nil {
-		return nil, errors.WithMessage(err, "found an alternate public key but failed to import it")
+		altPub, parseErr := oqs.ParseSubjectAltPublicKeyInfoExtension(cert.Extensions)
+		if parseErr != nil {
+			return nil, errors.WithMessage(parseErr, "failed to parse certificate alternate public key extension")
+		}
+		if altPub != nil {
+			return nil, errors.WithMessage(err, "found an alternate public key but failed to import it")
+		}
+
+		// Classical certificate without alternate key extension.
+		qPub = nil
 	}
 	if qPub != nil {
 		mspLogger.Debug("Successfully imported quantum-safe public key after deserialization.")

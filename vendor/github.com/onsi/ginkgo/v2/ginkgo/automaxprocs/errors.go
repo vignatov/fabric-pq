@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:vendor/go.uber.org/zap/zapcore/lazy_with.go
-// Copyright (c) 2023 Uber Technologies, Inc.
-========
 // Copyright (c) 2017 Uber Technologies, Inc.
->>>>>>>> main:vendor/github.com/onsi/ginkgo/v2/ginkgo/automaxprocs/errors.go
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -22,41 +18,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-<<<<<<<< HEAD:vendor/go.uber.org/zap/zapcore/lazy_with.go
-package zapcore
-
-import "sync"
-
-type lazyWithCore struct {
-	Core
-	sync.Once
-	fields []Field
-}
-
-// NewLazyWith wraps a Core with a "lazy" Core that will only encode fields if
-// the logger is written to (or is further chained in a lon-lazy manner).
-func NewLazyWith(core Core, fields []Field) Core {
-	return &lazyWithCore{
-		Core:   core,
-		fields: fields,
-	}
-}
-
-func (d *lazyWithCore) initOnce() {
-	d.Once.Do(func() {
-		d.Core = d.Core.With(d.fields)
-	})
-}
-
-func (d *lazyWithCore) With(fields []Field) Core {
-	d.initOnce()
-	return d.Core.With(fields)
-}
-
-func (d *lazyWithCore) Check(e Entry, ce *CheckedEntry) *CheckedEntry {
-	d.initOnce()
-	return d.Core.Check(e, ce)
-========
 //go:build linux
 // +build linux
 
@@ -88,5 +49,4 @@ func (err mountPointFormatInvalidError) Error() string {
 
 func (err pathNotExposedFromMountPointError) Error() string {
 	return fmt.Sprintf("path %q is not a descendant of mount point root %q and cannot be exposed from %q", err.path, err.root, err.mountPoint)
->>>>>>>> main:vendor/github.com/onsi/ginkgo/v2/ginkgo/automaxprocs/errors.go
 }

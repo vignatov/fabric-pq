@@ -1,5 +1,5 @@
-//go:build !purego
-// +build !purego
+//go:build !purego && !go1.24
+// +build !purego,!go1.24
 
 // Copyright 2020 ConsenSys Software Inc.
 //

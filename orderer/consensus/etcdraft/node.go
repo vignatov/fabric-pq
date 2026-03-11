@@ -32,13 +32,6 @@ var (
 	ErrNoLeader                   = errors.New("no leader")
 )
 
-var (
-	ErrChainHalting               = errors.New("chain halting is in progress")
-	ErrNoAvailableLeaderCandidate = errors.New("leadership transfer failed to identify transferee")
-	ErrTimedOutLeaderTransfer     = errors.New("leadership transfer timed out")
-	ErrNoLeader                   = errors.New("no leader")
-)
-
 type node struct {
 	chainID string
 	logger  *flogging.FabricLogger

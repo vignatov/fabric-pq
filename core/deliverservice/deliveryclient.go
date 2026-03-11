@@ -154,9 +154,12 @@ func (d *deliverServiceImpl) StartDeliverForChannel(chainID string, ledgerInfo b
 	}
 
 	d.channelID = chainID
+	blockDeliverer := d.blockDeliverer
 
 	go func() {
-		d.blockDeliverer.DeliverBlocks()
+		if blockDeliverer != nil {
+			blockDeliverer.DeliverBlocks()
+		}
 		finalizer()
 	}()
 	return nil
