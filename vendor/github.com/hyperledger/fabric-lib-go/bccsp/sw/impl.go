@@ -16,7 +16,6 @@ limitations under the License.
 package sw
 
 import (
-	"fmt"
 	"hash"
 	"reflect"
 
@@ -58,10 +57,6 @@ func New(keyStore bccsp.KeyStore) (*CSP, error) {
 	keyGenerators := make(map[reflect.Type]KeyGenerator)
 	keyDerivers := make(map[reflect.Type]KeyDeriver)
 	keyImporters := make(map[reflect.Type]KeyImporter)
-
-	for k := range signers {
-		fmt.Printf("signers map contains key type: %v\n", k)
-	}
 
 	csp := &CSP{
 		keyStore,
