@@ -20,7 +20,7 @@ Usage of configtxgen:
   -asOrg string
     	Performs the config generation as a particular organization (by name), only including values in the write set that org (likely) has privilege to set
   -channelCreateTxBaseProfile string
-    	[DEPRECATED] Specifies a profile to consider as the orderer system channel current state to allow modification of non-application parameters during channel create tx generation. Only valid in conjunction with 'outputCreateChannelTx'.
+    	Specifies a profile to consider as the orderer system channel current state to allow modification of non-application parameters during channel create tx generation. Only valid in conjunction with 'outputCreateChannelTx'.
   -channelID string
     	The channel ID to use in the configtx
   -configPath string
@@ -28,11 +28,13 @@ Usage of configtxgen:
   -inspectBlock string
     	Prints the configuration contained in the block at the specified path
   -inspectChannelCreateTx string
-    	[DEPRECATED] Prints the configuration contained in the transaction at the specified path
+    	Prints the configuration contained in the transaction at the specified path
+  -outputAnchorPeersUpdate string
+    	[DEPRECATED] Creates a config update to update an anchor peer (works only with the default channel creation, and only for the first update)
   -outputBlock string
     	The path to write the genesis block to (if set)
   -outputCreateChannelTx string
-    	[DEPRECATED] The path to write a channel creation configtx to (if set)
+    	The path to write a channel creation configtx to (if set)
   -printOrg string
     	Prints the definition of an organization as JSON. (useful for adding an org to a channel manually)
   -profile string
