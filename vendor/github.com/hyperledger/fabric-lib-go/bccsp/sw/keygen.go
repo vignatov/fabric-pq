@@ -15,7 +15,6 @@ import (
 	"fmt"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
-	oqspkg "github.com/hyperledger/fabric/pq-crypto"
 )
 
 type ecdsaKeyGenerator struct {
@@ -66,20 +65,4 @@ func (kg *rsaKeyGenerator) KeyGen(opts bccsp.KeyGenOpts) (bccsp.Key, error) {
 	}
 
 	return &rsaPrivateKey{lowLevelKey}, nil
-}
-
-type oqsKeyGenerator struct{}
-
-func (kg *oqsKeyGenerator) KeyGen(opts bccsp.KeyGenOpts) (bccsp.Key, error) {
-	alg := opts.Algorithm()
-	if alg == "" {
-		alg = "DEFAULT"
-	}
-
-	_, privateKey, err := oqspkg.KeyPair(oqspkg.SigType(alg))
-	if err != nil {
-		return nil, err
-	}
-
-	return &oqsPrivateKey{privKey: &privateKey}, nil
 }

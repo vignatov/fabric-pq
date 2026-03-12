@@ -18,8 +18,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-
-	oqspkg "github.com/hyperledger/fabric/pq-crypto"
 )
 
 type pkcs8Info struct {
@@ -155,23 +153,8 @@ func privateKeyToPEM(privateKey interface{}, pwd []byte) ([]byte, error) {
 			},
 		), nil
 
-	case *oqspkg.SecretKey:
-		if k == nil {
-			return nil, errors.New("invalid oqs private key. It must be different from nil")
-		}
-		raw, err := oqspkg.MarshalPKIXPrivateKey(k)
-		if err != nil {
-			return nil, err
-		}
-		return pem.EncodeToMemory(
-			&pem.Block{
-				Type:  "OQS PRIVATE KEY",
-				Bytes: raw,
-			},
-		), nil
-
 	default:
-		return nil, errors.New("invalid key type. It must be *ecdsa.PrivateKey, *ed25519.PrivateKey, *rsa.PrivateKey or *oqs.SecretKey")
+		return nil, errors.New("invalid key type. It must be *ecdsa.PrivateKey, *ed25519.PrivateKey or *rsa.PrivateKey")
 	}
 }
 
@@ -247,11 +230,7 @@ func derToPrivateKey(der []byte) (key interface{}, err error) {
 		return
 	}
 
-	if key, err = oqspkg.ParsePKIXPrivateKey(der); err == nil {
-		return
-	}
-
-	return nil, errors.New("invalid key type. The DER must contain an ecdsa.PrivateKey, an ed25519.PrivateKey or an oqs.SecretKey")
+	return nil, errors.New("invalid key type. The DER must contain an ecdsa.PrivateKey or an ed25519.PrivateKey")
 }
 
 func pemToPrivateKey(raw []byte, pwd []byte) (interface{}, error) {
@@ -392,24 +371,8 @@ func publicKeyToPEM(publicKey interface{}, pwd []byte) ([]byte, error) {
 			},
 		), nil
 
-	case *oqspkg.PublicKey:
-		if k == nil {
-			return nil, errors.New("invalid oqs public key. It must be different from nil")
-		}
-		pubASN1, err := oqspkg.MarshalPKIXPublicKey(k)
-		if err != nil {
-			return nil, err
-		}
-
-		return pem.EncodeToMemory(
-			&pem.Block{
-				Type:  "OQS PUBLIC KEY",
-				Bytes: pubASN1,
-			},
-		), nil
-
 	default:
-		return nil, errors.New("invalid key type. It must be *ecdsa.PublicKey, *ed25519.PublicKey, *rsa.PublicKey or *oqs.PublicKey")
+		return nil, errors.New("invalid key type. It must be *ecdsa.PublicKey, *ed25519.PublicKey or *rsa.PublicKey")
 	}
 }
 
@@ -497,11 +460,6 @@ func pemToPublicKey(raw []byte, pwd []byte) (interface{}, error) {
 func derToPublicKey(raw []byte) (pub interface{}, err error) {
 	if len(raw) == 0 {
 		return nil, errors.New("invalid DER. It must be different from nil")
-	}
-
-	// Try parsing as an OQS key first.
-	if key, err := oqspkg.ParsePKIXPublicKey(raw); err == nil {
-		return key, err
 	}
 
 	key, err := x509.ParsePKIXPublicKey(raw)

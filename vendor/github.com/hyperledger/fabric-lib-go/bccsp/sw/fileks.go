@@ -21,7 +21,6 @@ import (
 	"sync"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
-	oqspkg "github.com/hyperledger/fabric/pq-crypto"
 )
 
 // NewFileBasedKeyStore instantiated a file-based key store at a given position.
@@ -148,8 +147,6 @@ func (ks *fileBasedKeyStore) GetKey(ski []byte) (bccsp.Key, error) {
 			return &ed25519PrivateKey{&k}, nil
 		case *rsa.PrivateKey:
 			return &rsaPrivateKey{k}, nil
-		case *oqspkg.SecretKey:
-			return &oqsPrivateKey{privKey: k}, nil
 		default:
 			return nil, errors.New("secret key type not recognized")
 		}
@@ -167,8 +164,6 @@ func (ks *fileBasedKeyStore) GetKey(ski []byte) (bccsp.Key, error) {
 			return &ed25519PublicKey{&k}, nil
 		case *rsa.PublicKey:
 			return &rsaPublicKey{k}, nil
-		case *oqspkg.PublicKey:
-			return &oqsPublicKey{pubKey: k}, nil
 		default:
 			return nil, errors.New("public key type not recognized")
 		}
@@ -232,18 +227,6 @@ func (ks *fileBasedKeyStore) StoreKey(k bccsp.Key) (err error) {
 			return fmt.Errorf("failed storing AES key [%s]", err)
 		}
 
-	case *oqsPublicKey:
-		err = ks.storePublicKey(hex.EncodeToString(k.SKI()), kk.pubKey)
-		if err != nil {
-			return fmt.Errorf("failed storing OQS public key [%s]", err)
-		}
-
-	case *oqsPrivateKey:
-		err = ks.storePrivateKey(hex.EncodeToString(k.SKI()), kk.privKey)
-		if err != nil {
-			return fmt.Errorf("failed storing OQS private key [%s]", err)
-		}
-
 	default:
 		return fmt.Errorf("key type not reconigned [%s]", k)
 	}
@@ -284,8 +267,6 @@ func (ks *fileBasedKeyStore) searchKeystoreForSKI(ski []byte) (k bccsp.Key, err 
 			k = &ed25519PrivateKey{&kk}
 		case *rsa.PrivateKey:
 			k = &rsaPrivateKey{kk}
-		case *oqspkg.SecretKey:
-			k = &oqsPrivateKey{privKey: kk}
 		default:
 			continue
 		}
