@@ -5,6 +5,41 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 PATH=build/bin/:${PATH}
+fabric_dir="$(cd "$(dirname "$0")/.." && pwd)"
+
+resolve_help_command() {
+        local cmd="$1"
+        local -a parts
+        read -r -a parts <<< "$cmd"
+
+        local bin="${parts[0]}"
+        local local_bin=""
+        local use_local_path="false"
+
+        case "$bin" in
+                peer|configtxgen|cryptogen|configtxlator|osnadmin|ledgerutil)
+                        local_bin="${fabric_dir}/build/bin/${bin}"
+                        if [[ ! -x "$local_bin" ]]; then
+                                echo "Required binary not found: $local_bin"
+                                echo "Run 'make native' before running help docs checks."
+                                exit 1
+                        fi
+                        use_local_path="true"
+                        ;;
+                *)
+                        if ! command -v "$bin" >/dev/null 2>&1; then
+                                echo "Required command not found in PATH: $bin"
+                                exit 1
+                        fi
+                        ;;
+        esac
+
+        if [[ "$use_local_path" == "true" ]]; then
+                PATH="${fabric_dir}/build/bin:${PATH}" "${parts[@]}" --help 2>&1
+        else
+                "${parts[@]}" --help 2>&1
+        fi
+}
 
 # Takes in 4 arguments
 # 1. Output doc file
@@ -36,7 +71,7 @@ EOF
 
 ## $x
 $code_delim
-$($x --help 2>&1 | sed -E 's/[[:space:]]+$//g')
+$(resolve_help_command "$x" | sed -E 's/[[:space:]]+$//g')
 $code_delim
 
 EOD
