@@ -62,7 +62,7 @@ Available Commands:
   getinstalledpackage  Get an installed chaincode package from a peer.
   install              Install a chaincode.
   package              Package a chaincode
-  queryapproved        Query an org's approved chaincode definition from its peer.
+  queryapproved        Query org's approved chaincode definitions from its peer.
   querycommitted       Query the committed chaincode definitions by channel on a peer.
   queryinstalled       Query the installed chaincodes on a peer.
 
@@ -116,7 +116,7 @@ Global Flags:
 Install a chaincode on a peer.
 
 Usage:
-  peer lifecycle chaincode install [flags]
+  peer lifecycle chaincode install [packageFile] [flags]
 
 Flags:
       --connectionProfile string       The fully qualified path to the connection profile that provides the necessary connection information for the network. Note: currently only supported for providing peer connection information
@@ -200,7 +200,7 @@ Global Flags:
 Calculate the package ID for a packaged chaincode.
 
 Usage:
-  peer lifecycle chaincode calculatepackageid packageFile [flags]
+  peer lifecycle chaincode calculatepackageid [packageFile] [flags]
 
 Flags:
       --connectionProfile string       The fully qualified path to the connection profile that provides the necessary connection information for the network. Note: currently only supported for providing peer connection information
@@ -263,7 +263,7 @@ Global Flags:
 
 ## peer lifecycle chaincode queryapproved
 ```
-Query an organization's approved chaincode definition from its peer.
+Query organization's approved chaincode definitions from its peer.
 
 Usage:
   peer lifecycle chaincode queryapproved [flags]
@@ -306,6 +306,7 @@ Flags:
   -E, --endorsement-plugin string      The name of the endorsement plugin to be used for this chaincode
   -h, --help                           help for checkcommitreadiness
       --init-required                  Whether the chaincode requires invoking 'init'
+      --inspect                        If inspect is enabled, output additional information to identify discrepancies when an organization's approval is false
   -n, --name string                    Name of the chaincode
   -O, --output string                  The output format for query results. Default is human-readable plain-text. json is currently the only supported format.
       --peerAddresses stringArray      The addresses of the peers to connect to
