@@ -7,9 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 package nwo
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
@@ -221,13 +225,44 @@ func UpdateOrdererConfig(n *Network, orderer *Orderer, channel string, current, 
 	err = proto.Unmarshal(updateEnvelopeBytes, updateEnvelope)
 	Expect(err).NotTo(HaveOccurred())
 
-	ready := make(chan struct{})
-	go func() {
-		defer GinkgoRecover()
-		Update(n, orderer, channel, updateEnvelope)
-		close(ready)
-	}()
-	Eventually(ready, n.EventuallyTimeout).Should(BeClosed())
+	protocol := "http"
+	if n.TLSEnabled {
+		protocol = "https"
+	}
+	url := fmt.Sprintf("%s://127.0.0.1:%d/participation/v1/channels", protocol, n.OrdererPort(orderer, AdminPort))
+	authClient, unauthClient := OrdererOperationalClients(n, orderer)
+
+	client := unauthClient
+	if n.TLSEnabled {
+		client = authClient
+	}
+
+	// Cert-rotation flows can transiently fail with quorum-loss validation while
+	// the cluster converges. Retry only that specific condition.
+	submitUpdate := func() bool {
+		req := GenerateUpdateRequest(url, channel, updateEnvelopeBytes)
+		resp, err := client.Do(req)
+		Expect(err).NotTo(HaveOccurred())
+
+		bodyBytes, err := io.ReadAll(resp.Body)
+		Expect(err).NotTo(HaveOccurred())
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusCreated {
+			return true
+		}
+
+		body := string(bodyBytes)
+		if resp.StatusCode == http.StatusBadRequest && strings.Contains(body, "configuration will result in quorum loss") {
+			fmt.Fprintf(GinkgoWriter, "Retrying config update after transient quorum-loss validation: %s\n", body)
+			return false
+		}
+
+		Fail(fmt.Sprintf("failed to submit config update: status=%d body=%s", resp.StatusCode, body))
+		return false
+	}
+
+	Eventually(submitUpdate, n.EventuallyTimeout, 500*time.Millisecond).Should(BeTrue())
 
 	// wait for the block to be committed
 	ccb := func() uint64 { return CurrentConfigBlockNumber(n, submitter, orderer, channel) }

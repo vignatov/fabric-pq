@@ -21,7 +21,17 @@ if [[ -z "$CHECK" ]]; then
 fi
 
 echo "Checking changed go files for spelling errors ..."
-errs=$(echo "$CHECK" | xargs misspell -source=text)
+MISSPELL_CMD=$(command -v misspell || true)
+if [[ -z "$MISSPELL_CMD" && -x "$(go env GOPATH)/bin/misspell" ]]; then
+    MISSPELL_CMD="$(go env GOPATH)/bin/misspell"
+fi
+
+if [[ -z "$MISSPELL_CMD" ]]; then
+    echo "misspell binary not found on PATH or at \$(go env GOPATH)/bin/misspell"
+    exit 1
+fi
+
+errs=$(echo "$CHECK" | xargs "$MISSPELL_CMD" -source=text)
 if [ -z "$errs" ]; then
     echo "spell checker passed"
     exit 0

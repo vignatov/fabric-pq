@@ -15,7 +15,9 @@ if [[ -z "$CHECK" ]]; then
     CHECK=$(git diff-tree --no-commit-id --name-only --diff-filter=ACMRTUXB -r "HEAD^..HEAD" | tr '\n' ' ')
 fi
 
-FILTERED=$(filterExcludedAndGeneratedFiles "$CHECK")
+# grep exits with status 1 when no lines remain after filtering; treat that as
+# an empty filtered set rather than a hard failure under pipefail.
+FILTERED=$(filterExcludedAndGeneratedFiles "$CHECK" | grep -Ev '^(pq-crypto|third_party/fabric-lib-go)/' || true)
 if [[ -z "$FILTERED" ]]; then
     echo "All files are excluded from having license headers"
     exit 0

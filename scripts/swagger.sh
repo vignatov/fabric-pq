@@ -8,9 +8,24 @@ fabric_dir="$(cd "$(dirname "$0")/.." && pwd)"
 swagger_tags="${fabric_dir}/swagger/tags.json"
 swagger_doc="${fabric_dir}/swagger/swagger-fabric.json"
 
+resolve_swagger() {
+    local swagger_bin
+    swagger_bin=$(command -v swagger || true)
+    if [[ -z "$swagger_bin" && -x "$(go env GOPATH)/bin/swagger" ]]; then
+        swagger_bin="$(go env GOPATH)/bin/swagger"
+    fi
+    if [[ -z "$swagger_bin" ]]; then
+        echo "swagger binary not found on PATH or at $(go env GOPATH)/bin/swagger"
+        exit 1
+    fi
+    echo "$swagger_bin"
+}
+
+SWAGGER_BIN="$(resolve_swagger)"
+
 check_spec() {
     swagger_doc_check="${fabric_dir}/swagger/swagger-fabric-check.json"
-    swagger generate spec -o "$swagger_doc_check" --scan-models --exclude-deps --input "$swagger_tags"
+    "$SWAGGER_BIN" generate spec -o "$swagger_doc_check" --scan-models --exclude-deps --input "$swagger_tags"
     if [ -n "$(diff "$swagger_doc_check" "$swagger_doc")" ]; then
         echo "The Fabric swagger is out of date."
         echo "Please run '$0 generate' to update the swagger."
@@ -29,7 +44,7 @@ case "$1" in
 
     # generate the swagger
     "generate")
-        swagger generate spec -o "$swagger_doc" --scan-models --exclude-deps --input "$swagger_tags"
+        "$SWAGGER_BIN" generate spec -o "$swagger_doc" --scan-models --exclude-deps --input "$swagger_tags"
     ;;
 
     *)

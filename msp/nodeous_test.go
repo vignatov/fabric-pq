@@ -1,6 +1,8 @@
 /*
 Copyright IBM Corp. 2017 All Rights Reserved.
 
+SPDX-License-Identifier: Apache-2.0
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -269,7 +271,7 @@ func TestSatisfiesPrincipalAdmin(t *testing.T) {
 	cert, err := readFile("testdata/nodeouadmin/adm/testadmincert.pem")
 	require.NoError(t, err)
 
-	id, _, err := thisMSP.(*bccspmsp).getIdentityFromConf(cert)
+	id, _, _, err := thisMSP.(*bccspmsp).getIdentityFromConf(cert)
 	require.NoError(t, err)
 
 	principalBytes, err := proto.Marshal(&msp.MSPRole{Role: msp.MSPRole_ADMIN, MspIdentifier: "SampleOrg"})
@@ -329,7 +331,7 @@ func TestAdminInAdmincertsWith143MSP(t *testing.T) {
 		cert, err := readFile(filepath.Join(testFolder, "admincerts", "admin.pem"))
 		require.NoError(t, err)
 
-		id, _, err := localMSP.(*bccspmsp).getIdentityFromConf(cert)
+		id, _, _, err := localMSP.(*bccspmsp).getIdentityFromConf(cert)
 		require.NoError(t, err)
 		for _, ou := range id.GetOrganizationalUnits() {
 			require.NotEqual(t, "admin", ou.OrganizationalUnitIdentifier)

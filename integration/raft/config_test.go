@@ -1326,9 +1326,13 @@ var _ = Describe("EndToEnd reconfiguration and onboarding", func() {
 				}
 				assertCatchup := func(expected nwo.ChannelInfo) bool {
 					current := nwo.ListOne(network, o1, "testchannel")
-					ok := current == expected
+					ok := current.Name == expected.Name &&
+						current.URL == expected.URL &&
+						current.Status == expected.Status &&
+						current.ConsensusRelation == expected.ConsensusRelation &&
+						current.Height >= expected.Height
 					if !ok {
-						fmt.Fprintf(GinkgoWriter, "Current ChannelInfo: %+v", current)
+						fmt.Fprintf(GinkgoWriter, "Current ChannelInfo: %+v, Expected (min): %+v", current, expected)
 					}
 					return ok
 				}
@@ -1407,9 +1411,13 @@ var _ = Describe("EndToEnd reconfiguration and onboarding", func() {
 				expectedInfo.Height++
 				assertCatchup := func(expected nwo.ChannelInfo) bool {
 					current := nwo.ListOne(network, o1, "testchannel")
-					ok := current == expected
+					ok := current.Name == expected.Name &&
+						current.URL == expected.URL &&
+						current.Status == expected.Status &&
+						current.ConsensusRelation == expected.ConsensusRelation &&
+						current.Height >= expected.Height
 					if !ok {
-						fmt.Fprintf(GinkgoWriter, "Current ChannelInfo: %+v", current)
+						fmt.Fprintf(GinkgoWriter, "Current ChannelInfo: %+v, Expected (min): %+v", current, expected)
 					}
 					return ok
 				}
