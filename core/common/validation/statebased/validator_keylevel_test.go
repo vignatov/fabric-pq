@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package statebased
 
 import (
-	"fmt"
+	errors2 "errors"
 	"testing"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -107,17 +107,18 @@ func TestKeylevelValidation(t *testing.T) {
 	}
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
 	err := validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), endorsements)
 	require.NoError(t, err)
 
-	pe.EvaluateRV = fmt.Errorf("policy evaluation error")
+	pe.EvaluateRV = errors2.New("policy evaluation error")
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), endorsements)
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCEndorsementPolicyError{}, err)
+	var target *errors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 }
 
 func TestKeylevelValidationPvtData(t *testing.T) {
@@ -145,17 +146,18 @@ func TestKeylevelValidationPvtData(t *testing.T) {
 	validator.PreValidate(1, block)
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.NoError(t, err)
 
-	pe.EvaluateRV = fmt.Errorf("policy evaluation error")
+	pe.EvaluateRV = errors2.New("policy evaluation error")
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCEndorsementPolicyError{}, err)
+	var target *errors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 }
 
 func TestKeylevelValidationMetaUpdate(t *testing.T) {
@@ -183,17 +185,18 @@ func TestKeylevelValidationMetaUpdate(t *testing.T) {
 	validator.PreValidate(1, block)
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.NoError(t, err)
 
-	pe.EvaluateRV = fmt.Errorf("policy evaluation error")
+	pe.EvaluateRV = errors2.New("policy evaluation error")
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCEndorsementPolicyError{}, err)
+	var target *errors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 }
 
 func TestKeylevelValidationPvtMetaUpdate(t *testing.T) {
@@ -221,17 +224,18 @@ func TestKeylevelValidationPvtMetaUpdate(t *testing.T) {
 	validator.PreValidate(1, block)
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.NoError(t, err)
 
-	pe.EvaluateRV = fmt.Errorf("policy evaluation error")
+	pe.EvaluateRV = errors2.New("policy evaluation error")
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCEndorsementPolicyError{}, err)
+	var target *errors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 }
 
 func TestKeylevelValidationPolicyRetrievalFailure(t *testing.T) {
@@ -242,7 +246,7 @@ func TestKeylevelValidationPolicyRetrievalFailure(t *testing.T) {
 	// we simulate the case where we fail to retrieve
 	// the validation parameters from the ledger.
 
-	mr := &mockState{GetStateMetadataErr: fmt.Errorf("metadata retrieval failure")}
+	mr := &mockState{GetStateMetadataErr: errors2.New("metadata retrieval failure")}
 	ms := &mockStateFetcher{FetchStateRv: mr}
 	pm := &KeyLevelValidationParameterManagerImpl{PolicyTranslator: &mockTranslator{}, StateFetcher: ms}
 	validator := NewKeyLevelValidator(NewV13Evaluator(&mockPolicyEvaluator{}, pm), pm)
@@ -254,12 +258,50 @@ func TestKeylevelValidationPolicyRetrievalFailure(t *testing.T) {
 	validator.PreValidate(1, block)
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
 	err := validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCExecutionFailureError{}, err)
+	var target *errors.VSCCExecutionFailureError
+	require.ErrorAs(t, err, &target)
+}
+
+func TestKeylevelValidationPolicyTranslationFailure(t *testing.T) {
+	t.Parallel()
+
+	// Scenario: we validate a transaction that writes
+	// to a key whose key-level validation parameter
+	// cannot be translated into a policy. The
+	// transaction must be invalidated, not cause an
+	// execution failure that halts the channel.
+
+	vpMetadataKey := pb.MetaDataKeys_VALIDATION_PARAMETER.String()
+	prp := []byte("barf")
+
+	pvtRwsb := rwsetutil.NewRWSetBuilder()
+	pvtRwsb.AddToPvtAndHashedWriteSet("cc", "coll", "key", []byte("value"))
+	pvtRwsetBytes, err := pvtRwsb.GetTxReadWriteSet().ToProtoBytes()
+	require.NoError(t, err)
+
+	for name, rwsb := range map[string][]byte{
+		"public key":  rwsetBytes(t, "cc"),
+		"private key": pvtRwsetBytes,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			mr := &mockState{GetStateMetadataRv: map[string][]byte{vpMetadataKey: []byte("EP")}, GetPrivateDataMetadataByHashRv: map[string][]byte{vpMetadataKey: []byte("EP")}}
+			ms := &mockStateFetcher{FetchStateRv: mr}
+			pm := &KeyLevelValidationParameterManagerImpl{PolicyTranslator: &mockTranslator{TranslateError: errors2.New("bad policy")}, StateFetcher: ms}
+			validator := NewKeyLevelValidator(NewV13Evaluator(&mockPolicyEvaluator{}, pm), pm)
+
+			err := validator.Validate("cc", 1, 0, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
+			var target *errors.VSCCEndorsementPolicyError
+			require.ErrorAs(t, err, &target)
+			require.Contains(t, err.Error(), "could not translate policy")
+		})
+	}
 }
 
 func TestKeylevelValidationLedgerFailures(t *testing.T) {
@@ -293,14 +335,15 @@ func TestKeylevelValidationLedgerFailures(t *testing.T) {
 	})
 
 	t.Run("I/O error", func(t *testing.T) {
-		mr := &mockState{GetStateMetadataErr: fmt.Errorf("some I/O error")}
+		mr := &mockState{GetStateMetadataErr: errors2.New("some I/O error")}
 		ms := &mockStateFetcher{FetchStateRv: mr}
 		pm := &KeyLevelValidationParameterManagerImpl{PolicyTranslator: &mockTranslator{}, StateFetcher: ms}
 		validator := NewKeyLevelValidator(NewV13Evaluator(&mockPolicyEvaluator{}, pm), pm)
 
 		err := validator.Validate("cc", 1, 0, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 		require.Error(t, err)
-		require.IsType(t, &errors.VSCCExecutionFailureError{}, err)
+		var target *errors.VSCCExecutionFailureError
+		require.ErrorAs(t, err, &target)
 	})
 }
 
@@ -331,17 +374,18 @@ func TestCCEPValidation(t *testing.T) {
 	validator.PreValidate(1, block)
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.NoError(t, err)
 
-	pe.EvaluateRV = fmt.Errorf("policy evaluation error")
+	pe.EvaluateRV = errors2.New("policy evaluation error")
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCEndorsementPolicyError{}, err)
+	var target *errors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 }
 
 func TestCCEPValidationReads(t *testing.T) {
@@ -368,17 +412,18 @@ func TestCCEPValidationReads(t *testing.T) {
 	validator.PreValidate(1, block)
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.NoError(t, err)
 
-	pe.EvaluateRV = fmt.Errorf("policy evaluation error")
+	pe.EvaluateRV = errors2.New("policy evaluation error")
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCEndorsementPolicyError{}, err)
+	var target *errors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 }
 
 func TestOnlySBEPChecked(t *testing.T) {
@@ -404,10 +449,10 @@ func TestOnlySBEPChecked(t *testing.T) {
 	validator.PreValidate(1, block)
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
-	pe.EvaluateRV = fmt.Errorf("policy evaluation error")
+	pe.EvaluateRV = errors2.New("policy evaluation error")
 	pe.EvaluateResByPolicy = map[string]error{
 		"SBEP": nil,
 	}
@@ -450,17 +495,18 @@ func TestCCEPValidationPvtReads(t *testing.T) {
 	validator.PreValidate(1, block)
 
 	go func() {
-		validator.PostValidate("cc", 1, 0, fmt.Errorf(""))
+		validator.PostValidate("cc", 1, 0, errors2.New(""))
 	}()
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.NoError(t, err)
 
-	pe.EvaluateRV = fmt.Errorf("policy evaluation error")
+	pe.EvaluateRV = errors2.New("policy evaluation error")
 
 	err = validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCEndorsementPolicyError{}, err)
+	var target *errors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 }
 
 func TestKeylevelValidationFailure(t *testing.T) {
@@ -490,5 +536,6 @@ func TestKeylevelValidationFailure(t *testing.T) {
 
 	err := validator.Validate("cc", 1, 1, rwsb, prp, []byte("CCEP"), []*pb.Endorsement{})
 	require.Error(t, err)
-	require.IsType(t, &errors.VSCCEndorsementPolicyError{}, err)
+	var target *errors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 }

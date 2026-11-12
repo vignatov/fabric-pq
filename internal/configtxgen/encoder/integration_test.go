@@ -7,36 +7,35 @@ SPDX-License-Identifier: Apache-2.0
 package encoder_test
 
 import (
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
 	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 )
 
 func hasModPolicySet(groupName string, cg *cb.ConfigGroup) error {
-	if cg.ModPolicy == "" {
+	if cg.GetModPolicy() == "" {
 		return errors.Errorf("group %s has empty mod_policy", groupName)
 	}
 
-	for valueName, value := range cg.Values {
-		if value.ModPolicy == "" {
+	for valueName, value := range cg.GetValues() {
+		if value.GetModPolicy() == "" {
 			return errors.Errorf("group %s has value %s with empty mod_policy", groupName, valueName)
 		}
 	}
 
-	for policyName, policy := range cg.Policies {
-		if policy.ModPolicy == "" {
+	for policyName, policy := range cg.GetPolicies() {
+		if policy.GetModPolicy() == "" {
 			return errors.Errorf("group %s has policy %s with empty mod_policy", groupName, policyName)
 		}
 	}
 
-	for groupName, group := range cg.Groups {
+	for groupName, group := range cg.GetGroups() {
 		err := hasModPolicySet(groupName, group)
 		if err != nil {
 			return errors.WithMessagef(err, "missing sub-mod_policy for group %s", groupName)
@@ -47,7 +46,8 @@ func hasModPolicySet(groupName string, cg *cb.ConfigGroup) error {
 }
 
 var _ = Describe("Integration", func() {
-	DescribeTable("successfully parses the profile",
+	DescribeTable(
+		"successfully parses the profile",
 		func(profile string) {
 			config := genesisconfig.Load(profile, configtest.GetDevConfigDir())
 			config.Capabilities = map[string]bool{"V2_0": true}

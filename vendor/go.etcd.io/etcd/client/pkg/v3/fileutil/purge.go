@@ -17,7 +17,6 @@ package fileutil
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -58,21 +57,14 @@ func purgeFile(lg *zap.Logger, dirname string, suffix string, max uint, interval
 			defer close(donec)
 		}
 		for {
-			fnames, err := ReadDir(dirname)
+			fnamesWithSuffix, err := readDirWithSuffix(dirname, suffix)
 			if err != nil {
 				errC <- err
 				return
 			}
-			newfnames := make([]string, 0)
-			for _, fname := range fnames {
-				if strings.HasSuffix(fname, suffix) {
-					newfnames = append(newfnames, fname)
-				}
-			}
-			sort.Strings(newfnames)
-			fnames = newfnames
-			for len(newfnames) > int(max) {
-				f := filepath.Join(dirname, newfnames[0])
+			nPurged := 0
+			for nPurged < len(fnamesWithSuffix)-int(max) {
+				f := filepath.Join(dirname, fnamesWithSuffix[nPurged])
 				var l *LockedFile
 				if flock {
 					l, err = TryLockFile(f, os.O_WRONLY, PrivateFileMode)
@@ -82,6 +74,11 @@ func purgeFile(lg *zap.Logger, dirname string, suffix string, max uint, interval
 					}
 				}
 				if err = os.Remove(f); err != nil {
+					if flock {
+						if closeErr := l.Close(); closeErr != nil {
+							lg.Error("failed to unlock/close", zap.String("path", l.Name()), zap.Error(closeErr))
+						}
+					}
 					lg.Error("failed to remove file", zap.String("path", f), zap.Error(err))
 					errC <- err
 					return
@@ -94,11 +91,12 @@ func purgeFile(lg *zap.Logger, dirname string, suffix string, max uint, interval
 					}
 				}
 				lg.Info("purged", zap.String("path", f))
-				newfnames = newfnames[1:]
+				nPurged++
 			}
+
 			if purgec != nil {
-				for i := 0; i < len(fnames)-len(newfnames); i++ {
-					purgec <- fnames[i]
+				for i := 0; i < nPurged; i++ {
+					purgec <- fnamesWithSuffix[i]
 				}
 			}
 			select {
@@ -109,4 +107,19 @@ func purgeFile(lg *zap.Logger, dirname string, suffix string, max uint, interval
 		}
 	}()
 	return errC
+}
+
+func readDirWithSuffix(dirname string, suffix string) ([]string, error) {
+	fnames, err := ReadDir(dirname)
+	if err != nil {
+		return nil, err
+	}
+	// filter in place (ref. https://go.dev/wiki/SliceTricks#filtering-without-allocating)
+	fnamesWithSuffix := fnames[:0]
+	for _, fname := range fnames {
+		if strings.HasSuffix(fname, suffix) {
+			fnamesWithSuffix = append(fnamesWithSuffix, fname)
+		}
+	}
+	return fnamesWithSuffix, nil
 }

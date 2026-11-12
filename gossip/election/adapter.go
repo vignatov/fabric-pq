@@ -24,7 +24,7 @@ type msgImpl struct {
 }
 
 func (mi *msgImpl) SenderID() peerID {
-	return mi.msg.GetLeadershipMsg().PkiId
+	return mi.msg.GetLeadershipMsg().GetPkiId()
 }
 
 func (mi *msgImpl) IsProposal() bool {
@@ -32,7 +32,7 @@ func (mi *msgImpl) IsProposal() bool {
 }
 
 func (mi *msgImpl) IsDeclaration() bool {
-	return mi.msg.GetLeadershipMsg().IsDeclaration
+	return mi.msg.GetLeadershipMsg().GetIsDeclaration()
 }
 
 type peerImpl struct {
@@ -78,7 +78,8 @@ type adapterImpl struct {
 
 // NewAdapter creates new leader election adapter
 func NewAdapter(gossip gossip, pkiid common.PKIidType, channel common.ChannelID,
-	metrics *metrics.ElectionMetrics) LeaderElectionAdapter {
+	metrics *metrics.ElectionMetrics,
+) LeaderElectionAdapter {
 	return &adapterImpl{
 		gossip:    gossip,
 		selfPKIid: pkiid,
@@ -103,9 +104,9 @@ func (ai *adapterImpl) Gossip(msg Msg) {
 func (ai *adapterImpl) Accept() <-chan Msg {
 	adapterCh, _ := ai.gossip.Accept(func(message any) bool {
 		// Get only leadership org and channel messages
-		return message.(*proto.GossipMessage).Tag == proto.GossipMessage_CHAN_AND_ORG &&
+		return message.(*proto.GossipMessage).GetTag() == proto.GossipMessage_CHAN_AND_ORG &&
 			protoext.IsLeadershipMsg(message.(*proto.GossipMessage)) &&
-			bytes.Equal(message.(*proto.GossipMessage).Channel, ai.channel)
+			bytes.Equal(message.(*proto.GossipMessage).GetChannel(), ai.channel)
 	}, false)
 
 	msgCh := make(chan Msg)

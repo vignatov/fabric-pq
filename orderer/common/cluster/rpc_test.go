@@ -88,7 +88,7 @@ func TestSendSubmitWithReport(t *testing.T) {
 	wg2.Wait()
 
 	// Ensure stale stream is cleaned up and removed from the mapping
-	require.Len(t, node1RPC.StreamsByType[cluster.SubmitOperation], 0)
+	require.Empty(t, node1RPC.StreamsByType[cluster.SubmitOperation])
 
 	// Wait for connection to be re-established
 	time.Sleep(time.Second * 5)
@@ -213,7 +213,7 @@ func TestSend(t *testing.T) {
 
 	sent := make(chan struct{})
 
-	var sendCalls uint32
+	var sendCalls atomic.Uint32
 
 	for _, tst := range []testCase{
 		{
@@ -266,12 +266,12 @@ func TestSend(t *testing.T) {
 			fakeStream.On("Send", mock.Anything).Return(func(req *orderer.StepRequest) error {
 				l.Lock()
 				defer l.Unlock()
-				atomic.AddUint32(&sendCalls, 1)
+				sendCalls.Add(1)
 				sent <- struct{}{}
 				return testCase.sendReturns
 			})
 
-			atomic.StoreUint32(&sendCalls, 0)
+			sendCalls.Store(0)
 			isSend := testCase.receiveReturns == nil
 			comm := &mocks.Communicator{}
 
@@ -309,7 +309,7 @@ func TestSend(t *testing.T) {
 				<-sent
 
 				require.NoError(t, err)
-				require.Equal(t, 2, int(atomic.LoadUint32(&sendCalls)))
+				require.Equal(t, 2, int(sendCalls.Load()))
 			}
 		})
 	}
@@ -386,4 +386,77 @@ func TestRPCGarbageCollection(t *testing.T) {
 	// The mapping should be now cleaned from the previous stream.
 	require.Len(t, mapping[cluster.SubmitOperation], 1)
 	require.Equal(t, uint64(2), mapping[cluster.SubmitOperation][2].ID)
+}
+
+func TestSendSubmitRecreatesCanceledStream(t *testing.T) {
+	// Scenario: A stream to a remote node is established, and then aborted -
+	// for example, because the TLS certificate of the remote node changed and
+	// its remote context was deactivated.
+	// A subsequent SendSubmit to the same node must establish a new stream and
+	// must invoke the report callback, instead of reusing the aborted stream and
+	// failing without reporting.
+
+	comm := &mocks.Communicator{}
+
+	fakeStream1 := &mocks.StepClientStream{}
+	fakeStream2 := &mocks.StepClientStream{}
+
+	sent := make(chan struct{}, 2)
+
+	setupStream := func(stream *mocks.StepClientStream) {
+		stream.On("Context", mock.Anything).Return(context.Background())
+		stream.On("Auth").Return(nil).Once()
+		stream.On("Send", mock.Anything).Return(nil).Run(func(mock.Arguments) {
+			sent <- struct{}{}
+		}).Once()
+		stream.On("Recv").Return(nil, io.EOF)
+	}
+	setupStream(fakeStream1)
+	setupStream(fakeStream2)
+
+	var streamsCreated atomic.Uint32
+
+	remote := &cluster.RemoteContext{
+		SendBuffSize: 10,
+		Metrics:      cluster.NewMetrics(&disabled.Provider{}),
+		Logger:       flogging.MustGetLogger("test"),
+		ProbeConn:    func(_ *grpc.ClientConn) error { return nil },
+		GetStreamFunc: func(ctx context.Context) (cluster.StepClientStream, error) {
+			if streamsCreated.Add(1) == 1 {
+				return fakeStream1, nil
+			}
+			return fakeStream2, nil
+		},
+		Channel: "mychannel",
+	}
+
+	comm.On("Remote", "mychannel", uint64(1)).Return(remote, nil)
+
+	rpc := &cluster.RPC{
+		Logger:        flogging.MustGetLogger("test"),
+		Timeout:       time.Hour,
+		StreamsByType: cluster.NewStreamsByType(),
+		Channel:       "mychannel",
+		Comm:          comm,
+	}
+
+	require.NoError(t, rpc.SendSubmit(1, &orderer.SubmitRequest{Channel: "mychannel"}, noopReport))
+	<-sent
+
+	// Abort all the streams to the remote node, as done when the remote node's
+	// TLS certificate is replaced.
+	remote.Abort()
+	require.Len(t, rpc.StreamsByType[cluster.SubmitOperation], 1)
+
+	report := make(chan error, 1)
+	require.NoError(t, rpc.SendSubmit(1, &orderer.SubmitRequest{Channel: "mychannel"}, func(err error) {
+		report <- err
+	}))
+	<-sent
+	require.NoError(t, <-report)
+
+	// A new stream must have been established to the same destination.
+	require.Len(t, rpc.StreamsByType[cluster.SubmitOperation], 1)
+	require.NotEqual(t, uint64(1), rpc.StreamsByType[cluster.SubmitOperation][1].ID)
+	fakeStream2.AssertNumberOfCalls(t, "Send", 1)
 }

@@ -10,6 +10,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -34,7 +35,7 @@ func (k *P11ECDSAKey) Public() crypto.PublicKey {
 // Sign implements crypto.Signer Sign(). Signs the digest the with the private key and returns a byte signature.
 func (k *P11ECDSAKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (signature []byte, err error) {
 	if len(digest) != opts.HashFunc().Size() {
-		return nil, fmt.Errorf("digest length does not equal hash function length")
+		return nil, errors.New("digest length does not equal hash function length")
 	}
 
 	mech := []*pkcs11.Mechanism{
@@ -43,12 +44,12 @@ func (k *P11ECDSAKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts
 
 	err = k.ctx.SignInit(k.session, mech, k.privateKeyHandle)
 	if err != nil {
-		return nil, fmt.Errorf("sign init failed: %s", err)
+		return nil, fmt.Errorf("sign init failed: %w", err)
 	}
 
 	signature, err = k.ctx.Sign(k.session, digest)
 	if err != nil {
-		return nil, fmt.Errorf("sign failed: %s", err)
+		return nil, fmt.Errorf("sign failed: %w", err)
 	}
 
 	type ECDSASignature struct{ R, S *big.Int }

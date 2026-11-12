@@ -95,7 +95,7 @@ func getEnvWithType(ccID string, event []byte, res []byte, pType common.HeaderTy
 	response := &peer.Response{Status: 200}
 
 	// endorse it to get a proposal response
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response, res, event, &peer.ChaincodeID{Name: ccID, Version: ccVersion}, signer)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response, res, event, &peer.ChaincodeID{Name: ccID, Version: ccVersion}, signer)
 	require.NoError(t, err)
 
 	// assemble a transaction from that proposal and endorsement
@@ -128,7 +128,7 @@ func getEnvWithSigner(ccID string, event []byte, res []byte, sig msp.SigningIden
 	response := &peer.Response{Status: 200}
 
 	// endorse it to get a proposal response
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response, res, event, &peer.ChaincodeID{Name: ccID, Version: ccVersion}, sig)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response, res, event, &peer.ChaincodeID{Name: ccID, Version: ccVersion}, sig)
 	require.NoError(t, err)
 
 	// assemble a transaction from that proposal and endorsement
@@ -139,13 +139,13 @@ func getEnvWithSigner(ccID string, event []byte, res []byte, sig msp.SigningIden
 }
 
 func assertInvalid(block *common.Block, t *testing.T, code peer.TxValidationCode) {
-	txsFilter := txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsFilter := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	require.True(t, txsFilter.IsInvalid(0))
 	require.True(t, txsFilter.IsSetTo(0, code))
 }
 
 func assertValid(block *common.Block, t *testing.T) {
-	txsFilter := txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsFilter := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	require.False(t, txsFilter.IsInvalid(0))
 }
 
@@ -564,9 +564,9 @@ func TestParallelValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Block metadata array position to store serialized bit array filter of invalid transactions
-	txsFilter := txflags.ValidationFlags(b.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsFilter := txflags.ValidationFlags(b.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	// tx validity
-	for txNum := 0; txNum < txCnt; txNum += 1 {
+	for txNum := range txCnt {
 		switch uint(txNum / 10) {
 		case 1:
 			fallthrough
@@ -1002,7 +1002,8 @@ func TestLedgerIsNotAvailable(t *testing.T) {
 	// We suppose to get the error which indicates we cannot commit the block
 	assertion.Error(err)
 	// The error exptected to be of type VSCCInfoLookupFailureError
-	assertion.NotNil(err.(*commonerrors.VSCCInfoLookupFailureError))
+	cerr, _ := errors.AsType[*commonerrors.VSCCInfoLookupFailureError](err)
+	assertion.NotNil(cerr)
 }
 
 func TestLedgerIsNotAvailableForCheckingTxidDuplicate(t *testing.T) {
@@ -1051,9 +1052,9 @@ func TestDuplicateTxId(t *testing.T) {
 	assertion.NoError(err)
 
 	// We expect the tx to be invalid because of a duplicate txid
-	txsfltr := txflags.ValidationFlags(b.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsfltr := txflags.ValidationFlags(b.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	assertion.True(txsfltr.IsInvalid(0))
-	assertion.True(txsfltr.Flag(0) == peer.TxValidationCode_DUPLICATE_TXID)
+	assertion.Equal(peer.TxValidationCode_DUPLICATE_TXID, txsfltr.Flag(0))
 }
 
 func TestValidationInvalidEndorsing(t *testing.T) {
@@ -1179,7 +1180,7 @@ func TestValidationPluginExecutionError(t *testing.T) {
 	}
 
 	err = v.Validate(b)
-	executionErr := err.(*commonerrors.VSCCExecutionFailureError)
+	executionErr, _ := errors.AsType[*commonerrors.VSCCExecutionFailureError](err)
 	require.Contains(t, executionErr.Error(), "I/O error")
 }
 
@@ -1232,7 +1233,7 @@ func TestValidationPluginNotFound(t *testing.T) {
 	}
 
 	err = v.Validate(b)
-	executionErr := err.(*commonerrors.VSCCExecutionFailureError)
+	executionErr, _ := errors.AsType[*commonerrors.VSCCExecutionFailureError](err)
 	require.Contains(t, executionErr.Error(), "plugin with name vscc wasn't found")
 }
 

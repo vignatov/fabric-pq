@@ -8,6 +8,7 @@ package kvledger
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,18 +125,23 @@ func TestSnapshotRequests(t *testing.T) {
 	// create a ledger with genesis block
 	ledgerID := "testsnapshotrequests"
 	bg, gb := testutil.NewBlockGenerator(t, ledgerID, false)
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	l, err := provider.CreateFromGenesisBlock(gb)
 	require.NoError(t, err)
 	defer l.Close()
 	kvledger := l.(*kvLedger)
 
 	// Test 1: submit requests in parallel and verify PendingSnapshotRequest
+	var wg sync.WaitGroup
+	errs := make(chan error, 5)
 	for _, blockNumber := range []uint64{100, 5, 3, 10, 30} {
-		go func(blockNumber uint64) {
-			require.NoError(t, l.SubmitSnapshotRequest(blockNumber))
-		}(blockNumber)
+		wg.Go(func() {
+			err := l.SubmitSnapshotRequest(blockNumber)
+			errs <- err
+		})
 	}
+	wg.Wait()
+	close(errs)
 	// wait until all requests are submitted
 	requestsUpdated := func() bool {
 		requests, err := l.PendingSnapshotRequests()
@@ -144,12 +150,21 @@ func TestSnapshotRequests(t *testing.T) {
 	}
 	require.Eventually(t, requestsUpdated, time.Minute, 100*time.Millisecond)
 
-	// Test 2: cancel requests in parallel and verify PendingSnapshotRequest
-	for _, blockNumber := range []uint64{3, 30} {
-		go func(blockNumber uint64) {
-			require.NoError(t, l.CancelSnapshotRequest(blockNumber))
-		}(blockNumber)
+	for err := range errs {
+		require.NoError(t, err)
 	}
+
+	// Test 2: cancel requests in parallel and verify PendingSnapshotRequest
+	var wg1 sync.WaitGroup
+	errs1 := make(chan error, 2)
+	for _, blockNumber := range []uint64{3, 30} {
+		wg1.Go(func() {
+			err := l.CancelSnapshotRequest(blockNumber)
+			errs1 <- err
+		})
+	}
+	wg1.Wait()
+	close(errs1)
 	// wait until all requests are cancelled
 	requestsUpdated = func() bool {
 		requests, err := l.PendingSnapshotRequests()
@@ -157,6 +172,10 @@ func TestSnapshotRequests(t *testing.T) {
 		return equal(requests, []uint64{5, 10, 100})
 	}
 	require.Eventually(t, requestsUpdated, time.Minute, 100*time.Millisecond)
+
+	for err := range errs1 {
+		require.NoError(t, err)
+	}
 
 	// Test 3: commit blocks and verify snapshots are generated for blocknumber=5 and blocknumber=10
 	lastBlock := testutilCommitBlocks(t, l, bg, 10, gbHash)
@@ -174,7 +193,7 @@ func TestSnapshotRequests(t *testing.T) {
 
 	// Test 4: commit blocks and submit a request with default value (blocknumber=0) to trigger snapshot generation
 	// for the latest committed block
-	lastBlock = testutilCommitBlocks(t, l, bg, 20, protoutil.BlockHeaderHash(lastBlock.Header))
+	lastBlock = testutilCommitBlocks(t, l, bg, 20, protoutil.BlockHeaderHash(lastBlock.GetHeader()))
 	require.NoError(t, l.SubmitSnapshotRequest(0))
 	// wait until snapshot is generated for blocknumber=20
 	snapshotExists = func() bool {
@@ -195,7 +214,7 @@ func TestSnapshotRequests(t *testing.T) {
 	// prepare to test recoverSnapshot when a ledger is reopened
 	// commit blocks upto block number 25 and add a request for block number 25 to the leveldb directly
 	// snapshot should not be generated and will be recovered after the ledger is reopened
-	testutilCommitBlocks(t, l, bg, 25, protoutil.BlockHeaderHash(lastBlock.Header))
+	testutilCommitBlocks(t, l, bg, 25, protoutil.BlockHeaderHash(lastBlock.GetHeader()))
 	require.NoError(t, kvledger.snapshotMgr.snapshotRequestBookkeeper.dbHandle.Put(encodeSnapshotRequestKey(25), []byte{}, true))
 	exists, err = kvledger.snapshotExists(25)
 	require.NoError(t, err)
@@ -234,7 +253,7 @@ func TestSnapshotMgmtConcurrency(t *testing.T) {
 
 	ledgerID := "testsnapshotmgmtconcurrency"
 	bg, gb := testutil.NewBlockGenerator(t, ledgerID, false)
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	l, err := provider.CreateFromGenesisBlock(gb)
 	require.NoError(t, err)
 	kvledger := l.(*kvLedger)
@@ -248,7 +267,8 @@ func TestSnapshotMgmtConcurrency(t *testing.T) {
 	<-kvledger.snapshotMgr.commitProceed
 
 	require.NoError(t, kvledger.SubmitSnapshotRequest(0))
-	require.Eventually(t,
+	require.Eventually(
+		t,
 		func() bool {
 			r, err := kvledger.snapshotMgr.snapshotRequestBookkeeper.smallestRequest()
 			require.NoError(t, err)
@@ -301,7 +321,7 @@ func TestSnapshotRequestsErrorPaths(t *testing.T) {
 	// create a ledger with genesis block
 	ledgerID := "testsnapshotrequestserrorpaths"
 	bg, gb := testutil.NewBlockGenerator(t, ledgerID, false)
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	l, err := provider.CreateFromGenesisBlock(gb)
 	require.NoError(t, err)
 	defer l.Close()
@@ -359,7 +379,7 @@ func equal(slice1 []uint64, slice2 []uint64) bool {
 func testutilCommitBlocks(t *testing.T, l ledger.PeerLedger, bg *testutil.BlockGenerator, finalBlockNum uint64, previousBlockHash []byte) *common.Block {
 	bcInfo, err := l.GetBlockchainInfo()
 	require.NoError(t, err)
-	startBlockNum := bcInfo.Height
+	startBlockNum := bcInfo.GetHeight()
 
 	var block *common.Block
 	for i := startBlockNum; i <= finalBlockNum; i++ {
@@ -378,7 +398,7 @@ func testutilCommitBlocks(t *testing.T, l ledger.PeerLedger, bg *testutil.BlockG
 
 		bcInfo, err := l.GetBlockchainInfo()
 		require.NoError(t, err)
-		blockHash := protoutil.BlockHeaderHash(block.Header)
+		blockHash := protoutil.BlockHeaderHash(block.GetHeader())
 		require.Equal(t, &common.BlockchainInfo{
 			Height: i + 1, CurrentBlockHash: blockHash, PreviousBlockHash: previousBlockHash,
 		}, bcInfo)

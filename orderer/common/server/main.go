@@ -15,6 +15,7 @@ import (
 	_ "net/http/pprof" // This is essentially the main package for the orderer
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -163,7 +164,8 @@ func Main() {
 		expirationLogger.Infof,
 		expirationLogger.Warnf, // This can be used to piggyback a metric event in the future
 		time.Now(),
-		time.AfterFunc)
+		time.AfterFunc,
+	)
 
 	// if cluster is reusing client-facing server, then it is already
 	// appended to serversToUpdate at this point.
@@ -261,7 +263,7 @@ func verifyNoSystemChannelJoinBlock(config *localconfig.TopLevel, cryptoProvider
 			logger.Panicf("Failed unmarshalling join-block for channel '%s', error: %v", channelName, err)
 		}
 		if err = validateBootstrapBlock(block, cryptoProvider); err == nil {
-			logger.Panicf("Error: found a system channel join-block, channel: %s, block number: %d, file: %s. This version does not support the system channel. Remove it before upgrading.", channelName, block.Header.Number, fileName)
+			logger.Panicf("Error: found a system channel join-block, channel: %s, block number: %d, file: %s. This version does not support the system channel. Remove it before upgrading.", channelName, block.GetHeader().GetNumber(), fileName)
 		}
 	}
 }
@@ -304,7 +306,7 @@ func verifyNoSystemChannel(lf blockledger.Factory, bccsp bccsp.BCCSP) {
 
 		err = validateBootstrapBlock(channelConfigBlock, bccsp)
 		if err == nil {
-			logger.Panicf("Error: found system channel config block in the ledger, channel: %s, block number: %d. This version does not support the system channel. Remove it before upgrading.", cID, channelConfigBlock.Header.Number)
+			logger.Panicf("Error: found system channel config block in the ledger, channel: %s, block number: %d. This version does not support the system channel. Remove it before upgrading.", cID, channelConfigBlock.GetHeader().GetNumber())
 		}
 	}
 }
@@ -359,7 +361,7 @@ func configureClusterListener(conf *localconfig.TopLevel, generalConf comm.Serve
 		logger.Panicf("Failed to load cluster server key from '%s' (%s)", clusterConf.ServerPrivateKey, err)
 	}
 
-	port := fmt.Sprintf("%d", clusterConf.ListenPort)
+	port := strconv.FormatUint(uint64(clusterConf.ListenPort), 10)
 	bindAddr := net.JoinHostPort(clusterConf.ListenAddress, port)
 
 	var clientRootCAs [][]byte
@@ -642,16 +644,14 @@ func initializeMultichannelRegistrar(
 
 func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics) *operations.System {
 	return operations.NewSystem(operations.Options{
-		Options: fabhttp.Options{
-			Logger:        flogging.MustGetLogger("orderer.operations"),
-			ListenAddress: ops.ListenAddress,
-			TLS: fabhttp.TLS{
-				Enabled:            ops.TLS.Enabled,
-				CertFile:           ops.TLS.Certificate,
-				KeyFile:            ops.TLS.PrivateKey,
-				ClientCertRequired: ops.TLS.ClientAuthRequired,
-				ClientCACertFiles:  ops.TLS.ClientRootCAs,
-			},
+		Logger:        flogging.MustGetLogger("orderer.operations"),
+		ListenAddress: ops.ListenAddress,
+		TLS: fabhttp.TLS{
+			Enabled:            ops.TLS.Enabled,
+			CertFile:           ops.TLS.Certificate,
+			KeyFile:            ops.TLS.PrivateKey,
+			ClientCertRequired: ops.TLS.ClientAuthRequired,
+			ClientCACertFiles:  ops.TLS.ClientRootCAs,
 		},
 		Metrics: operations.MetricsOptions{
 			Provider: metrics.Provider,

@@ -16,7 +16,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/internal/fileutil"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
@@ -36,7 +36,7 @@ var blkMgrInfoKey = []byte("blkMgrInfo")
 type blockfileMgr struct {
 	rootDir                   string
 	conf                      *Conf
-	db                        *leveldbhelper.DBHandle
+	db                        db.DBHandle
 	index                     *blockIndex
 	blockfilesInfo            *blockfilesInfo
 	bootstrappingSnapshotInfo *BootstrappingSnapshotInfo
@@ -92,7 +92,7 @@ At start up a new manager:
 			-- If index and file system are not in sync, syncs index from the FS
 	  *)  Updates blockchain info used by the APIs
 */
-func newBlockfileMgr(id string, conf *Conf, indexConfig *IndexConfig, indexStore *leveldbhelper.DBHandle) (*blockfileMgr, error) {
+func newBlockfileMgr(id string, conf *Conf, indexConfig *IndexConfig, indexStore db.DBHandle) (*blockfileMgr, error) {
 	logger.Debugf("newBlockfileMgr() initializing file-based block storage for ledger: %s ", id)
 	rootDir := conf.getLedgerBlockDir(id)
 	_, err := fileutil.CreateDirIfMissing(rootDir)
@@ -148,11 +148,11 @@ func newBlockfileMgr(id string, conf *Conf, indexConfig *IndexConfig, indexStore
 	bcInfo := &common.BlockchainInfo{}
 
 	if mgr.bootstrappingSnapshotInfo != nil {
-		bcInfo.Height = mgr.bootstrappingSnapshotInfo.LastBlockNum + 1
-		bcInfo.CurrentBlockHash = mgr.bootstrappingSnapshotInfo.LastBlockHash
-		bcInfo.PreviousBlockHash = mgr.bootstrappingSnapshotInfo.PreviousBlockHash
+		bcInfo.Height = mgr.bootstrappingSnapshotInfo.GetLastBlockNum() + 1
+		bcInfo.CurrentBlockHash = mgr.bootstrappingSnapshotInfo.GetLastBlockHash()
+		bcInfo.PreviousBlockHash = mgr.bootstrappingSnapshotInfo.GetPreviousBlockHash()
 		bcInfo.BootstrappingSnapshotInfo = &common.BootstrappingSnapshotInfo{}
-		bcInfo.BootstrappingSnapshotInfo.LastBlockInSnapshot = mgr.bootstrappingSnapshotInfo.LastBlockNum
+		bcInfo.BootstrappingSnapshotInfo.LastBlockInSnapshot = mgr.bootstrappingSnapshotInfo.GetLastBlockNum()
 	}
 
 	if !blockfilesInfo.noBlockFiles {
@@ -163,7 +163,7 @@ func newBlockfileMgr(id string, conf *Conf, indexConfig *IndexConfig, indexStore
 		// update bcInfo with lastPersistedBlock
 		bcInfo.Height = blockfilesInfo.lastPersistedBlock + 1
 		bcInfo.CurrentBlockHash = protoutil.BlockHeaderHash(lastBlockHeader)
-		bcInfo.PreviousBlockHash = lastBlockHeader.PreviousHash
+		bcInfo.PreviousBlockHash = lastBlockHeader.GetPreviousHash()
 	}
 	mgr.bcInfo.Store(bcInfo)
 	return mgr, nil
@@ -174,7 +174,7 @@ func bootstrapFromSnapshottedTxIDs(
 	snapshotDir string,
 	snapshotInfo *SnapshotInfo,
 	conf *Conf,
-	indexStore *leveldbhelper.DBHandle,
+	indexStore db.DBHandle,
 ) error {
 	rootDir := conf.getLedgerBlockDir(ledgerID)
 	isEmpty, err := fileutil.CreateDirIfMissing(rootDir)
@@ -232,7 +232,8 @@ func syncBlockfilesInfoFromFS(rootDir string, blkfilesInfo *blockfilesInfo) {
 	}
 	// Scan the file system to verify that the blockfilesInfo stored in db is correct
 	_, endOffsetLastBlock, numBlocks, err := scanForLastCompleteBlock(
-		rootDir, blkfilesInfo.latestFileNumber, int64(blkfilesInfo.latestFileSize))
+		rootDir, blkfilesInfo.latestFileNumber, int64(blkfilesInfo.latestFileSize),
+	)
 	if err != nil {
 		panic(fmt.Sprintf("Could not open current file for detecting last block in the file: %s", err))
 	}
@@ -266,7 +267,8 @@ func (mgr *blockfileMgr) moveToNextFile() {
 	}
 
 	nextFileWriter, err := newBlockfileWriter(
-		deriveBlockfilePath(mgr.rootDir, blkfilesInfo.latestFileNumber))
+		deriveBlockfilePath(mgr.rootDir, blkfilesInfo.latestFileNumber),
+	)
 	if err != nil {
 		panic(fmt.Sprintf("Could not open writer to next file: %s", err))
 	}
@@ -281,10 +283,10 @@ func (mgr *blockfileMgr) moveToNextFile() {
 
 func (mgr *blockfileMgr) addBlock(block *common.Block) error {
 	bcInfo := mgr.getBlockchainInfo()
-	if block.Header.Number != bcInfo.Height {
+	if block.GetHeader().GetNumber() != bcInfo.GetHeight() {
 		return errors.Errorf(
 			"block number should have been %d but was %d",
-			mgr.getBlockchainInfo().Height, block.Header.Number,
+			mgr.getBlockchainInfo().GetHeight(), block.GetHeader().GetNumber(),
 		)
 	}
 
@@ -292,14 +294,14 @@ func (mgr *blockfileMgr) addBlock(block *common.Block) error {
 	// verify the field `block.Header.PreviousHash` present in the block.
 	// This check is a simple bytes comparison and hence does not cause any observable performance penalty
 	// and may help in detecting a rare scenario if there is any bug in the ordering service.
-	if !bytes.Equal(block.Header.PreviousHash, bcInfo.CurrentBlockHash) {
+	if !bytes.Equal(block.GetHeader().GetPreviousHash(), bcInfo.GetCurrentBlockHash()) {
 		return errors.Errorf(
 			"unexpected Previous block hash. Expected PreviousHash = [%x], PreviousHash referred in the latest block= [%x]",
-			bcInfo.CurrentBlockHash, block.Header.PreviousHash,
+			bcInfo.GetCurrentBlockHash(), block.GetHeader().GetPreviousHash(),
 		)
 	}
 	blockBytes, info := serializeBlock(block)
-	blockHash := protoutil.BlockHeaderHash(block.Header)
+	blockHash := protoutil.BlockHeaderHash(block.GetHeader())
 	// Get the location / offset where each transaction starts in the block and where the block ends
 	txOffsets := info.txOffsets
 	currentOffset := mgr.blockfilesInfo.latestFileSize
@@ -336,7 +338,7 @@ func (mgr *blockfileMgr) addBlock(block *common.Block) error {
 		latestFileNumber:   currentBlkfilesInfo.latestFileNumber,
 		latestFileSize:     currentBlkfilesInfo.latestFileSize + totalBytesToAppend,
 		noBlockFiles:       false,
-		lastPersistedBlock: block.Header.Number,
+		lastPersistedBlock: block.GetHeader().GetNumber(),
 	}
 	// save the blockfilesInfo in the database
 	if err = mgr.saveBlkfilesInfo(newBlkfilesInfo, false); err != nil {
@@ -356,8 +358,8 @@ func (mgr *blockfileMgr) addBlock(block *common.Block) error {
 	}
 	// save the index in the database
 	if err = mgr.index.indexBlock(&blockIdxInfo{
-		blockNum: block.Header.Number, blockHash: blockHash,
-		flp: blockFLP, txOffsets: txOffsets, metadata: block.Metadata,
+		blockNum: block.GetHeader().GetNumber(), blockHash: blockHash,
+		flp: blockFLP, txOffsets: txOffsets, metadata: block.GetMetadata(),
 	}); err != nil {
 		return err
 	}
@@ -415,7 +417,7 @@ func (mgr *blockfileMgr) syncIndex() error {
 			return err
 		}
 		startFileNum = flp.fileSuffixNum
-		startOffset = flp.locPointer.offset
+		startOffset = flp.offset
 		skipFirstBlock = true
 	}
 
@@ -465,10 +467,10 @@ func (mgr *blockfileMgr) syncIndex() error {
 
 		// Update the blockIndexInfo with what was actually stored in file system
 		blockIdxInfo.blockHash = protoutil.BlockHeaderHash(info.blockHeader)
-		blockIdxInfo.blockNum = info.blockHeader.Number
+		blockIdxInfo.blockNum = info.blockHeader.GetNumber()
 		blockIdxInfo.flp = &fileLocPointer{
 			fileSuffixNum: blockPlacementInfo.fileNum,
-			locPointer:    locPointer{offset: int(blockPlacementInfo.blockStartOffset)},
+			offset:        int(blockPlacementInfo.blockStartOffset),
 		}
 		blockIdxInfo.txOffsets = info.txOffsets
 		blockIdxInfo.metadata = info.metadata
@@ -500,10 +502,10 @@ func (mgr *blockfileMgr) updateBlockfilesInfo(blkfilesInfo *blockfilesInfo) {
 func (mgr *blockfileMgr) updateBlockchainInfo(latestBlockHash []byte, latestBlock *common.Block) {
 	currentBCInfo := mgr.getBlockchainInfo()
 	newBCInfo := &common.BlockchainInfo{
-		Height:                    currentBCInfo.Height + 1,
+		Height:                    currentBCInfo.GetHeight() + 1,
 		CurrentBlockHash:          latestBlockHash,
-		PreviousBlockHash:         latestBlock.Header.PreviousHash,
-		BootstrappingSnapshotInfo: currentBCInfo.BootstrappingSnapshotInfo,
+		PreviousBlockHash:         latestBlock.GetHeader().GetPreviousHash(),
+		BootstrappingSnapshotInfo: currentBCInfo.GetBootstrappingSnapshotInfo(),
 	}
 
 	mgr.bcInfo.Store(newBCInfo)
@@ -523,7 +525,7 @@ func (mgr *blockfileMgr) retrieveBlockByNumber(blockNum uint64) (*common.Block, 
 
 	// interpret math.MaxUint64 as a request for last block
 	if blockNum == math.MaxUint64 {
-		blockNum = mgr.getBlockchainInfo().Height - 1
+		blockNum = mgr.getBlockchainInfo().GetHeight() - 1
 	}
 	if blockNum < mgr.firstPossibleBlockNumberInBlockFiles() {
 		return nil, errors.Errorf(
@@ -541,10 +543,11 @@ func (mgr *blockfileMgr) retrieveBlockByNumber(blockNum uint64) (*common.Block, 
 func (mgr *blockfileMgr) retrieveBlockByTxID(txID string) (*common.Block, error) {
 	logger.Debugf("retrieveBlockByTxID() - txID = [%s]", txID)
 	loc, err := mgr.index.getBlockLocByTxID(txID)
-	if err == errNilValue {
+	if errors.Is(err, errNilValue) {
 		return nil, errors.Errorf(
 			"details for the TXID [%s] not available. Ledger bootstrapped from a snapshot. First available block = [%d]",
-			txID, mgr.firstPossibleBlockNumberInBlockFiles())
+			txID, mgr.firstPossibleBlockNumberInBlockFiles(),
+		)
 	}
 	if err != nil {
 		return nil, err
@@ -555,10 +558,11 @@ func (mgr *blockfileMgr) retrieveBlockByTxID(txID string) (*common.Block, error)
 func (mgr *blockfileMgr) retrieveTxValidationCodeByTxID(txID string) (peer.TxValidationCode, uint64, error) {
 	logger.Debugf("retrieveTxValidationCodeByTxID() - txID = [%s]", txID)
 	validationCode, blkNum, err := mgr.index.getTxValidationCodeByTxID(txID)
-	if err == errNilValue {
+	if errors.Is(err, errNilValue) {
 		return peer.TxValidationCode(-1), 0, errors.Errorf(
 			"details for the TXID [%s] not available. Ledger bootstrapped from a snapshot. First available block = [%d]",
-			txID, mgr.firstPossibleBlockNumberInBlockFiles())
+			txID, mgr.firstPossibleBlockNumberInBlockFiles(),
+		)
 	}
 	return validationCode, blkNum, err
 }
@@ -603,10 +607,11 @@ func (mgr *blockfileMgr) txIDExists(txID string) (bool, error) {
 func (mgr *blockfileMgr) retrieveTransactionByID(txID string) (*common.Envelope, error) {
 	logger.Debugf("retrieveTransactionByID() - txId = [%s]", txID)
 	loc, err := mgr.index.getTxLoc(txID)
-	if err == errNilValue {
+	if errors.Is(err, errNilValue) {
 		return nil, errors.Errorf(
 			"details for the TXID [%s] not available. Ledger bootstrapped from a snapshot. First available block = [%d]",
-			txID, mgr.firstPossibleBlockNumberInBlockFiles())
+			txID, mgr.firstPossibleBlockNumberInBlockFiles(),
+		)
 	}
 	if err != nil {
 		return nil, err
@@ -709,7 +714,7 @@ func (mgr *blockfileMgr) firstPossibleBlockNumberInBlockFiles() uint64 {
 	if mgr.bootstrappingSnapshotInfo == nil {
 		return 0
 	}
-	return mgr.bootstrappingSnapshotInfo.LastBlockNum + 1
+	return mgr.bootstrappingSnapshotInfo.GetLastBlockNum() + 1
 }
 
 func (mgr *blockfileMgr) bootstrappedFromSnapshot() bool {
@@ -737,7 +742,7 @@ func scanForLastCompleteBlock(rootDir string, fileNum int, startingOffset int64)
 		lastBlockBytes = blockBytes
 		numBlocks++
 	}
-	if errRead == ErrUnexpectedEndOfBlockfile {
+	if errors.Is(errRead, ErrUnexpectedEndOfBlockfile) {
 		logger.Debugf(`Error:%s
 		The error may happen if a crash has happened during block appending.
 		Resetting error to nil and returning current offset as a last complete block's end offset`, errRead)

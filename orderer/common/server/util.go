@@ -31,7 +31,7 @@ func createLedgerFactory(conf *config.TopLevel, metricsProvider metrics.Provider
 	}
 
 	logger.Debug("Ledger dir:", ld)
-	lf, err := fileledger.New(ld, metricsProvider)
+	lf, err := fileledger.New(ld, conf.FileLedger.StateDatabase, metricsProvider)
 	if err != nil {
 		return nil, errors.WithMessage(err, "Error in opening ledger factory")
 	}
@@ -45,12 +45,12 @@ func validateBootstrapBlock(block *common.Block, bccsp bccsp.BCCSP) error {
 		return errors.New("nil block")
 	}
 
-	if block.Data == nil || len(block.Data.Data) == 0 {
+	if block.GetData() == nil || len(block.GetData().GetData()) == 0 {
 		return errors.New("empty block data")
 	}
 
 	firstTransaction := &common.Envelope{}
-	if err := proto.Unmarshal(block.Data.Data[0], firstTransaction); err != nil {
+	if err := proto.Unmarshal(block.GetData().GetData()[0], firstTransaction); err != nil {
 		return errors.Wrap(err, "failed extracting envelope from block")
 	}
 

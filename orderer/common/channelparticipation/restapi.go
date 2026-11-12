@@ -7,7 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 package channelparticipation
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	errors2 "errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -176,7 +178,8 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 	//   - multipart/form-data
 
 	handler.router.HandleFunc(URLBaseV1Channels, handler.serveJoin).Methods(http.MethodPost).HeadersRegexp(
-		"Content-Type", "multipart/form-data*")
+		"Content-Type", "multipart/form-data*",
+	)
 	handler.router.HandleFunc(URLBaseV1Channels, handler.serveBadContentType).Methods(http.MethodPost)
 
 	// swagger:operation PUT /participation/v1/channels channels updateChannel
@@ -189,7 +192,7 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 	//   required: true
 	// responses:
 	//    '201':
-	//      description: Сhannel update successfully.
+	//      description: Channel update successfully.
 	//      schema:
 	//        "$ref": "#/definitions/channelInfo"
 	//      headers:
@@ -213,7 +216,8 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 	//   - multipart/form-data
 
 	handler.router.HandleFunc(URLBaseV1Channels, handler.serveUpdate).Methods(http.MethodPut).HeadersRegexp(
-		"Content-Type", "multipart/form-data*")
+		"Content-Type", "multipart/form-data*",
+	)
 	handler.router.HandleFunc(URLBaseV1Channels, handler.serveBadContentType).Methods(http.MethodPut)
 
 	// swagger:operation GET /participation/v1/channels/{channelID}/blocks/{blockID} channels fetchBlock
@@ -323,7 +327,6 @@ func (h *HTTPHandler) serveFetchBlock(resp http.ResponseWriter, req *http.Reques
 
 	blockID, err := h.extractBlockID(req, resp)
 	if err != nil {
-		h.sendResponseJsonError(resp, http.StatusBadRequest, err)
 		return
 	}
 
@@ -546,21 +549,21 @@ func (h *HTTPHandler) extractBlockID(req *http.Request, resp http.ResponseWriter
 
 func (h *HTTPHandler) sendJoinError(err error, resp http.ResponseWriter) {
 	h.logger.Debugf("Failed to JoinChannel: %s", err)
-	switch err {
-	case types.ErrSystemChannelExists:
+	switch {
+	case errors2.Is(err, types.ErrSystemChannelExists):
 		// The client is trying to join an app-channel, but the system channel exists: only GET is allowed on app channels.
 		h.sendResponseNotAllowed(resp, errors.WithMessage(err, "cannot join"), http.MethodGet)
-	case types.ErrChannelAlreadyExists:
+	case errors2.Is(err, types.ErrChannelAlreadyExists):
 		// The client is trying to join an app-channel that exists, but the system channel does not;
 		// The client is trying to join the system-channel, and it exists. GET & DELETE are allowed on the channel.
 		h.sendResponseNotAllowed(resp, errors.WithMessage(err, "cannot join"), http.MethodGet, http.MethodDelete)
-	case types.ErrAppChannelsAlreadyExists:
+	case errors2.Is(err, types.ErrAppChannelsAlreadyExists):
 		// The client is trying to join the system-channel that does not exist, but app channels exist.
 		h.sendResponseJsonError(resp, http.StatusForbidden, errors.WithMessage(err, "cannot join"))
-	case types.ErrChannelPendingRemoval:
+	case errors2.Is(err, types.ErrChannelPendingRemoval):
 		// The client is trying to join a channel that is currently being removed.
 		h.sendResponseJsonError(resp, http.StatusConflict, errors.WithMessage(err, "cannot join"))
-	case types.ErrChannelRemovalFailure:
+	case errors2.Is(err, types.ErrChannelRemovalFailure):
 		h.sendResponseJsonError(resp, http.StatusInternalServerError, errors.WithMessage(err, "cannot join"))
 	default:
 		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.WithMessage(err, "cannot join"))
@@ -569,18 +572,18 @@ func (h *HTTPHandler) sendJoinError(err error, resp http.ResponseWriter) {
 
 func (h *HTTPHandler) sendUpdateError(err error, resp http.ResponseWriter) {
 	h.logger.Debugf("Failed to UpdateChannel: %s", err)
-	switch err {
-	case types.ErrSystemChannelExists:
+	switch {
+	case errors2.Is(err, types.ErrSystemChannelExists):
 		// The client is trying to update an app-channel, but the system channel exists: only GET is allowed on app channels.
 		h.sendResponseNotAllowed(resp, errors.WithMessage(err, "cannot update"), http.MethodGet)
-	case types.ErrChannelPendingRemoval:
+	case errors2.Is(err, types.ErrChannelPendingRemoval):
 		// The client is trying to update a channel that is currently being removed.
 		h.sendResponseJsonError(resp, http.StatusConflict, errors.WithMessage(err, "cannot update"))
-	case types.ErrChannelRemovalFailure:
+	case errors2.Is(err, types.ErrChannelRemovalFailure):
 		h.sendResponseJsonError(resp, http.StatusInternalServerError, errors.WithMessage(err, "cannot update"))
-	case types.ErrChannelNotExist:
+	case errors2.Is(err, types.ErrChannelNotExist):
 		h.sendResponseJsonError(resp, http.StatusMethodNotAllowed, errors.WithMessage(err, "cannot update"))
-	case types.ErrChannelNotReady:
+	case errors2.Is(err, types.ErrChannelNotReady):
 		h.sendResponseJsonError(resp, http.StatusForbidden, errors.WithMessage(err, "cannot update"))
 	default:
 		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.WithMessage(err, "cannot update"))
@@ -609,12 +612,12 @@ func (h *HTTPHandler) serveRemove(resp http.ResponseWriter, req *http.Request) {
 
 	h.logger.Debugf("Failed to remove channel: %s, err: %s", channelID, err)
 
-	switch err {
-	case types.ErrSystemChannelExists:
+	switch {
+	case errors2.Is(err, types.ErrSystemChannelExists):
 		h.sendResponseNotAllowed(resp, errors.WithMessage(err, "cannot remove"), http.MethodGet)
-	case types.ErrChannelNotExist:
+	case errors2.Is(err, types.ErrChannelNotExist):
 		h.sendResponseJsonError(resp, http.StatusNotFound, errors.WithMessage(err, "cannot remove"))
-	case types.ErrChannelPendingRemoval:
+	case errors2.Is(err, types.ErrChannelPendingRemoval):
 		h.sendResponseJsonError(resp, http.StatusConflict, errors.WithMessage(err, "cannot remove"))
 	default:
 		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.WithMessage(err, "cannot remove"))
@@ -661,19 +664,17 @@ func negotiateContentType(req *http.Request) (string, error) {
 }
 
 func (h *HTTPHandler) sendResponseJsonError(resp http.ResponseWriter, code int, err error) {
-	encoder := json.NewEncoder(resp)
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(code)
-	if err := encoder.Encode(&types.ErrorResponse{Error: err.Error()}); err != nil {
+	if err := writeJSON(resp, &types.ErrorResponse{Error: err.Error()}); err != nil {
 		h.logger.Errorf("failed to encode error, err: %s", err)
 	}
 }
 
 func (h *HTTPHandler) sendResponseOK(resp http.ResponseWriter, content any) {
-	encoder := json.NewEncoder(resp)
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(http.StatusOK)
-	if err := encoder.Encode(content); err != nil {
+	if err := writeJSON(resp, content); err != nil {
 		h.logger.Errorf("failed to encode content, err: %s", err)
 	}
 }
@@ -688,22 +689,34 @@ func (h *HTTPHandler) sendResponseBlock(resp http.ResponseWriter, block []byte) 
 }
 
 func (h *HTTPHandler) sendResponseCreated(resp http.ResponseWriter, location string, content any) {
-	encoder := json.NewEncoder(resp)
 	resp.Header().Set("Location", location)
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(http.StatusCreated)
-	if err := encoder.Encode(content); err != nil {
+	if err := writeJSON(resp, content); err != nil {
 		h.logger.Errorf("failed to encode content, err: %s", err)
 	}
 }
 
 func (h *HTTPHandler) sendResponseNotAllowed(resp http.ResponseWriter, err error, allow ...string) {
-	encoder := json.NewEncoder(resp)
 	allowVal := strings.Join(allow, ", ")
 	resp.Header().Set("Allow", allowVal)
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(http.StatusMethodNotAllowed)
-	if err := encoder.Encode(&types.ErrorResponse{Error: err.Error()}); err != nil {
+	if err := writeJSON(resp, &types.ErrorResponse{Error: err.Error()}); err != nil {
 		h.logger.Errorf("failed to encode error, err: %s", err)
 	}
+}
+
+func writeJSON(w io.Writer, v any) error {
+	if err := json.MarshalWrite(
+		w,
+		v,
+		jsontext.EscapeForHTML(true),
+		json.FormatNilSliceAsNull(true),
+		json.FormatNilMapAsNull(true),
+	); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, "\n")
+	return err
 }

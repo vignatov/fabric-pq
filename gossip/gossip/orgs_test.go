@@ -11,11 +11,11 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	proto "github.com/hyperledger/fabric-protos-go-apiv2/gossip"
@@ -24,16 +24,52 @@ import (
 	"github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/gossip/gossip/algo"
 	"github.com/hyperledger/fabric/gossip/gossip/channel"
+	"github.com/hyperledger/fabric/gossip/identity"
 	"github.com/hyperledger/fabric/gossip/metrics"
 	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/gossip/util"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func init() {
 	util.SetupTestLogging()
 	factory.InitFactories(nil)
+}
+
+type receivedMsgFromPeer struct {
+	protoext.ReceivedMessage
+	identity api.PeerIdentityType
+}
+
+func (r *receivedMsgFromPeer) GetConnectionInfo() *protoext.ConnectionInfo {
+	return &protoext.ConnectionInfo{Identity: r.identity}
+}
+
+func TestPullFilterUnknownOrgNoWarning(t *testing.T) {
+	cs := &configurableCryptoService{m: make(map[string]api.OrgIdentityType)}
+	selfIdentity := api.PeerIdentityType("self")
+	remoteIdentity := api.PeerIdentityType("remote")
+	cs.m[string(selfIdentity)] = api.OrgIdentityType("A")
+	cs.m[string(remoteIdentity)] = api.OrgIdentityType("B")
+
+	core, logs := observer.New(zapcore.WarnLevel)
+	g := &Node{
+		selfOrg:    api.OrgIdentityType("A"),
+		secAdvisor: cs,
+		logger:     flogging.NewFabricLogger(zap.New(core)),
+		idMapper:   identity.NewIdentityMapper(cs, selfIdentity, func(common.PKIidType, api.PeerIdentityType) {}, cs),
+	}
+
+	filter := g.sameOrgOrOurOrgPullFilter(&receivedMsgFromPeer{identity: remoteIdentity})
+	// The identity is unknown (for example, it expired and was purged),
+	// so its org can't be found. It must be filtered out without a warning,
+	// since this runs for every identity in every pull round.
+	require.False(t, filter(string(common.PKIidType("unknown"))))
+	require.Zero(t, logs.Len())
 }
 
 type configurableCryptoService struct {
@@ -109,7 +145,8 @@ func (*configurableCryptoService) Verify(peerIdentity api.PeerIdentityType, sign
 
 func newGossipInstanceWithGRPCWithExternalEndpoint(id int, port int, gRPCServer *comm.GRPCServer,
 	certs *common.TLSCertificates, secureDialOpts api.PeerSecureDialOpts, mcs *configurableCryptoService,
-	externalEndpoint string, boot ...int) *gossipGRPC {
+	externalEndpoint string, boot ...int,
+) *gossipGRPC {
 	conf := &Config{
 		BootstrapPeers:               bootPeersWithPorts(boot...),
 		ID:                           fmt.Sprintf("p%d", id),
@@ -241,7 +278,7 @@ func TestMultipleOrgEndpointLeakage(t *testing.T) {
 
 	membershipCheck := func() bool {
 		for _, p := range peers {
-			peerNetMember := p.Node.selfNetworkMember()
+			peerNetMember := p.selfNetworkMember()
 			pkiID := peerNetMember.PKIid
 			peersKnown := p.Peers()
 			peersToKnow := expectedMembershipSize[string(pkiID)]
@@ -271,7 +308,7 @@ func TestMultipleOrgEndpointLeakage(t *testing.T) {
 		return true
 	}
 
-	waitUntilOrFail(t, membershipCheck, "waiting for all instances to form membership view")
+	require.NoError(t, waitUntilConditionOrFail(membershipCheck, "waiting for all instances to form membership view"))
 
 	for _, p := range peers {
 		p.Stop()
@@ -382,10 +419,8 @@ func TestConfidentiality(t *testing.T) {
 		}
 	}
 
-	msgs2Inspect := make(chan *msg, 3000)
-	defer close(msgs2Inspect)
-	go inspectMsgs(t, msgs2Inspect, cs, peersWithExternalEndpoints)
-	finished := int32(0)
+	var msgs2Inspect []*msg
+	var msgsMu sync.Mutex
 	var wg sync.WaitGroup
 
 	msgSelector := func(o any) bool {
@@ -393,27 +428,25 @@ func TestConfidentiality(t *testing.T) {
 		identitiesPull := protoext.IsPullMsg(msg.GossipMessage) && protoext.GetPullMsgType(msg.GossipMessage) == proto.PullMsgType_IDENTITY_MSG
 		return protoext.IsAliveMsg(msg.GossipMessage) || protoext.IsStateInfoMsg(msg.GossipMessage) || protoext.IsStateInfoSnapshot(msg.GossipMessage) || msg.GetMemRes() != nil || identitiesPull
 	}
-	// Listen to all peers membership messages and forward them to the inspection channel
-	// where they will be inspected, and the test would fail if a confidentiality violation is found
+	// Listen to all peers membership messages and collect them for inspection
+	// after all producer goroutines have completed.
 	for _, p := range peers {
 		wg.Add(1)
 		_, msgs := p.Accept(msgSelector, true)
-		peerNetMember := p.Node.selfNetworkMember()
-		targetORg := string(cs.OrgByPeerIdentity(api.PeerIdentityType(peerNetMember.InternalEndpoint)))
+		peerNetMember := p.selfNetworkMember()
+		targetOrg := string(cs.OrgByPeerIdentity(api.PeerIdentityType(peerNetMember.InternalEndpoint)))
 		go func(targetOrg string, msgs <-chan protoext.ReceivedMessage) {
 			defer wg.Done()
 			for receivedMsg := range msgs {
-				m := &msg{
+				msgsMu.Lock()
+				msgs2Inspect = append(msgs2Inspect, &msg{
 					src:           string(cs.OrgByPeerIdentity(receivedMsg.GetConnectionInfo().Identity)),
-					dst:           targetORg,
+					dst:           targetOrg,
 					GossipMessage: receivedMsg.GetGossipMessage().GossipMessage,
-				}
-				if atomic.LoadInt32(&finished) == int32(1) {
-					return
-				}
-				msgs2Inspect <- m
+				})
+				msgsMu.Unlock()
 			}
-		}(targetORg, msgs)
+		}(targetOrg, msgs)
 	}
 
 	// Now, construct the join channel messages
@@ -454,23 +487,23 @@ func TestConfidentiality(t *testing.T) {
 			for i, p := range orgs2Peers[org] {
 				members := p.Peers()
 				expMemberSize := expectedMembershipSize(peersInOrg, externalEndpointsInOrg, org, i < externalEndpointsInOrg)
-				peerNetMember := p.Node.selfNetworkMember()
+				peerNetMember := p.selfNetworkMember()
 				membersCount := len(members)
 				if membersCount < expMemberSize {
 					return false
 				}
 				// Make sure no one knows too much
-				require.True(t, membersCount <= expMemberSize, "%s knows too much (%d > %d) peers: %v",
+				require.LessOrEqualf(t, membersCount, expMemberSize, "%s knows too much (%d > %d) peers: %v",
 					membersCount, expMemberSize, peerNetMember.PKIid, members)
 			}
 		}
 		return true
 	}
 
-	waitUntilOrFail(t, assertMembership, "waiting for all instances to form unified membership view")
+	require.NoError(t, waitUntilConditionOrFail(assertMembership, "waiting for all instances to form unified membership view"))
 	stopPeers(peers)
 	wg.Wait()
-	atomic.StoreInt32(&finished, int32(1))
+	require.NoError(t, inspectMsgs(msgs2Inspect, cs, peersWithExternalEndpoints))
 }
 
 func expectedMembershipSize(peersInOrg, externalEndpointsInOrg int, org string, hasExternalEndpoint bool) int {
@@ -510,7 +543,7 @@ func expectedMembershipSize(peersInOrg, externalEndpointsInOrg int, org string, 
 
 func extractOrgsFromMsg(msg *proto.GossipMessage, sec api.SecurityAdvisor) []string {
 	if protoext.IsAliveMsg(msg) {
-		return []string{string(sec.OrgByPeerIdentity(msg.GetAliveMsg().Membership.PkiId))}
+		return []string{string(sec.OrgByPeerIdentity(msg.GetAliveMsg().GetMembership().GetPkiId()))}
 	}
 
 	orgs := map[string]struct{}{}
@@ -519,9 +552,9 @@ func extractOrgsFromMsg(msg *proto.GossipMessage, sec api.SecurityAdvisor) []str
 		if protoext.IsDigestMsg(msg) || protoext.IsDataReq(msg) {
 			var digests []string
 			if protoext.IsDigestMsg(msg) {
-				digests = util.BytesToStrings(msg.GetDataDig().Digests)
+				digests = util.BytesToStrings(msg.GetDataDig().GetDigests())
 			} else {
-				digests = util.BytesToStrings(msg.GetDataReq().Digests)
+				digests = util.BytesToStrings(msg.GetDataReq().GetDigests())
 			}
 
 			for _, dig := range digests {
@@ -531,9 +564,9 @@ func extractOrgsFromMsg(msg *proto.GossipMessage, sec api.SecurityAdvisor) []str
 		}
 
 		if protoext.IsDataUpdate(msg) {
-			for _, identityMsg := range msg.GetDataUpdate().Data {
+			for _, identityMsg := range msg.GetDataUpdate().GetData() {
 				gMsg, _ := protoext.EnvelopeToGossipMessage(identityMsg)
-				id := string(gMsg.GetPeerIdentity().Cert)
+				id := string(gMsg.GetPeerIdentity().GetCert())
 				org := sec.OrgByPeerIdentity(api.PeerIdentityType(id))
 				orgs[string(org)] = struct{}{}
 			}
@@ -541,11 +574,11 @@ func extractOrgsFromMsg(msg *proto.GossipMessage, sec api.SecurityAdvisor) []str
 	}
 
 	if msg.GetMemRes() != nil {
-		alive := msg.GetMemRes().Alive
-		dead := msg.GetMemRes().Dead
+		alive := msg.GetMemRes().GetAlive()
+		dead := msg.GetMemRes().GetDead()
 		for _, envp := range append(alive, dead...) {
 			msg, _ := protoext.EnvelopeToGossipMessage(envp)
-			orgs[string(sec.OrgByPeerIdentity(msg.GetAliveMsg().Membership.PkiId))] = struct{}{}
+			orgs[string(sec.OrgByPeerIdentity(msg.GetAliveMsg().GetMembership().GetPkiId()))] = struct{}{}
 		}
 	}
 
@@ -556,15 +589,17 @@ func extractOrgsFromMsg(msg *proto.GossipMessage, sec api.SecurityAdvisor) []str
 	return res
 }
 
-func inspectMsgs(t *testing.T, msgChan chan *msg, sec api.SecurityAdvisor, peersWithExternalEndpoints map[string]struct{}) {
-	for msg := range msgChan {
+func inspectMsgs(msgs []*msg, sec api.SecurityAdvisor, peersWithExternalEndpoints map[string]struct{}) error {
+	for _, msg := range msgs {
 		// If the destination org is the same as the source org,
 		// the message can contain any organizations
 		if msg.src == msg.dst {
 			continue
 		}
 		if protoext.IsStateInfoMsg(msg.GossipMessage) || protoext.IsStateInfoSnapshot(msg.GossipMessage) {
-			inspectStateInfoMsg(t, msg, peersWithExternalEndpoints)
+			if err := inspectStateInfoMsg(msg, peersWithExternalEndpoints); err != nil {
+				return err
+			}
 			continue
 		}
 		// Else, it's a cross-organizational message.
@@ -572,48 +607,60 @@ func inspectMsgs(t *testing.T, msgChan chan *msg, sec api.SecurityAdvisor, peers
 		// The total organizations of the message must be a subset of s U d.
 		orgs := extractOrgsFromMsg(msg.GossipMessage, sec)
 		s := []string{msg.src, msg.dst}
-		require.True(t, isSubset(orgs, s), "%v isn't a subset of %v", orgs, s)
+		if !isSubset(orgs, s) {
+			return fmt.Errorf("%v isn't a subset of %v", orgs, s)
+		}
 
 		// Ensure no one but B knows about D and vice versa
 		if msg.dst == "D" {
-			require.NotContains(t, "A", orgs)
-			require.NotContains(t, "C", orgs)
+			if slices.Contains(orgs, "A") || slices.Contains(orgs, "C") {
+				return fmt.Errorf("organization D received a message containing organizations %v", orgs)
+			}
 		}
 
 		if msg.dst == "A" || msg.dst == "C" {
-			require.NotContains(t, "D", orgs)
+			if slices.Contains(orgs, "D") {
+				return fmt.Errorf("organization %s received a message containing organization D", msg.dst)
+			}
 		}
 
 		// If this is an identity snapshot, make sure that only identities of peers
 		// with external endpoints pass between the organizations.
 		isIdentityPull := protoext.IsPullMsg(msg.GossipMessage) && protoext.GetPullMsgType(msg.GossipMessage) == proto.PullMsgType_IDENTITY_MSG
-		if !(isIdentityPull && protoext.IsDataUpdate(msg.GossipMessage)) {
+		if !isIdentityPull || !protoext.IsDataUpdate(msg.GossipMessage) {
 			continue
 		}
-		for _, envp := range msg.GetDataUpdate().Data {
+		for _, envp := range msg.GetDataUpdate().GetData() {
 			identityMsg, _ := protoext.EnvelopeToGossipMessage(envp)
-			pkiID := identityMsg.GetPeerIdentity().PkiId
+			pkiID := identityMsg.GetPeerIdentity().GetPkiId()
 			_, hasExternalEndpoint := peersWithExternalEndpoints[string(pkiID)]
-			require.True(t, hasExternalEndpoint,
-				"Peer %s doesn't have an external endpoint but its identity was gossiped", string(pkiID))
+			if !hasExternalEndpoint {
+				return fmt.Errorf("peer %s doesn't have an external endpoint but its identity was gossiped", string(pkiID))
+			}
 		}
 	}
+	return nil
 }
 
-func inspectStateInfoMsg(t *testing.T, m *msg, peersWithExternalEndpoints map[string]struct{}) {
+func inspectStateInfoMsg(m *msg, peersWithExternalEndpoints map[string]struct{}) error {
 	if protoext.IsStateInfoMsg(m.GossipMessage) {
-		pkiID := m.GetStateInfo().PkiId
+		pkiID := m.GetStateInfo().GetPkiId()
 		_, hasExternalEndpoint := peersWithExternalEndpoints[string(pkiID)]
-		require.True(t, hasExternalEndpoint, "peer %s has no external endpoint but crossed an org", string(pkiID))
-		return
+		if !hasExternalEndpoint {
+			return fmt.Errorf("peer %s has no external endpoint but crossed an org", string(pkiID))
+		}
+		return nil
 	}
 
-	for _, envp := range m.GetStateSnapshot().Elements {
+	for _, envp := range m.GetStateSnapshot().GetElements() {
 		msg, _ := protoext.EnvelopeToGossipMessage(envp)
-		pkiID := msg.GetStateInfo().PkiId
+		pkiID := msg.GetStateInfo().GetPkiId()
 		_, hasExternalEndpoint := peersWithExternalEndpoints[string(pkiID)]
-		require.True(t, hasExternalEndpoint, "peer %s has no external endpoint but crossed an org", string(pkiID))
+		if !hasExternalEndpoint {
+			return fmt.Errorf("peer %s has no external endpoint but crossed an org", string(pkiID))
+		}
 	}
+	return nil
 }
 
 type msg struct {

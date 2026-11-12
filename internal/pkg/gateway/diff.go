@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/protoutil"
@@ -188,7 +189,7 @@ func rwsetDifference(rwset1, rwset2 []byte) (*resultDifference, error) {
 		writes := writeset{}
 		pvtHashes := writeset{}
 		metadata := metaset{}
-		kvrws, err := protoutil.UnmarshalKVRWSet(txrw.Rwset)
+		kvrws, err := protoutil.UnmarshalKVRWSet(txrw.GetRwset())
 		if err != nil {
 			return nil, err
 		}
@@ -342,8 +343,8 @@ func (rd *readDifference) info() []any {
 		"type", description,
 		"namespace", rd.namespace,
 		"key", rd.key,
-		"initial-endorser-value", fmt.Sprintf("%d", rd.expected),
-		"invoked-endorser-value", fmt.Sprintf("%d", rd.actual),
+		"initial-endorser-value", strconv.FormatUint(rd.expected, 10),
+		"invoked-endorser-value", strconv.FormatUint(rd.actual, 10),
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
@@ -52,7 +53,7 @@ func testBlockIndexSync(t *testing.T, numBlocks int, numBlocksToIndex int, syncB
 		blkfileMgrWrapper.addBlocks(blocks[:numBlocksToIndex])
 
 		// redirect index writes to some random place and add remaining blocks
-		blkfileMgr.index.db = env.provider.leveldbProvider.GetDBHandle("someRandomPlace")
+		blkfileMgr.index.db = env.provider.dbProvider.GetDBHandle("someRandomPlace")
 		blkfileMgrWrapper.addBlocks(blocks[numBlocksToIndex:])
 
 		// Plug-in back the original index store
@@ -101,9 +102,12 @@ func TestBlockIndexSelectiveIndexing(t *testing.T) {
 
 func testBlockIndexSelectiveIndexing(t *testing.T, indexItems []IndexableAttr) {
 	var testName string
+	var strBuilder strings.Builder
 	for _, s := range indexItems {
-		testName = testName + string(s)
+		strBuilder.WriteString(string(s))
 	}
+	testName = strBuilder.String()
+
 	t.Run(testName, func(t *testing.T) {
 		env := newTestEnvSelectiveIndexing(t, NewConf(t.TempDir(), 0), indexItems, &disabled.Provider{})
 		defer env.Cleanup()
@@ -117,7 +121,7 @@ func testBlockIndexSelectiveIndexing(t *testing.T, indexItems []IndexableAttr) {
 
 		// if index has been configured for an indexItem then the item should be indexed else not
 		// test 'retrieveBlockByHash'
-		block, err := blockfileMgr.retrieveBlockByHash(protoutil.BlockHeaderHash(blocks[0].Header))
+		block, err := blockfileMgr.retrieveBlockByHash(protoutil.BlockHeaderHash(blocks[0].GetHeader()))
 		if containsAttr(indexItems, IndexableAttrBlockHash) {
 			require.NoError(t, err, "Error while retrieving block by hash")
 			require.Equal(t, blocks[0], block)
@@ -135,12 +139,12 @@ func testBlockIndexSelectiveIndexing(t *testing.T, indexItems []IndexableAttr) {
 		}
 
 		// test 'retrieveTransactionByID'
-		txid, err := protoutil.GetOrComputeTxIDFromEnvelope(blocks[0].Data.Data[0])
+		txid, err := protoutil.GetOrComputeTxIDFromEnvelope(blocks[0].GetData().GetData()[0])
 		require.NoError(t, err)
 		txEnvelope, err := blockfileMgr.retrieveTransactionByID(txid)
 		if containsAttr(indexItems, IndexableAttrTxID) {
 			require.NoError(t, err, "Error while retrieving tx by id")
-			txEnvelopeBytes := blocks[0].Data.Data[0]
+			txEnvelopeBytes := blocks[0].GetData().GetData()[0]
 			txEnvelopeOrig, err := protoutil.GetEnvelopeFromBlock(txEnvelopeBytes)
 			require.NoError(t, err)
 			require.Equal(t, txEnvelopeOrig, txEnvelope)
@@ -149,7 +153,7 @@ func testBlockIndexSelectiveIndexing(t *testing.T, indexItems []IndexableAttr) {
 		}
 
 		// test txIDExists
-		txid, err = protoutil.GetOrComputeTxIDFromEnvelope(blocks[0].Data.Data[0])
+		txid, err = protoutil.GetOrComputeTxIDFromEnvelope(blocks[0].GetData().GetData()[0])
 		require.NoError(t, err)
 		exists, err := blockfileMgr.txIDExists(txid)
 		if containsAttr(indexItems, IndexableAttrTxID) {
@@ -163,7 +167,7 @@ func testBlockIndexSelectiveIndexing(t *testing.T, indexItems []IndexableAttr) {
 		txEnvelope2, err := blockfileMgr.retrieveTransactionByBlockNumTranNum(0, 0)
 		if containsAttr(indexItems, IndexableAttrBlockNumTranNum) {
 			require.NoError(t, err, "Error while retrieving tx by blockNum and tranNum")
-			txEnvelopeBytes2 := blocks[0].Data.Data[0]
+			txEnvelopeBytes2 := blocks[0].GetData().GetData()[0]
 			txEnvelopeOrig2, err2 := protoutil.GetEnvelopeFromBlock(txEnvelopeBytes2)
 			require.NoError(t, err2)
 			require.Equal(t, txEnvelopeOrig2, txEnvelope2)
@@ -172,7 +176,7 @@ func testBlockIndexSelectiveIndexing(t *testing.T, indexItems []IndexableAttr) {
 		}
 
 		// test 'retrieveBlockByTxID'
-		txid, err = protoutil.GetOrComputeTxIDFromEnvelope(blocks[0].Data.Data[0])
+		txid, err = protoutil.GetOrComputeTxIDFromEnvelope(blocks[0].GetData().GetData()[0])
 		require.NoError(t, err)
 		block, err = blockfileMgr.retrieveBlockByTxID(txid)
 		if containsAttr(indexItems, IndexableAttrTxID) {
@@ -183,9 +187,9 @@ func testBlockIndexSelectiveIndexing(t *testing.T, indexItems []IndexableAttr) {
 		}
 
 		for _, block := range blocks {
-			flags := txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+			flags := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 
-			for idx, d := range block.Data.Data {
+			for idx, d := range block.GetData().GetData() {
 				txid, err = protoutil.GetOrComputeTxIDFromEnvelope(d)
 				require.NoError(t, err)
 
@@ -195,7 +199,7 @@ func testBlockIndexSelectiveIndexing(t *testing.T, indexItems []IndexableAttr) {
 					require.NoError(t, err)
 					reasonFromFlags := flags.Flag(idx)
 					require.Equal(t, reasonFromFlags, reason)
-					require.Equal(t, block.Header.Number, blkNum)
+					require.Equal(t, block.GetHeader().GetNumber(), blkNum)
 				} else {
 					require.EqualError(t, err, "transaction IDs not maintained in index")
 				}
@@ -226,7 +230,8 @@ func TestTxIDKeyEncodingDecoding(t *testing.T) {
 				txID, err := retrieveTxID(encodedTxIDKey)
 				require.NoError(t, err)
 				require.Equal(t, testcase.txid, txID)
-				verifyTxIDKeyDecodable(t,
+				verifyTxIDKeyDecodable(
+					t,
 					encodedTxIDKey,
 					testcase.txid, testcase.blkNum, testcase.txNum,
 				)
@@ -279,12 +284,12 @@ func TestExportUniqueTxIDs(t *testing.T) {
 	require.Empty(t, fileHashes)
 	files, err := os.ReadDir(testSnapshotDir)
 	require.NoError(t, err)
-	require.Len(t, files, 0)
+	require.Empty(t, files)
 
 	// add genesis block and test the exported bytes
 	bg, gb := testutil.NewBlockGenerator(t, "myChannel", false)
 	blkfileMgr.addBlock(gb)
-	configTxID, err := protoutil.GetOrComputeTxIDFromEnvelope(gb.Data.Data[0])
+	configTxID, err := protoutil.GetOrComputeTxIDFromEnvelope(gb.GetData().GetData()[0])
 	require.NoError(t, err)
 	fileHashes, err = blkfileMgr.index.exportUniqueTxIDs(testSnapshotDir, testNewHashFunc)
 	require.NoError(t, err)
@@ -382,7 +387,7 @@ func TestExportUniqueTxIDsErrorCases(t *testing.T) {
 
 	// error while reading from leveldb
 	require.NoError(t, os.MkdirAll(testSnapshotDir, 0o700))
-	env.provider.leveldbProvider.Close()
+	env.provider.dbProvider.Close()
 	_, err = index.exportUniqueTxIDs(testSnapshotDir, testNewHashFunc)
 	require.EqualError(t, err, "internal leveldb error while obtaining db iterator: leveldb: closed")
 	os.RemoveAll(testSnapshotDir)

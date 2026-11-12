@@ -56,7 +56,7 @@ func (gs *Server) Evaluate(ctx context.Context, request *gp.EvaluateRequest) (*g
 	for response == nil {
 		gs.logger.Debugw("Sending to peer:", "channel", channel, "chaincode", chaincodeID, "txID", request.GetTransactionId(), "MSPID", endorser.mspid, "endpoint", endorser.address)
 
-		done := make(chan error)
+		done := make(chan error, 1) // buffered so the goroutine can exit if the caller has already returned on timeout
 		go func() {
 			defer close(done)
 			ctx, cancel := context.WithTimeout(ctx, gs.options.EndorsementTimeout)
@@ -64,21 +64,23 @@ func (gs *Server) Evaluate(ctx context.Context, request *gp.EvaluateRequest) (*g
 			pr, err := endorser.client.ProcessProposal(ctx, signedProposal)
 			code, message, retry, remove := responseStatus(pr, err)
 			if code == codes.OK {
-				response = pr.Response
+				response = pr.GetResponse()
 				// Prefer result from proposal response as Response.Payload is not required to be transaction result
 				if result, err := getResultFromProposalResponse(pr); err == nil {
 					response.Payload = result
 				} else {
-					logger.Warnw("Successful proposal response contained no transaction result", "error", err.Error(), "chaincode", chaincodeID, "channel", channel, "txID", request.GetTransactionId(), "endorserAddress", endorser.endpointConfig.address, "endorserMspid", endorser.endpointConfig.mspid, "status", response.GetStatus(), "message", response.GetMessage())
+					logger.Warnw("Successful proposal response contained no transaction result", "error", err.Error(), "chaincode", chaincodeID, "channel", channel, "txID", request.GetTransactionId(), "endorserAddress", endorser.address, "endorserMspid", endorser.mspid, "status", response.GetStatus(), "message", response.GetMessage())
 				}
 			} else {
-				logger.Debugw("Evaluate call to endorser failed", "chaincode", chaincodeID, "channel", channel, "txID", request.GetTransactionId(), "endorserAddress", endorser.endpointConfig.address, "endorserMspid", endorser.endpointConfig.mspid, "error", message)
+				logger.Debugw("Evaluate call to endorser failed", "chaincode", chaincodeID, "channel", channel, "txID", request.GetTransactionId(), "endorserAddress", endorser.address, "endorserMspid", endorser.mspid, "error", message)
 				errDetails = append(errDetails, errorDetail(endorser.endpointConfig, message))
 				if remove {
 					gs.registry.removeEndorser(endorser)
 				}
 				if retry {
-					endorser = plan.nextPeerInGroup(endorser)
+					var group string
+					endorser, group = plan.nextPeerInGroup(endorser)
+					plan.abandonGroupRemoveLayouts(group)
 				} else {
 					done <- newRpcError(code, "evaluate call to endorser returned error: "+message, errDetails...)
 				}
@@ -103,13 +105,13 @@ func (gs *Server) Evaluate(ctx context.Context, request *gp.EvaluateRequest) (*g
 		Result: response,
 	}
 
-	logger.Debugw("Evaluate call to endorser returned success", "channel", request.GetChannelId(), "txID", request.GetTransactionId(), "endorserAddress", endorser.endpointConfig.address, "endorserMspid", endorser.endpointConfig.mspid, "status", response.GetStatus(), "message", response.GetMessage())
+	logger.Debugw("Evaluate call to endorser returned success", "channel", request.GetChannelId(), "txID", request.GetTransactionId(), "endorserAddress", endorser.address, "endorserMspid", endorser.mspid, "status", response.GetStatus(), "message", response.GetMessage())
 	return evaluateResponse, nil
 }
 
 func getChannelAndChaincodeFromSignedProposal(signedProposal *peer.SignedProposal) (string, string, bool, error) {
 	if len(signedProposal.GetProposalBytes()) == 0 {
-		return "", "", false, fmt.Errorf("a signed proposal is required")
+		return "", "", false, errors.New("a signed proposal is required")
 	}
 	proposal, err := protoutil.UnmarshalProposal(signedProposal.GetProposalBytes())
 	if err != nil {
@@ -133,7 +135,7 @@ func getChannelAndChaincodeFromSignedProposal(signedProposal *peer.SignedProposa
 	}
 
 	if len(channelHeader.GetChannelId()) == 0 {
-		return "", "", false, fmt.Errorf("no channel id provided")
+		return "", "", false, errors.New("no channel id provided")
 	}
 
 	if spec.GetChaincodeSpec() == nil {
@@ -148,7 +150,7 @@ func getChannelAndChaincodeFromSignedProposal(signedProposal *peer.SignedProposa
 		return "", "", false, fmt.Errorf("no chaincode name is provided, channel id [%s]", channelHeader.GetChannelId())
 	}
 
-	return channelHeader.GetChannelId(), spec.GetChaincodeSpec().GetChaincodeId().GetName(), len(payload.TransientMap) > 0, nil
+	return channelHeader.GetChannelId(), spec.GetChaincodeSpec().GetChaincodeId().GetName(), len(payload.GetTransientMap()) > 0, nil
 }
 
 func getResultFromProposalResponse(proposalResponse *peer.ProposalResponse) ([]byte, error) {

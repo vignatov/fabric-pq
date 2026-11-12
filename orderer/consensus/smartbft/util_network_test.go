@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hyperledger-labs/SmartBFT/pkg/api"
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
-	"github.com/hyperledger-labs/SmartBFT/pkg/wal"
-	"github.com/hyperledger-labs/SmartBFT/smartbftprotos"
+	"github.com/hyperledger/SmartBFT/pkg/api"
+	"github.com/hyperledger/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/pkg/wal"
+	"github.com/hyperledger/SmartBFT/smartbftprotos"
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
@@ -317,21 +317,21 @@ func isConfigTx(envelope *cb.Envelope) bool {
 		return false
 	}
 
-	payload, err := protoutil.UnmarshalPayload(envelope.Payload)
+	payload, err := protoutil.UnmarshalPayload(envelope.GetPayload())
 	if err != nil {
 		return false
 	}
 
-	if payload.Header == nil {
+	if payload.GetHeader() == nil {
 		return false
 	}
 
-	hdr, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
+	hdr, err := protoutil.UnmarshalChannelHeader(payload.GetHeader().GetChannelHeader())
 	if err != nil {
 		return false
 	}
 
-	return cb.HeaderType(hdr.Type) == cb.HeaderType_CONFIG
+	return cb.HeaderType(hdr.GetType()) == cb.HeaderType_CONFIG
 }
 
 func (n *Node) sendMessage(sender uint64, target uint64, message *smartbftprotos.Message) error {
@@ -473,12 +473,14 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 	blockPuller.EXPECT().HeightsByEndpoints().RunAndReturn(
 		func() (map[string]uint64, string, error) {
 			return node.HeightsByEndpoints(), node.Endpoint, nil
-		}).Maybe()
+		},
+	).Maybe()
 	blockPuller.EXPECT().PullBlock(mock.Anything).RunAndReturn(
 		func(seq uint64) *cb.Block {
 			node.Logger.Infof("Node %d reqested PullBlock %d, returning nil", node.NodeId, seq)
 			return nil
-		}).Maybe()
+		},
+	).Maybe()
 
 	configValidatorMock := smartBFTMocks.NewConfigValidator(t)
 	configValidatorMock.EXPECT().ValidateConfig(mock.Anything).Return(nil).Maybe()
@@ -492,11 +494,13 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 	signerSerializerMock.EXPECT().Sign(mock.Anything).RunAndReturn(
 		func(message []byte) ([]byte, error) {
 			return message, nil
-		}).Maybe()
+		},
+	).Maybe()
 	signerSerializerMock.EXPECT().Serialize().RunAndReturn(
 		func() ([]byte, error) {
 			return []byte{1, 2, 3}, nil
-		}).Maybe()
+		},
+	).Maybe()
 
 	policyManagerMock := smartBFTMocks.NewPolicyManager(t)
 	noErrorPolicyMock := smartBFTMocks.NewPolicy(t)
@@ -505,7 +509,8 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 	policyManagerMock.EXPECT().GetPolicy(mock.AnythingOfType("string")).RunAndReturn(
 		func(s string) (policies.Policy, bool) {
 			return noErrorPolicyMock, true
-		}).Maybe()
+		},
+	).Maybe()
 
 	// the number of blocks is determined by the number of blocks in the node's ledger
 	supportMock := smartBFTMocks.NewConsenterSupport(t)
@@ -514,37 +519,43 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 	supportMock.EXPECT().Block(mock.AnythingOfType("uint64")).RunAndReturn(
 		func(blockIdx uint64) *cb.Block {
 			return node.State.GetBlock(blockIdx)
-		})
+		},
+	)
 	supportMock.EXPECT().Sequence().RunAndReturn(
 		func() uint64 {
 			return node.State.Sequence
-		})
+		},
+	)
 	supportMock.EXPECT().WriteBlock(mock.Anything, mock.Anything).Run(
 		func(block *cb.Block, encodedMetadataValue []byte) {
 			node.State.AddBlock(block)
-			node.Logger.Infof("Node %d appended block number %v to ledger", node.NodeId, block.Header.Number)
-		}).Maybe()
+			node.Logger.Infof("Node %d appended block number %v to ledger", node.NodeId, block.GetHeader().GetNumber())
+		},
+	).Maybe()
 	supportMock.EXPECT().WriteBlockSync(mock.Anything, mock.Anything).Run(
 		func(block *cb.Block, encodedMetadataValue []byte) {
 			node.State.AddBlock(block)
-			node.Logger.Infof("Node %d appended block number %v to ledger", node.NodeId, block.Header.Number)
-		}).Maybe()
+			node.Logger.Infof("Node %d appended block number %v to ledger", node.NodeId, block.GetHeader().GetNumber())
+		},
+	).Maybe()
 
 	supportMock.EXPECT().WriteConfigBlock(mock.Anything, mock.Anything).Run(
 		func(block *cb.Block, encodedMetadataValue []byte) {
 			node.State.AddBlock(block)
-			node.Logger.Infof("Node %d appended config block number %v to ledger", node.NodeId, block.Header.Number)
+			node.Logger.Infof("Node %d appended config block number %v to ledger", node.NodeId, block.GetHeader().GetNumber())
 			configInfo.lock.Lock()
 			defer configInfo.lock.Unlock()
-			if !slices.Contains(configInfo.numsOfConfigBlocks, block.Header.Number) {
-				configInfo.numsOfConfigBlocks = append(configInfo.numsOfConfigBlocks, block.Header.Number)
+			if !slices.Contains(configInfo.numsOfConfigBlocks, block.GetHeader().GetNumber()) {
+				configInfo.numsOfConfigBlocks = append(configInfo.numsOfConfigBlocks, block.GetHeader().GetNumber())
 			}
-		}).Maybe()
+		},
+	).Maybe()
 
 	supportMock.EXPECT().Serialize().RunAndReturn(
 		func() ([]byte, error) {
 			return []byte{1, 2, 3}, nil
-		}).Maybe()
+		},
+	).Maybe()
 
 	mpc := &smartbft.MetricProviderConverter{MetricsProvider: &disabled.Provider{}}
 	metricsBFT := api.NewMetrics(mpc, channelId)
@@ -564,7 +575,8 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 			slices.Sort(nodeIds)
 
 			return nodeIds
-		}).Maybe()
+		},
+	).Maybe()
 	egressCommMock.EXPECT().SendTransaction(mock.Anything, mock.Anything).Run(
 		func(targetNodeId uint64, message []byte) {
 			if !node.IsConnectedToNetwork {
@@ -574,7 +586,8 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 			node.Logger.Infof("Node %d requested SendTransaction to node %d", node.NodeId, targetNodeId)
 			err := node.sendRequest(node.NodeId, targetNodeId, message)
 			require.NoError(t, err)
-		}).Maybe()
+		},
+	).Maybe()
 	egressCommMock.EXPECT().SendConsensus(mock.Anything, mock.Anything).Run(
 		func(targetNodeId uint64, message *smartbftprotos.Message) {
 			if !node.IsConnectedToNetwork {
@@ -584,7 +597,8 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 			node.Logger.Infof("Node %d requested SendConsensus to node %d of type <%s>", node.NodeId, targetNodeId, reflect.TypeOf(message.GetContent()))
 			err := node.sendMessage(node.NodeId, targetNodeId, message)
 			require.NoError(t, err)
-		}).Maybe()
+		},
+	).Maybe()
 
 	egressCommFactory := func(runtimeConfig *atomic.Value, channelId string, comm cluster.Communicator) smartbft.EgressComm {
 		return egressCommMock
@@ -619,7 +633,8 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 					CurrentConfig:         types.Configuration{SelfID: node.NodeId},
 				},
 			}
-		}).Maybe()
+		},
+	).Maybe()
 	synchronizerFactory := smartBFTMocks.NewSynchronizerFactory(t)
 	synchronizerFactory.EXPECT().CreateSynchronizer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(synchronizerMock)
 
@@ -642,7 +657,8 @@ func createBFTChainUsingMocks(t *testing.T, node *Node, configInfo *ConfigInfo) 
 		metricsWalBFT,
 		cryptoProvider,
 		egressCommFactory,
-		synchronizerFactory)
+		synchronizerFactory,
+	)
 
 	require.NoError(t, err)
 	require.NotNil(t, bftChain)
@@ -669,11 +685,11 @@ func createConfigBlock(t *testing.T, channelId string) (*cb.Block, tlsgen.CA) {
 	require.NotNil(t, channelGroup)
 
 	// update organization endpoints
-	ordererEndpoints := channelGroup.Groups[channelconfig.OrdererGroupKey].Groups["SampleOrg"].Values["Endpoints"].Value
+	ordererEndpoints := channelGroup.GetGroups()[channelconfig.OrdererGroupKey].GetGroups()["SampleOrg"].GetValues()["Endpoints"].GetValue()
 	ordererEndpointsVal := &cb.OrdererAddresses{}
 	err = proto.Unmarshal(ordererEndpoints, ordererEndpointsVal)
 	require.NoError(t, err)
-	ordererAddresses := ordererEndpointsVal.Addresses
+	ordererAddresses := ordererEndpointsVal.GetAddresses()
 	for _, consenter := range configProfile.Orderer.ConsenterMapping {
 		ordererAddresses = append(ordererAddresses, fmt.Sprintf("%s:%d", consenter.Host, consenter.Port))
 	}
@@ -739,11 +755,11 @@ func blockWithGroups(groups *cb.ConfigGroup, channelID string, blockNumber uint6
 			}),
 		},
 	}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 	block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES] = protoutil.MarshalOrPanic(&cb.Metadata{
 		Value: protoutil.MarshalOrPanic(&cb.OrdererBlockMetadata{
 			LastConfig: &cb.LastConfig{
-				Index: uint64(blockNumber),
+				Index: blockNumber,
 			},
 		}),
 	})

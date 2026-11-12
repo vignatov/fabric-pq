@@ -207,7 +207,7 @@ func populateMissingsWithTestDefaults(t *testing.T, initializer *ledgermgmt.Init
 	}
 
 	if initializer.Config == nil || initializer.Config.RootFSPath == "" {
-		rootPath, err := os.MkdirTemp("/tmp", "ledgersData")
+		rootPath, err := os.MkdirTemp("/tmp", "ledgersData") //nolint:usetesting
 		if err != nil {
 			t.Fatalf("Failed to create root directory: %s", err)
 		}
@@ -275,7 +275,7 @@ func (dc *deployedCCInfoProviderWrapper) AllCollectionsConfigPkg(channelName, ch
 
 	var combinedColls []*peer.CollectionConfig
 	if explicitCollectionConfigPkg != nil {
-		combinedColls = append(combinedColls, explicitCollectionConfigPkg.Config...)
+		combinedColls = append(combinedColls, explicitCollectionConfigPkg.GetConfig()...)
 	}
 	for _, implicitColl := range implicitCollections {
 		c := &peer.CollectionConfig{}
@@ -293,7 +293,7 @@ func (dc *deployedCCInfoProviderWrapper) AllCollectionsConfigPkg(channelName, ch
 func (dc *deployedCCInfoProviderWrapper) ImplicitCollections(channelName, chaincodeName string, qe ledger.SimpleQueryExecutor) ([]*peer.StaticCollectionConfig, error) {
 	collConfigs := make([]*peer.StaticCollectionConfig, 0, len(dc.orgMSPIDs))
 	for _, mspID := range dc.orgMSPIDs {
-		collConfigs = append(collConfigs, dc.ValidatorCommitter.GenerateImplicitCollectionForOrg(mspID))
+		collConfigs = append(collConfigs, dc.GenerateImplicitCollectionForOrg(mspID))
 	}
 	return collConfigs, nil
 }
@@ -316,13 +316,10 @@ type membershipInfoProvider struct {
 	myOrgMSPID string
 }
 
-func (p *membershipInfoProvider) AmMemberOf(channelName string, collectionPolicyConfig *peer.CollectionPolicyConfig) (bool, error) {
+func (p *membershipInfoProvider) AmMemberOf(channelName string, collectionPolicyConfig *peer.CollectionPolicyConfig) bool {
 	members := convertFromMemberOrgsPolicy(collectionPolicyConfig)
 	fmt.Printf("members = %s\n", members)
-	if slices.Contains(members, p.myOrgMSPID) {
-		return true, nil
-	}
-	return false, nil
+	return slices.Contains(members, p.myOrgMSPID)
 }
 
 func (p *membershipInfoProvider) MyImplicitCollectionName() string {

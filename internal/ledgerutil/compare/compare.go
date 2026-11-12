@@ -11,7 +11,8 @@ import (
 	"bytes"
 	"container/heap"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,7 +118,7 @@ func Compare(snapshotDir1 string, snapshotDir2 string, outputDirLoc string, firs
 			return 0, "", err
 		}
 		for _, r := range firstRecords.getAllRecords() {
-			firstDiffsOutputFileWriter.addRecord(*r)
+			firstDiffsOutputFileWriter.addRecord(r)
 		}
 		err = firstDiffsOutputFileWriter.close()
 		if err != nil {
@@ -132,7 +133,8 @@ func Compare(snapshotDir1 string, snapshotDir2 string, outputDirLoc string, firs
 // to an output file. Simultaneously, keep track of the first n differences.
 func findAndWriteDifferences(outputDirPath string, outputFilename string, channelName string, hashed bool,
 	snapshotReader1 *privacyenabledstate.SnapshotReader, snapshotReader2 *privacyenabledstate.SnapshotReader,
-	firstDiffs int, firstRecords *firstRecords) (outputFileWriter *jsonArrayFileWriter, err error) {
+	firstDiffs int, firstRecords *firstRecords,
+) (outputFileWriter *jsonArrayFileWriter, err error) {
 	// Create the output file
 	outputFileWriter, err = newJSONFileWriter(filepath.Join(outputDirPath, outputFilename), channelName)
 	if err != nil {
@@ -151,23 +153,21 @@ func findAndWriteDifferences(outputDirPath string, outputFilename string, channe
 
 	// Main snapshot record comparison loop
 	for snapshotRecord1 != nil && snapshotRecord2 != nil {
-
 		// nsKeys used for comparing snapshot records
-		key1 := &nsKey{namespace: namespace1, key: snapshotRecord1.Key}
-		key2 := &nsKey{namespace: namespace2, key: snapshotRecord2.Key}
+		key1 := &nsKey{namespace: namespace1, key: snapshotRecord1.GetKey()}
+		key2 := &nsKey{namespace: namespace2, key: snapshotRecord2.GetKey()}
 
 		// Determine the difference in records by comparing nsKeys
 		switch nsKeyCompare(key1, key2) {
-
 		case 0: // Keys are the same, look for a difference in records
-			if !(proto.Equal(snapshotRecord1, snapshotRecord2)) {
+			if !proto.Equal(snapshotRecord1, snapshotRecord2) {
 				// Keys are the same but records are different
 				diffRecord, err := newDiffRecord(namespace1, hashed, snapshotRecord1, snapshotRecord2)
 				if err != nil {
 					return nil, err
 				}
 				// Add difference to output JSON file
-				err = outputFileWriter.addRecord(*diffRecord)
+				err = outputFileWriter.addRecord(diffRecord)
 				if err != nil {
 					return nil, err
 				}
@@ -192,7 +192,7 @@ func findAndWriteDifferences(outputDirPath string, outputFilename string, channe
 				return nil, err
 			}
 			// Add missing record to output JSON file
-			err = outputFileWriter.addRecord(*diffRecord)
+			err = outputFileWriter.addRecord(diffRecord)
 			if err != nil {
 				return nil, err
 			}
@@ -212,7 +212,7 @@ func findAndWriteDifferences(outputDirPath string, outputFilename string, channe
 				return nil, err
 			}
 			// Add missing record to output JSON file
-			err = outputFileWriter.addRecord(*diffRecord)
+			err = outputFileWriter.addRecord(diffRecord)
 			if err != nil {
 				return nil, err
 			}
@@ -232,7 +232,6 @@ func findAndWriteDifferences(outputDirPath string, outputFilename string, channe
 
 	// Check for tailing records
 	switch {
-
 	case snapshotRecord1 != nil: // Snapshot 2 is missing a record
 		for snapshotRecord1 != nil {
 			// Add missing to output JSON file
@@ -240,7 +239,7 @@ func findAndWriteDifferences(outputDirPath string, outputFilename string, channe
 			if err != nil {
 				return nil, err
 			}
-			err = outputFileWriter.addRecord(*diffRecord)
+			err = outputFileWriter.addRecord(diffRecord)
 			if err != nil {
 				return nil, err
 			}
@@ -260,7 +259,7 @@ func findAndWriteDifferences(outputDirPath string, outputFilename string, channe
 			if err != nil {
 				return nil, err
 			}
-			err = outputFileWriter.addRecord(*diffRecord)
+			err = outputFileWriter.addRecord(diffRecord)
 			if err != nil {
 				return nil, err
 			}
@@ -329,7 +328,7 @@ func (s diffRecordHeap) Swap(i, j int) {
 }
 
 func (s diffRecordHeap) Less(i, j int) bool {
-	return !(s[i]).earlierThan(s[j])
+	return !s[i].earlierThan(s[j])
 }
 
 func (s *diffRecordHeap) Push(x any) {
@@ -353,14 +352,15 @@ type diffRecord struct {
 
 // Creates a new diffRecord
 func newDiffRecord(namespace string, hashed bool, record1 *privacyenabledstate.SnapshotRecord,
-	record2 *privacyenabledstate.SnapshotRecord) (*diffRecord, error) {
+	record2 *privacyenabledstate.SnapshotRecord,
+) (*diffRecord, error) {
 	var s1, s2 *snapshotRecord = nil, nil // snapshot records
 	var k string                          // key
 	var err error
 
 	// Snapshot2 has a missing record
 	if record1 != nil {
-		k = bytesToString(record1.Key, hashed)
+		k = bytesToString(record1.GetKey(), hashed)
 		s1, err = newSnapshotRecord(record1, hashed)
 		if err != nil {
 			return nil, err
@@ -368,7 +368,7 @@ func newDiffRecord(namespace string, hashed bool, record1 *privacyenabledstate.S
 	}
 	// Snapshot1 has a missing record
 	if record2 != nil {
-		k = bytesToString(record2.Key, hashed)
+		k = bytesToString(record2.GetKey(), hashed)
 		s2, err = newSnapshotRecord(record2, hashed)
 		if err != nil {
 			return nil, err
@@ -432,13 +432,13 @@ func earlierSSRecord(r1 *snapshotRecord, r2 *snapshotRecord) *snapshotRecord {
 
 // Creates a new SnapshotRecord
 func newSnapshotRecord(record *privacyenabledstate.SnapshotRecord, hashed bool) (*snapshotRecord, error) {
-	blockNum, txNum, err := heightFromBytes(record.Version)
+	blockNum, txNum, err := heightFromBytes(record.GetVersion())
 	if err != nil {
 		return nil, err
 	}
 
 	return &snapshotRecord{
-		Value:    bytesToString(record.Value, hashed),
+		Value:    bytesToString(record.GetValue(), hashed),
 		BlockNum: blockNum,
 		TxNum:    txNum,
 	}, nil
@@ -563,7 +563,6 @@ func hashesEqual(fpath1 string, fpath2 string) (equalPub bool, equalPvt bool, ch
 type jsonArrayFileWriter struct {
 	file               *os.File
 	buffer             *bufio.Writer
-	encoder            *json.Encoder
 	firstRecordWritten bool
 	count              int
 }
@@ -583,13 +582,12 @@ func newJSONFileWriter(filePath string, ledgerid string) (*jsonArrayFileWriter, 
 	}
 
 	return &jsonArrayFileWriter{
-		file:    f,
-		buffer:  b,
-		encoder: json.NewEncoder(b),
+		file:   f,
+		buffer: b,
 	}, nil
 }
 
-func (w *jsonArrayFileWriter) addRecord(r any) error {
+func (w *jsonArrayFileWriter) addRecord(r *diffRecord) error {
 	// Add commas for records after the first in the list
 	if w.firstRecordWritten {
 		_, err := w.buffer.Write([]byte(",\n"))
@@ -600,8 +598,15 @@ func (w *jsonArrayFileWriter) addRecord(r any) error {
 		w.firstRecordWritten = true
 	}
 
-	err := w.encoder.Encode(r)
-	if err != nil {
+	if err := json.MarshalWrite(
+		w.buffer,
+		r,
+		json.Deterministic(true),
+		jsontext.EscapeForHTML(true),
+	); err != nil {
+		return errors.Wrapf(err, "error marshalling diff record for namespace %q and key %q", r.Namespace, r.Key)
+	}
+	if err := w.buffer.WriteByte('\n'); err != nil {
 		return err
 	}
 	w.count++

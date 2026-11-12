@@ -62,9 +62,9 @@ func EnvelopeToGossipMessage(e *gossip.Envelope) (*SignedGossipMessage, error) {
 		return nil, errors.New("nil envelope")
 	}
 	msg := &gossip.GossipMessage{}
-	err := proto.Unmarshal(e.Payload, msg)
+	err := proto.Unmarshal(e.GetPayload(), msg)
 	if err != nil {
-		return nil, fmt.Errorf("Failed unmarshalling GossipMessage from envelope: %v", err)
+		return nil, fmt.Errorf("Failed unmarshalling GossipMessage from envelope: %w", err)
 	}
 	return &SignedGossipMessage{
 		GossipMessage: msg,
@@ -79,7 +79,7 @@ func InternalEndpoint(s *gossip.SecretEnvelope) string {
 		return ""
 	}
 	secret := &gossip.Secret{}
-	if err := proto.Unmarshal(s.Payload, secret); err != nil {
+	if err := proto.Unmarshal(s.GetPayload(), secret); err != nil {
 		return ""
 	}
 	return secret.GetInternalEndpoint()
@@ -99,7 +99,7 @@ func (m *SignedGossipMessage) Sign(signer Signer) (*gossip.Envelope, error) {
 	// Back it up, and restore it later
 	var secretEnvelope *gossip.SecretEnvelope
 	if m.Envelope != nil {
-		secretEnvelope = m.Envelope.SecretEnvelope
+		secretEnvelope = m.GetSecretEnvelope()
 	}
 	m.Envelope = nil
 	if m.GossipMessage == nil {
@@ -129,19 +129,19 @@ func (m *SignedGossipMessage) Verify(peerIdentity []byte, verify Verifier) error
 	if m.Envelope == nil {
 		return errors.New("Missing envelope")
 	}
-	if len(m.Envelope.Payload) == 0 {
+	if len(m.GetPayload()) == 0 {
 		return errors.New("Empty payload")
 	}
-	if len(m.Envelope.Signature) == 0 {
+	if len(m.GetSignature()) == 0 {
 		return errors.New("Empty signature")
 	}
-	payloadSigVerificationErr := verify(peerIdentity, m.Envelope.Signature, m.Envelope.Payload)
+	payloadSigVerificationErr := verify(peerIdentity, m.GetSignature(), m.GetPayload())
 	if payloadSigVerificationErr != nil {
 		return payloadSigVerificationErr
 	}
-	if m.Envelope.SecretEnvelope != nil {
-		payload := m.Envelope.SecretEnvelope.Payload
-		sig := m.Envelope.SecretEnvelope.Signature
+	if m.GetSecretEnvelope() != nil {
+		payload := m.GetSecretEnvelope().GetPayload()
+		sig := m.GetSecretEnvelope().GetSignature()
 		if len(payload) == 0 {
 			return errors.New("Empty payload")
 		}
@@ -156,7 +156,7 @@ func (m *SignedGossipMessage) Verify(peerIdentity []byte, verify Verifier) error
 // IsSigned returns whether the message
 // has a signature in the envelope.
 func (m *SignedGossipMessage) IsSigned() bool {
-	return m.Envelope != nil && m.Envelope.Payload != nil && m.Envelope.Signature != nil
+	return m.Envelope != nil && m.Payload != nil && m.Signature != nil
 }
 
 // String returns a string representation
@@ -166,22 +166,22 @@ func (m *SignedGossipMessage) String() string {
 	if m.Envelope != nil {
 		var secretEnv string
 		if m.SecretEnvelope != nil {
-			pl := len(m.SecretEnvelope.Payload)
-			sl := len(m.SecretEnvelope.Signature)
+			pl := len(m.SecretEnvelope.GetPayload())
+			sl := len(m.SecretEnvelope.GetSignature())
 			secretEnv = fmt.Sprintf(" Secret payload: %d bytes, Secret Signature: %d bytes", pl, sl)
 		}
-		env = fmt.Sprintf("%d bytes, Signature: %d bytes%s", len(m.Envelope.Payload), len(m.Envelope.Signature), secretEnv)
+		env = fmt.Sprintf("%d bytes, Signature: %d bytes%s", len(m.GetPayload()), len(m.GetSignature()), secretEnv)
 	}
 	gMsg := "No gossipMessage"
 	if m.GossipMessage != nil {
 		var isSimpleMsg bool
 		if m.GetStateResponse() != nil {
-			gMsg = fmt.Sprintf("StateResponse with %d items", len(m.GetStateResponse().Payloads))
-		} else if IsDataMsg(m.GossipMessage) && m.GetDataMsg().Payload != nil {
-			gMsg = PayloadToString(m.GetDataMsg().Payload)
+			gMsg = fmt.Sprintf("StateResponse with %d items", len(m.GetStateResponse().GetPayloads()))
+		} else if IsDataMsg(m.GossipMessage) && m.GetDataMsg().GetPayload() != nil {
+			gMsg = PayloadToString(m.GetDataMsg().GetPayload())
 		} else if IsDataUpdate(m.GossipMessage) {
 			update := m.GetDataUpdate()
-			gMsg = fmt.Sprintf("DataUpdate: %s", DataUpdateToString(update))
+			gMsg = "DataUpdate: " + DataUpdateToString(update)
 		} else if m.GetMemRes() != nil {
 			gMsg = MembershipResponseToString(m.GetMemRes())
 		} else if IsStateInfoSnapshot(m.GossipMessage) {

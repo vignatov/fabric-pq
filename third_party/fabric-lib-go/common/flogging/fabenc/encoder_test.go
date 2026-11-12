@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package fabenc_test
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"testing"
@@ -16,7 +15,6 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/flogging/fabenc"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -63,18 +61,57 @@ func TestEncodeEntry(t *testing.T) {
 	}
 }
 
-type brokenEncoder struct{ zapcore.Encoder }
-
-func (b *brokenEncoder) EncodeEntry(zapcore.Entry, []zapcore.Field) (*buffer.Buffer, error) {
-	return nil, errors.New("broken encoder")
-}
-
 func TestEncodeFieldsFailed(t *testing.T) {
 	enc := fabenc.NewFormatEncoder()
-	enc.Encoder = &brokenEncoder{}
+	// A key that reduces to nothing once invalid runes are stripped cannot be
+	// encoded as logfmt, so EncodeEntry surfaces the error.
+	_, err := enc.EncodeEntry(zapcore.Entry{}, []zapcore.Field{zap.String(" ", "value")})
+	require.Error(t, err)
+}
 
-	_, err := enc.EncodeEntry(zapcore.Entry{}, nil)
-	require.EqualError(t, err, "broken encoder")
+// TestEncodeEntryPreservesOrder verifies that an entry's own fields are emitted
+// in insertion order rather than sorted by key.
+func TestEncodeEntryPreservesOrder(t *testing.T) {
+	enc := fabenc.NewFormatEncoder()
+	line, err := enc.EncodeEntry(zapcore.Entry{}, []zapcore.Field{
+		zap.String("zebra", "z"),
+		zap.Int("apple", 1),
+		zap.String("mango", "m"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "zebra=z apple=1 mango=m\n", line.String())
+}
+
+// TestEncodeEntryPreservesDuplicateKeys verifies that repeated keys are not
+// merged: each occurrence is emitted with its own value. The With context is
+// emitted (sorted) before the entry's fields, and a key present in both the
+// context and the entry appears in each.
+func TestEncodeEntryPreservesDuplicateKeys(t *testing.T) {
+	enc := fabenc.NewFormatEncoder()
+	enc.Fields["ctx"] = "c" // With context
+	enc.Fields["dup"] = "from-with"
+
+	line, err := enc.EncodeEntry(zapcore.Entry{}, []zapcore.Field{
+		zap.String("dup", "from-field"), // same key as the context entry
+		zap.String("zzz", "z"),
+		zap.String("zzz", "z2"), // duplicated within the entry
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ctx=c dup=from-with dup=from-field zzz=z zzz=z2\n", line.String())
+}
+
+// TestEncodeEntrySkipsValuelessFields verifies that a field which adds no value
+// under its key (e.g. zap.Skip, whose key is empty) is dropped rather than
+// emitted as an invalid key.
+func TestEncodeEntrySkipsValuelessFields(t *testing.T) {
+	enc := fabenc.NewFormatEncoder()
+	line, err := enc.EncodeEntry(zapcore.Entry{}, []zapcore.Field{
+		zap.Skip(),
+		zap.String("k", "v"),
+		zap.Skip(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "k=v\n", line.String())
 }
 
 func TestFormatEncoderClone(t *testing.T) {

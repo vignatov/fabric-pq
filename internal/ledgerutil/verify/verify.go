@@ -8,7 +8,6 @@ package verify
 
 import (
 	"bytes"
-	"fmt"
 	"path/filepath"
 
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
@@ -34,12 +33,12 @@ const (
 // the hash value (DataHash) and the previous hash value (PreviousHash) in every block.
 // It creates a directory in outputDir for each ledger and stores the check result as a JSON file
 // in the directory.
-func VerifyLedger(blockStorePath string, outputDir string) (bool, error) {
+func VerifyLedger(blockStorePath string, dbType string, outputDir string) (bool, error) {
 	// Save whether any error is detected
 	ledgerErrorFound := false
 
 	// Get the block store provider
-	blockStoreProvider, err := getBlockStoreProvider(blockStorePath)
+	blockStoreProvider, err := getBlockStoreProvider(blockStorePath, dbType)
 	if err != nil {
 		return false, err
 	}
@@ -54,7 +53,7 @@ func VerifyLedger(blockStorePath string, outputDir string) (bool, error) {
 	// Iterate over the channels
 	for _, ledgerId := range list {
 		// Create Output Directory
-		outputDirName := fmt.Sprintf("%s_verification_result", ledgerId)
+		outputDirName := ledgerId + "_verification_result"
 		outputDirPath := filepath.Join(outputDir, outputDirName)
 
 		empty, err := fileutil.CreateDirIfMissing(outputDirPath)
@@ -112,8 +111,8 @@ func VerifyLedger(blockStorePath string, outputDir string) (bool, error) {
 				return false, errors.Errorf("Cannot decode the block %d", i)
 			}
 
-			if block.Header.Number != i {
-				return false, errors.Errorf("The next block is expected to be %d but got %d", i, block.Header.Number)
+			if block.GetHeader().GetNumber() != i {
+				return false, errors.Errorf("The next block is expected to be %d but got %d", i, block.GetHeader().GetNumber())
 			}
 
 			// Perform checks for this block
@@ -137,7 +136,7 @@ func VerifyLedger(blockStorePath string, outputDir string) (bool, error) {
 			}
 
 			// Remember the header hash to compare it with the "previous hash" in the next block
-			previousHash = protoutil.BlockHeaderHash(block.Header)
+			previousHash = protoutil.BlockHeaderHash(block.GetHeader())
 		}
 
 		err = blockResult.writer.CloseList()
@@ -163,7 +162,7 @@ func getFirstBlockNumberInLedger(info *common.BlockchainInfo) uint64 {
 }
 
 // getBlockStoreProvider - Gets a default block store provider to access the peer's block store
-func getBlockStoreProvider(fsPath string) (*blkstorage.BlockStoreProvider, error) {
+func getBlockStoreProvider(fsPath string, dbType string) (*blkstorage.BlockStoreProvider, error) {
 	// Format path to block store
 	blockStorePath := kvledger.BlockStorePath(filepath.Join(fsPath, ledgersDataDirName))
 	isEmpty, err := fileutil.DirEmpty(blockStorePath)
@@ -185,7 +184,7 @@ func getBlockStoreProvider(fsPath string) (*blkstorage.BlockStoreProvider, error
 	}
 	metricsProvider := &disabled.Provider{}
 	// Create new block store provider
-	blockStoreProvider, err := blkstorage.NewProvider(conf, indexConfig, metricsProvider)
+	blockStoreProvider, err := blkstorage.NewProvider(conf, indexConfig, metricsProvider, dbType)
 	if err != nil {
 		return nil, err
 	}
@@ -224,23 +223,23 @@ type blockCheckResult struct {
 // checkBlock - Performs checks a block's hash
 func checkBlock(block *common.Block, previousHash []byte) (*blockCheckResult, error) {
 	result := blockCheckResult{
-		BlockNum: block.Header.Number,
+		BlockNum: block.GetHeader().GetNumber(),
 		Valid:    true,
 		Errors:   []string{},
 	}
 
-	hash, err := protoutil.BlockDataHash(block.Data)
+	hash, err := protoutil.BlockDataHash(block.GetData())
 	if err != nil {
 		result.Errors = append(result.Errors, err.Error())
 	}
 	// Check if the hash value of the data matches the hash value field in the header
-	if !bytes.Equal(block.Header.DataHash, hash) {
+	if !bytes.Equal(block.GetHeader().GetDataHash(), hash) {
 		result.Valid = false
 		result.Errors = append(result.Errors, errorDataHashMismatch)
 	}
 	if len(previousHash) > 0 {
 		// Check if the hash value of the previous header matches the prev hash value field in the header
-		if !bytes.Equal(block.Header.PreviousHash, previousHash) {
+		if !bytes.Equal(block.GetHeader().GetPreviousHash(), previousHash) {
 			result.Valid = false
 			result.Errors = append(result.Errors, errorPrevHashMismatch)
 		}

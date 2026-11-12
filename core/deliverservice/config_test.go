@@ -91,6 +91,8 @@ func TestGlobalConfig(t *testing.T) {
 	viper.Set("peer.deliveryclient.blockCensorshipTimeoutKey", "40s")
 	viper.Set("peer.deliveryclient.minimalReconnectInterval", "110ms")
 	viper.Set("peer.deliveryclient.policy", "simple")
+	viper.Set("peer.maxRecvMsgSize", 200*1024*1024)
+	viper.Set("peer.maxSendMsgSize", 150*1024*1024)
 
 	coreConfig := deliverservice.GlobalConfig()
 
@@ -112,7 +114,9 @@ func TestGlobalConfig(t *testing.T) {
 		SecOpts: comm.SecureOptions{
 			UseTLS: true,
 		},
-		Policy: "simple",
+		MaxRecvMsgSize: 200 * 1024 * 1024,
+		MaxSendMsgSize: 150 * 1024 * 1024,
+		Policy:         "simple",
 	}
 
 	require.Equal(t, expectedConfig, coreConfig)
@@ -131,6 +135,8 @@ func TestGlobalConfigDefault(t *testing.T) {
 		ReconnectTotalTimeThreshold: deliverservice.DefaultReConnectTotalTimeThreshold,
 		ConnectionTimeout:           deliverservice.DefaultConnectionTimeout,
 		KeepaliveOptions:            comm.DefaultKeepaliveOptions,
+		MaxRecvMsgSize:              comm.DefaultMaxRecvMsgSize,
+		MaxSendMsgSize:              comm.DefaultMaxSendMsgSize,
 		BlockCensorshipTimeoutKey:   deliverservice.DefaultBlockCensorshipTimeoutKey,
 		MinimalReconnectInterval:    deliverservice.DefaultMinimalReconnectInterval,
 		Policy:                      deliverservice.DefaultPolicy,
@@ -284,9 +290,9 @@ func TestGlobalConfigCheckDefaultIsSet(t *testing.T) {
 	err = viper.ReadInConfig()
 	require.NoError(t, err)
 
-	require.Equal(t, false, viper.IsSet("peer.deliveryclient.blockCensorshipTimeoutKey"))
-	require.Equal(t, false, viper.IsSet("peer.deliveryclient.minimalReconnectInterval"))
-	require.Equal(t, true, viper.IsSet("peer.deliveryclient.blockGossipEnabled"))
+	require.False(t, viper.IsSet("peer.deliveryclient.blockCensorshipTimeoutKey"))
+	require.False(t, viper.IsSet("peer.deliveryclient.minimalReconnectInterval"))
+	require.True(t, viper.IsSet("peer.deliveryclient.blockGossipEnabled"))
 
 	coreConfig := deliverservice.GlobalConfig()
 	require.NoError(t, err)
@@ -298,10 +304,12 @@ func TestGlobalConfigCheckDefaultIsSet(t *testing.T) {
 		ReconnectTotalTimeThreshold: deliverservice.DefaultReConnectTotalTimeThreshold,
 		ConnectionTimeout:           deliverservice.DefaultConnectionTimeout,
 		KeepaliveOptions:            comm.DefaultKeepaliveOptions,
+		MaxRecvMsgSize:              comm.DefaultMaxRecvMsgSize,
+		MaxSendMsgSize:              comm.DefaultMaxSendMsgSize,
 		BlockCensorshipTimeoutKey:   deliverservice.DefaultBlockCensorshipTimeoutKey,
 		MinimalReconnectInterval:    deliverservice.DefaultMinimalReconnectInterval,
 		Policy:                      deliverservice.DefaultPolicy,
 	}
 
-	require.Equal(t, coreConfig, expectedConfig)
+	require.Equal(t, expectedConfig, coreConfig)
 }

@@ -4,13 +4,15 @@
 package localconfig
 
 import (
-	"fmt"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +23,7 @@ func TestLoadGoodConfig(t *testing.T) {
 	cfg, err := cc.load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg, "Could not load config")
-	require.Nil(t, err, "Load good config returned unexpected error")
+	require.NoError(t, err, "Load good config returned unexpected error")
 }
 
 func TestMissingConfigValueOverridden(t *testing.T) {
@@ -71,7 +73,7 @@ func TestLoadMissingConfigFile(t *testing.T) {
 	cc := &configCache{}
 	cfg, err := cc.load()
 	require.Nil(t, cfg, "Loaded missing config file")
-	require.NotNil(t, err, "Loaded missing config file without error")
+	require.Error(t, err, "Loaded missing config file without error")
 }
 
 func TestLoadMalformedConfigFile(t *testing.T) {
@@ -79,7 +81,7 @@ func TestLoadMalformedConfigFile(t *testing.T) {
 
 	// Create a malformed orderer.yaml file in temp dir
 	f, err := os.OpenFile(filepath.Join(name, "orderer.yaml"), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	require.Nil(t, err, "Error creating file: %s", err)
+	require.NoErrorf(t, err, "Error creating file: %s", err)
 	f.WriteString("General: 42")
 	require.NoError(t, f.Close(), "Error closing file")
 
@@ -88,7 +90,7 @@ func TestLoadMalformedConfigFile(t *testing.T) {
 	cc := &configCache{}
 	cfg, err := cc.load()
 	require.Nil(t, cfg, "Loaded missing config file")
-	require.NotNil(t, err, "Loaded missing config file without error")
+	require.Error(t, err, "Loaded missing config file without error")
 }
 
 // TestEnvInnerVar verifies that with the Unmarshal function that
@@ -100,7 +102,7 @@ func TestEnvInnerVar(t *testing.T) {
 	envVal1 := uint16(80)
 	envVar2 := "ORDERER_GENERAL_KEEPALIVE_SERVERTIMEOUT"
 	envVal2 := "42s"
-	t.Setenv(envVar1, fmt.Sprintf("%d", envVal1))
+	t.Setenv(envVar1, strconv.FormatUint(uint64(envVal1), 10))
 	t.Setenv(envVar2, envVal2)
 	configtest.SetDevFabricConfigPath(t)
 
@@ -113,6 +115,47 @@ func TestEnvInnerVar(t *testing.T) {
 
 	v2, _ := time.ParseDuration(envVal2)
 	require.Equal(t, config.General.Keepalive.ServerTimeout, v2, "Environmental override of inner config test 2 did not work")
+}
+
+// jsonOptions keeps FormatNilSliceAsNull/FormatNilMapAsNull, so the config
+// cache round-trip in load() preserves nil slices instead of turning them into
+// empty non-nil slices (the encoding/json v2 default). The Admin CA list is
+// empty non-nil because the sample orderer.yaml sets it to [].
+func TestLoadNilSliceRoundTrip(t *testing.T) {
+	configtest.SetDevFabricConfigPath(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Nil(t, cfg.General.TLS.ClientRootCAs)
+	require.NotNil(t, cfg.Admin.TLS.ClientRootCAs)
+	require.Empty(t, cfg.Admin.TLS.ClientRootCAs)
+
+	b, err := json.Marshal([]string(nil), jsonOptions...)
+	require.NoError(t, err)
+	require.Equal(t, "null", string(b))
+
+	b, err = json.Marshal([]string{}, jsonOptions...)
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(b))
+}
+
+// Duration values are marshaled as int64 nanoseconds through the custom
+// marshalers in jsonOptions; without them v2 rejects time.Duration.
+func TestJSONOptionsDurationRoundTrip(t *testing.T) {
+	configtest.SetDevFabricConfigPath(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Equal(t, 60*time.Second, cfg.General.Keepalive.ServerMinInterval)
+
+	b, err := json.Marshal(cfg.General.Keepalive.ServerTimeout, jsonOptions...)
+	require.NoError(t, err)
+	require.Equal(t, "20000000000", string(b))
+
+	var d time.Duration
+	err = json.Unmarshal(b, &d, jsonOptions...)
+	require.NoError(t, err)
+	require.Equal(t, 20*time.Second, d)
 }
 
 func TestAdminTLSConfig(t *testing.T) {
@@ -179,7 +222,7 @@ Consensus:
 `
 
 	f, err := os.OpenFile(filepath.Join(name, "orderer.yaml"), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	require.Nil(t, err, "Error creating file: %s", err)
+	require.NoErrorf(t, err, "Error creating file: %s", err)
 	f.WriteString(content)
 	require.NoError(t, f.Close(), "Error closing file")
 
@@ -201,8 +244,55 @@ Consensus:
 	}{}
 	err = mapstructure.Decode(consensus, foo)
 	require.NoError(t, err, "Failed to decode Consensus to struct")
-	require.Equal(t, foo.Foo, "bar")
-	require.Equal(t, foo.Hello.World, 42)
+	require.Equal(t, "bar", foo.Foo)
+	require.Equal(t, 42, foo.Hello.World)
+}
+
+func TestFileLedgerStoreType(t *testing.T) {
+	t.Run("config without a store type", func(t *testing.T) {
+		name := t.TempDir()
+
+		content := `---
+FileLedger:
+  Location: /var/hyperledger/production/orderer
+`
+
+		f, err := os.OpenFile(filepath.Join(name, "orderer.yaml"), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		require.NoErrorf(t, err, "Error creating file: %s", err)
+		f.WriteString(content)
+		require.NoError(t, f.Close(), "Error closing file")
+
+		t.Setenv("FABRIC_CFG_PATH", name)
+
+		cc := &configCache{}
+		cfg, err := cc.load()
+		require.NoError(t, err, "Load good config returned unexpected error")
+		require.Equal(t, db.GoLevelDB, cfg.FileLedger.StateDatabase)
+	})
+
+	t.Run("config that still names a store", func(t *testing.T) {
+		// The store type is not part of the configuration format. The
+		// configuration is decoded exactly, so a leftover key is rejected
+		// rather than selecting a store.
+		name := t.TempDir()
+
+		content := `---
+FileLedger:
+  Location: /var/hyperledger/production/orderer
+  stateDatabase: someKVStore
+`
+
+		f, err := os.OpenFile(filepath.Join(name, "orderer.yaml"), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		require.NoErrorf(t, err, "Error creating file: %s", err)
+		f.WriteString(content)
+		require.NoError(t, f.Close(), "Error closing file")
+
+		t.Setenv("FABRIC_CFG_PATH", name)
+
+		cc := &configCache{}
+		_, err = cc.load()
+		require.ErrorContains(t, err, "has invalid keys: stateDatabase")
+	})
 }
 
 func TestConnectionTimeout(t *testing.T) {
@@ -223,7 +313,7 @@ func TestConnectionTimeout(t *testing.T) {
 		cfg, err := cc.load()
 		require.NotNil(t, cfg, "Could not load config")
 		require.NoError(t, err, "Load good config returned unexpected error")
-		require.Equal(t, cfg.General.ConnectionTimeout, 10*time.Second)
+		require.Equal(t, 10*time.Second, cfg.General.ConnectionTimeout)
 	})
 }
 

@@ -45,7 +45,7 @@ func joinCmd(cf *ChannelCmdFactory) *cobra.Command {
 type GBFileNotFoundErr string
 
 func (e GBFileNotFoundErr) Error() string {
-	return fmt.Sprintf("genesis block file not found %s", string(e))
+	return "genesis block file not found " + string(e)
 }
 
 // ProposalFailedErr proposal failed
@@ -82,19 +82,19 @@ func executeJoin(cf *ChannelCmdFactory, spec *pb.ChaincodeSpec) (err error) {
 
 	creator, err := cf.Signer.Serialize()
 	if err != nil {
-		return fmt.Errorf("Error serializing identity for %s: %s", cf.Signer.GetIdentifier(), err)
+		return fmt.Errorf("Error serializing identity for %s: %w", cf.Signer.GetIdentifier(), err)
 	}
 
 	var prop *pb.Proposal
 	prop, _, err = protoutil.CreateProposalFromCIS(pcommon.HeaderType_CONFIG, "", invocation, creator)
 	if err != nil {
-		return fmt.Errorf("Error creating proposal for join %s", err)
+		return fmt.Errorf("Error creating proposal for join %w", err)
 	}
 
 	var signedProp *pb.SignedProposal
 	signedProp, err = protoutil.GetSignedProposal(prop, cf.Signer)
 	if err != nil {
-		return fmt.Errorf("Error creating signed proposal %s", err)
+		return fmt.Errorf("Error creating signed proposal %w", err)
 	}
 
 	var proposalResp *pb.ProposalResponse
@@ -107,8 +107,8 @@ func executeJoin(cf *ChannelCmdFactory, spec *pb.ChaincodeSpec) (err error) {
 		return ProposalFailedErr("nil proposal response")
 	}
 
-	if proposalResp.Response.Status != 0 && proposalResp.Response.Status != http.StatusOK {
-		return ProposalFailedErr(fmt.Sprintf("bad proposal response %d: %s", proposalResp.Response.Status, proposalResp.Response.Message))
+	if proposalResp.GetResponse().GetStatus() != 0 && proposalResp.GetResponse().GetStatus() != http.StatusOK {
+		return ProposalFailedErr(fmt.Sprintf("bad proposal response %d: %s", proposalResp.GetResponse().GetStatus(), proposalResp.GetResponse().GetMessage()))
 	}
 	logger.Info("Successfully submitted proposal to join channel")
 	return nil

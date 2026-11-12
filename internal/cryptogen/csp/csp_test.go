@@ -14,7 +14,6 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
-	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -36,8 +35,7 @@ func TestLoadPrivateKey(t *testing.T) {
 		t.Fatalf("Failed to generate private key: %s", err)
 	}
 	pkFile := filepath.Join(testDir, "priv_sk")
-	require.Equal(t, true, checkForFile(pkFile),
-		"Expected to find private key file")
+	require.True(t, checkForFile(pkFile), "Expected to find private key file")
 	loadedPriv, err := csp.LoadPrivateKey(testDir)
 	require.NoError(t, err, "Failed to load private key")
 	require.NotNil(t, loadedPriv, "Should have returned an *ecdsa.PrivateKey")
@@ -74,17 +72,17 @@ func TestLoadPrivateKey_BadPEM(t *testing.T) {
 		{
 			name:   "not pem encoded",
 			data:   []byte("wrong_encoding"),
-			errMsg: fmt.Sprintf("%s: bytes are not PEM encoded", badPEMFile),
+			errMsg: badPEMFile + ": bytes are not PEM encoded",
 		},
 		{
 			name:   "not EC key",
 			data:   pkcs8RSAPem,
-			errMsg: fmt.Sprintf("%s: pem bytes do not contain an ECDSA nor ed25519 private key", badPEMFile),
+			errMsg: badPEMFile + ": pem bytes do not contain an ECDSA nor ed25519 private key",
 		},
 		{
 			name:   "not PKCS8 encoded",
 			data:   pkcs1RSAPem,
-			errMsg: fmt.Sprintf("%s: pem bytes are not PKCS8 encoded", badPEMFile),
+			errMsg: badPEMFile + ": pem bytes are not PKCS8 encoded",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -110,8 +108,7 @@ func TestGeneratePrivateKey(t *testing.T) {
 	priv, err := csp.GeneratePrivateKey(testDir, ECDSA)
 	require.NoError(t, err, "Failed to generate private key")
 	require.NotNil(t, priv, "Should have returned an *ecdsa.Key")
-	require.Equal(t, true, checkForFile(expectedFile),
-		"Expected to find private key file")
+	require.True(t, checkForFile(expectedFile), "Expected to find private key file")
 
 	_, err = csp.GeneratePrivateKey("notExist", ECDSA)
 	require.Contains(t, err.Error(), "no such file or directory")

@@ -68,7 +68,8 @@ var _ = Describe("Deliver", func() {
 				time.Second,
 				false,
 				deliver.NewMetrics(&disabled.Provider{}),
-				false)
+				false,
+			)
 			Expect(handler).NotTo(BeNil())
 
 			Expect(handler.ChainManager).To(Equal(fakeChainManager))
@@ -84,7 +85,8 @@ var _ = Describe("Deliver", func() {
 					time.Second,
 					false,
 					deliver.NewMetrics(&disabled.Provider{}),
-					false)
+					false,
+				)
 
 				Expect(handler.ExpirationCheckFunc(serializedIdentity)).To(Equal(cert.NotAfter))
 			})
@@ -97,7 +99,8 @@ var _ = Describe("Deliver", func() {
 					time.Second,
 					false,
 					deliver.NewMetrics(&disabled.Provider{}),
-					true)
+					true,
+				)
 
 				Expect(handler.ExpirationCheckFunc(serializedIdentity)).NotTo(Equal(cert.NotAfter))
 			})
@@ -345,7 +348,7 @@ var _ = Describe("Deliver", func() {
 
 			Expect(fakeBlockReader.IteratorCallCount()).To(Equal(1))
 			startPosition := fakeBlockReader.IteratorArgsForCall(0)
-			Expect(startPosition).To(ProtoEqual(seekInfo.Start))
+			Expect(startPosition).To(ProtoEqual(seekInfo.GetStart()))
 		})
 
 		Context("when multiple blocks are requested", func() {
@@ -461,7 +464,7 @@ var _ = Describe("Deliver", func() {
 
 				Expect(fakeBlockIterator.NextCallCount()).To(Equal(2))
 				Expect(fakeResponseSender.SendBlockResponseCallCount()).To(Equal(2))
-				for i := 0; i < fakeResponseSender.SendBlockResponseCallCount(); i++ {
+				for i := range fakeResponseSender.SendBlockResponseCallCount() {
 					b, _, _, _ := fakeResponseSender.SendBlockResponseArgsForCall(i)
 					Expect(b).To(ProtoEqual(&cb.Block{
 						Header: &cb.BlockHeader{Number: uint64(i + 1)},
@@ -492,7 +495,7 @@ var _ = Describe("Deliver", func() {
 				Expect(fakeBlockReader.IteratorCallCount()).To(Equal(1))
 				Expect(fakeBlockIterator.NextCallCount()).To(Equal(1))
 				Expect(fakeResponseSender.SendBlockResponseCallCount()).To(Equal(1))
-				for i := 0; i < fakeResponseSender.SendBlockResponseCallCount(); i++ {
+				for i := range fakeResponseSender.SendBlockResponseCallCount() {
 					b, _, _, _ := fakeResponseSender.SendBlockResponseArgsForCall(i)
 					Expect(b).To(ProtoEqual(&cb.Block{
 						Header: &cb.BlockHeader{Number: uint64(i)},
@@ -532,7 +535,7 @@ var _ = Describe("Deliver", func() {
 
 				Expect(fakeBlockIterator.NextCallCount()).To(Equal(2))
 				Expect(fakeResponseSender.SendBlockResponseCallCount()).To(Equal(2))
-				for i := 0; i < fakeResponseSender.SendBlockResponseCallCount(); i++ {
+				for i := range fakeResponseSender.SendBlockResponseCallCount() {
 					b, _, _, _ := fakeResponseSender.SendBlockResponseArgsForCall(i)
 					Expect(b).To(ProtoEqual(&cb.Block{
 						Header:   &cb.BlockHeader{Number: uint64(i + 1)},
@@ -542,7 +545,7 @@ var _ = Describe("Deliver", func() {
 				}
 
 				for _, b := range cachedBlocks {
-					Expect(b.Data).ToNot(BeNil())
+					Expect(b.GetData()).ToNot(BeNil())
 				}
 			})
 		})
@@ -587,7 +590,7 @@ var _ = Describe("Deliver", func() {
 				Expect(start).To(ProtoEqual(&ab.SeekPosition{}))
 				Expect(fakeBlockIterator.NextCallCount()).To(Equal(3))
 				Expect(fakeResponseSender.SendBlockResponseCallCount()).To(Equal(3))
-				for i := 0; i < fakeResponseSender.SendBlockResponseCallCount(); i++ {
+				for i := range fakeResponseSender.SendBlockResponseCallCount() {
 					b, _, _, _ := fakeResponseSender.SendBlockResponseArgsForCall(i)
 					if i+1 == 1 || i+1 == 3 {
 						Expect(b).To(ProtoEqual(&cb.Block{
@@ -608,7 +611,7 @@ var _ = Describe("Deliver", func() {
 							Metadata: &cb.BlockMetadata{Metadata: [][]byte{{3}, {4}}},
 						}
 						Expect(b).To(ProtoEqual(blk))
-						Expect(b.Data.Data).NotTo(BeNil())
+						Expect(b.GetData().GetData()).NotTo(BeNil())
 					}
 				}
 			})

@@ -8,7 +8,7 @@ package marbles_private
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 
 	"github.com/hyperledger/fabric-chaincode-go/v2/pkg/statebased"
@@ -569,11 +569,9 @@ func (t *MarblesPrivateChaincode) getMarblesByRange(stub shim.ChaincodeStubInter
 			buffer.WriteString(",")
 		}
 
-		buffer.WriteString(
-			fmt.Sprintf(
-				`{"Key":"%s", "Record":%s}`,
-				queryResponse.Key, queryResponse.Value,
-			),
+		fmt.Fprintf(&buffer,
+			`{"Key":"%s", "Record":%s}`,
+			queryResponse.GetKey(), queryResponse.GetValue(),
 		)
 		bArrayMemberAlreadyWritten = true
 	}

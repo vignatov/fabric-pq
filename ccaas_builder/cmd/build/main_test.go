@@ -19,7 +19,6 @@ import (
 )
 
 func TestArguments(t *testing.T) {
-
 	testCases := map[string]struct {
 		exitCode int
 		args     []string
@@ -64,13 +63,13 @@ func TestGoodPath(t *testing.T) {
 	testPath := t.TempDir()
 
 	// create a basic structure of a chaincode
-	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
 	connectionJson := path.Join(testPath, "in-builder-dir", "connection.json")
@@ -122,13 +121,13 @@ func TestTemplating(t *testing.T) {
 	testPath := t.TempDir()
 
 	// create a basic structure of the chaincode to use
-	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
 	connectionJson := path.Join(testPath, "in-builder-dir", "connection.json")
@@ -136,6 +135,7 @@ func TestTemplating(t *testing.T) {
 	gt.Expect(err).NotTo(HaveOccurred())
 	file.WriteString(`{
 		"address": "{{.address}}:9999",
+		"domain": "{{.domain}}",
 		"dial_timeout": "10s",
 		"tls_required": true,
 		"root_cert":"{{.root_cert}}",
@@ -155,7 +155,7 @@ func TestTemplating(t *testing.T) {
 	args := []string{path.Join(testPath, "in-builder-dir"), path.Join(testPath, "in-metadata-dir"), path.Join(testPath, "out-release-dir")}
 	cmd := exec.Command(releaseCmd, args...)
 	env := os.Environ()
-	env = append(env, `CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"address":"URLAddress","root_cert":"a root cert","client_key":"a client key","client_cert":"a client cert"}`)
+	env = append(env, `CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"address":"URLAddress","domain":"cc.example.com","root_cert":"a root cert","client_key":"a client key","client_cert":"a client cert"}`)
 	cmd.Env = env
 
 	session, err := gexec.Start(cmd, nil, nil)
@@ -173,6 +173,7 @@ func TestTemplating(t *testing.T) {
 
 	expectedJson := `{
 		"address": "URLAddress:9999",
+		"domain": "cc.example.com",
 		"dial_timeout": "10s",
 		"tls_required": true,
 		"root_cert":"a root cert",
@@ -194,13 +195,13 @@ func TestTemplatingFailure(t *testing.T) {
 	testPath := t.TempDir()
 
 	// create a basic structure of the chaincode to use
-	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
 	connectionJson := path.Join(testPath, "in-builder-dir", "connection.json")
@@ -246,13 +247,13 @@ func TestMissingConnection(t *testing.T) {
 	testPath := t.TempDir()
 
 	// create a basic structure of a chaincode
-	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
 	metadataJson := path.Join(testPath, "in-metadata-dir", "metadata.json")
@@ -287,13 +288,13 @@ func TestMissingMetadata(t *testing.T) {
 	testPath := t.TempDir()
 
 	// create a basic structure of a chaincode
-	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-builder-dir", "META-INF"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "in-metadata-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0755)
+	os.MkdirAll(path.Join(testPath, "out-release-dir"), 0o755)
 	gt.Expect(err).NotTo(HaveOccurred())
 
 	connectionJson := path.Join(testPath, "in-builder-dir", "connection.json")

@@ -29,6 +29,7 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/common/ledger/blockledger/fileledger"
 	"github.com/hyperledger/fabric/core/config/configtest"
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
 	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
@@ -110,10 +111,10 @@ func TestInitializeProfilingService(t *testing.T) {
 		},
 	)
 	time.Sleep(500 * time.Millisecond)
-	if _, err := http.Get("http://" + listenAddr + "/" + "/debug/"); err != nil {
+	if _, err := http.Get("http://" + listenAddr + "/" + "/debug/"); err != nil { //nolint:bodyclose
 		t.Logf("Expected pprof to be up (will retry again in 3 seconds): %s", err)
 		time.Sleep(3 * time.Second)
-		if _, err := http.Get("http://" + listenAddr + "/" + "/debug/"); err != nil {
+		if _, err = http.Get("http://" + listenAddr + "/" + "/debug/"); err != nil { //nolint:bodyclose
 			t.Fatalf("Expected pprof to be up: %s", err)
 		}
 	}
@@ -309,13 +310,14 @@ func TestInitializeServerConfig(t *testing.T) {
 					},
 				},
 			}
-			require.PanicsWithValue(t, tc.expectedPanic, func() {
-				if !tc.isCluster {
-					initializeServerConfig(conf, nil)
-				} else {
-					initializeClusterClientConfig(conf)
-				}
-			},
+			require.PanicsWithValue(
+				t, tc.expectedPanic, func() {
+					if !tc.isCluster {
+						initializeServerConfig(conf, nil)
+					} else {
+						initializeClusterClientConfig(conf)
+					}
+				},
 			)
 		})
 	}
@@ -395,7 +397,7 @@ func TestVerifyNoSystemChannel(t *testing.T) {
 
 	tmpdir := t.TempDir()
 
-	rlf, err := fileledger.New(tmpdir, &disabled.Provider{})
+	rlf, err := fileledger.New(tmpdir, ledger.GoLevelDB, &disabled.Provider{})
 	require.NoError(t, err)
 
 	// no ledgers
@@ -428,7 +430,7 @@ func TestVerifyNoSystemChannel(t *testing.T) {
 	require.Panics(t, func() { verifyNoSystemChannel(rlf, cryptoProvider) })
 
 	// Make and append the next config block, detecting system channel and panicking
-	prevHash := protoutil.BlockHeaderHash(configBlock.Header)
+	prevHash := protoutil.BlockHeaderHash(configBlock.GetHeader())
 	configBlock.Header.Number = 1
 	configBlock.Header.PreviousHash = prevHash
 	configBlock.Metadata.Metadata[common.BlockMetadataIndex_SIGNATURES] = protoutil.MarshalOrPanic(&common.Metadata{
@@ -465,7 +467,7 @@ func TestLoadLocalMSP(t *testing.T) {
 		require.NotNil(t, localMSP)
 		id, err := localMSP.GetIdentifier()
 		require.NoError(t, err)
-		require.Equal(t, id, "SampleOrg")
+		require.Equal(t, "SampleOrg", id)
 	})
 
 	t.Run("Error", func(t *testing.T) {
@@ -519,7 +521,7 @@ func TestInitializeGrpcServer(t *testing.T) {
 		l.Close()
 		return l.Addr().String()
 	}()
-	host := strings.Split(listenAddr, ":")[0]
+	host, _, _ := strings.Cut(listenAddr, ":")
 	port, _ := strconv.ParseUint(strings.Split(listenAddr, ":")[1], 10, 16)
 	conf := &localconfig.TopLevel{
 		General: localconfig.General{
@@ -627,8 +629,8 @@ func TestUpdateTrustedRoots(t *testing.T) {
 	t.Logf("# app CAs: %d", len(caMgr.appRootCAsByChain["testchannelid"]))
 	t.Logf("# orderer CAs: %d", len(caMgr.ordererRootCAsByChain["testchannelid"]))
 	// mutual TLS not required so no updates should have occurred
-	require.Equal(t, 0, len(caMgr.appRootCAsByChain["testchannelid"]))
-	require.Equal(t, 0, len(caMgr.ordererRootCAsByChain["testchannelid"]))
+	require.Empty(t, caMgr.appRootCAsByChain["testchannelid"])
+	require.Empty(t, caMgr.ordererRootCAsByChain["testchannelid"])
 
 	grpcServer.Listener().Close()
 	cs := r.GetChain("testchannelid")
@@ -679,8 +681,8 @@ func TestUpdateTrustedRoots(t *testing.T) {
 	t.Logf("# orderer CAs: %d", len(caMgr.ordererRootCAsByChain["testchannelid"]))
 	// mutual TLS is required so updates should have occurred
 	// we do not expect an intermediate CA, only root CA for apps and orderers
-	require.Equal(t, 1, len(caMgr.appRootCAsByChain["testchannelid"]))
-	require.Equal(t, 1, len(caMgr.ordererRootCAsByChain["testchannelid"]))
+	require.Len(t, caMgr.appRootCAsByChain["testchannelid"], 1)
+	require.Len(t, caMgr.ordererRootCAsByChain["testchannelid"], 1)
 	require.Len(t, predDialer.Config.SecOpts.ServerRootCAs, 1)
 	grpcServer.Listener().Close()
 	cs = r.GetChain("testchannelid")
@@ -974,7 +976,7 @@ func produceGenesisFileEtcdRaft(t *testing.T, channelID string, tmpDir string) (
 	confRaft.Orderer.Organizations[0].OrdererEndpoints = []string{"127.0.0.1:7050"}
 	confRaft.Capabilities = map[string]bool{"V3_0": true}
 
-	serverCert, err := os.ReadFile(string(confRaft.Orderer.EtcdRaft.Consenters[0].ServerTlsCert))
+	serverCert, err := os.ReadFile(string(confRaft.Orderer.EtcdRaft.GetConsenters()[0].GetServerTlsCert()))
 	require.NoError(t, err)
 
 	bootstrapper, err := encoder.NewBootstrapper(confRaft)
@@ -993,7 +995,7 @@ func produceGenesisFileEtcdRaftAppChannel(t *testing.T, channelID string, tmpDir
 	confRaft.Orderer.Organizations[0].OrdererEndpoints = []string{"127.0.0.1:7050"}
 	confRaft.Capabilities = map[string]bool{"V3_0": true}
 
-	serverCert, err := os.ReadFile(string(confRaft.Orderer.EtcdRaft.Consenters[0].ServerTlsCert))
+	serverCert, err := os.ReadFile(string(confRaft.Orderer.EtcdRaft.GetConsenters()[0].GetServerTlsCert()))
 	require.NoError(t, err)
 
 	bootstrapper, err := encoder.NewBootstrapper(confRaft)

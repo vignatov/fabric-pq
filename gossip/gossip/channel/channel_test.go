@@ -29,7 +29,6 @@ import (
 	"github.com/hyperledger/fabric/gossip/metrics/mocks"
 	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/gossip/util"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -193,7 +192,7 @@ func (m *receivedMsg) GetConnectionInfo() *protoext.ConnectionInfo {
 }
 
 type gossipAdapterMock struct {
-	signCallCount uint32
+	signCallCount atomic.Uint32
 	mock.Mock
 	sync.RWMutex
 }
@@ -205,7 +204,7 @@ func (ga *gossipAdapterMock) On(methodName string, arguments ...any) *mock.Call 
 }
 
 func (ga *gossipAdapterMock) Sign(msg *proto.GossipMessage) (*protoext.SignedGossipMessage, error) {
-	atomic.AddUint32(&ga.signCallCount, 1)
+	ga.signCallCount.Add(1)
 	return protoext.NoopSign(msg)
 }
 
@@ -333,8 +332,8 @@ func TestSelf(t *testing.T) {
 	env := gc.Self().Envelope
 	sMsg, _ := protoext.EnvelopeToGossipMessage(env)
 	require.True(t, gproto.Equal(gMsg, sMsg.GossipMessage))
-	require.Equal(t, gMsg.GetStateInfo().Properties.LedgerHeight, uint64(1))
-	require.Equal(t, gMsg.GetStateInfo().PkiId, []byte("1"))
+	require.Equal(t, uint64(1), gMsg.GetStateInfo().GetProperties().GetLedgerHeight())
+	require.Equal(t, gMsg.GetStateInfo().GetPkiId(), []byte("1"))
 }
 
 func TestMsgStoreNotExpire(t *testing.T) {
@@ -397,7 +396,7 @@ func TestMsgStoreNotExpire(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("Haven't received a state info snapshot on time")
 		case msg := <-sentMessages:
-			for _, el := range msg.GetStateSnapshot().Elements {
+			for _, el := range msg.GetStateSnapshot().GetElements() {
 				sMsg, err := protoext.EnvelopeToGossipMessage(el)
 				require.NoError(t, err)
 				outChan <- sMsg
@@ -478,14 +477,14 @@ func TestLeaveChannel(t *testing.T) {
 	require.Len(t, gc.GetPeers(), 1)
 	// Ensure peer in org1 remained and peer in org2 is skipped
 	require.Equal(t, pkiIDInOrg1, gc.GetPeers()[0].PKIid)
-	var digestSendTime int32
+	var digestSendTime atomic.Int32
 	var DigestSentWg sync.WaitGroup
 	DigestSentWg.Add(1)
 	hello := createHelloMsg(pkiIDInOrg1)
 	hello.On("Respond", mock.Anything).Run(func(arguments mock.Arguments) {
-		atomic.AddInt32(&digestSendTime, 1)
+		digestSendTime.Add(1)
 		// Ensure we only respond with digest before we leave the channel
-		require.Equal(t, int32(1), atomic.LoadInt32(&digestSendTime))
+		require.Equal(t, int32(1), digestSendTime.Load())
 		DigestSentWg.Done()
 	})
 	// Wait until we send a hello pull message
@@ -497,7 +496,7 @@ func TestLeaveChannel(t *testing.T) {
 	// Send another hello. Shouldn't respond
 	go gc.HandleMessage(hello)
 	// Ensure it doesn't know now any other peer
-	require.Len(t, gc.GetPeers(), 0)
+	require.Empty(t, gc.GetPeers())
 	// Sleep 3 times the pull interval.
 	// we're not supposed to send a pull during this time.
 	time.Sleep(conf.PullInterval * 3)
@@ -542,7 +541,7 @@ func TestChannelPeriodicalPublishStateInfo(t *testing.T) {
 		msg = m
 	}
 
-	require.Equal(t, ledgerHeight, int(msg.GetStateInfo().Properties.LedgerHeight))
+	require.Equal(t, ledgerHeight, int(msg.GetStateInfo().GetProperties().GetLedgerHeight()))
 }
 
 func TestChannelMsgStoreEviction(t *testing.T) {
@@ -633,12 +632,12 @@ func TestChannelMsgStoreEviction(t *testing.T) {
 	msg := <-msgSentFromPullMediator
 	// It's a digest and not anything else, like an update
 	require.True(t, protoext.IsDigestMsg(msg))
-	require.Len(t, msg.GetDataDig().Digests, adapter.GetConf().MaxBlockCountToStore+1)
+	require.Len(t, msg.GetDataDig().GetDigests(), adapter.GetConf().MaxBlockCountToStore+1)
 	// Check that the last sequences are kept.
 	// Since we checked the length, it proves that the old blocks were discarded, since we had much more
 	// total blocks overall than our capacity
 	for seq := range lastPullPhase {
-		require.Contains(t, msg.GetDataDig().Digests, fmt.Appendf(nil, "%d", seq))
+		require.Contains(t, msg.GetDataDig().GetDigests(), fmt.Appendf(nil, "%d", seq))
 	}
 }
 
@@ -673,7 +672,7 @@ func TestChannelPull(t *testing.T) {
 		case <-time.After(time.Second * 5):
 			t.Fatal("Haven't received blocks on time")
 		case msg := <-receivedBlocksChan:
-			require.Equal(t, uint64(expectedSeq), msg.GetDataMsg().Payload.SeqNum)
+			require.Equal(t, uint64(expectedSeq), msg.GetDataMsg().GetPayload().GetSeqNum())
 		}
 	}
 }
@@ -1001,7 +1000,7 @@ func TestChannelBlockExpiration(t *testing.T) {
 		t.Fatal("Haven't responded to hello message within a time period")
 	case msg := <-respondedChan:
 		if protoext.IsDigestMsg(msg) {
-			require.Equal(t, 1, len(msg.GetDataDig().Digests), "Number of digests returned by channel blockPuller incorrect")
+			require.Len(t, msg.GetDataDig().GetDigests(), 1, "Number of digests returned by channel blockPuller incorrect")
 		} else {
 			t.Fatal("Not correct pull msg type in response - expect digest")
 		}
@@ -1045,7 +1044,7 @@ func TestChannelBlockExpiration(t *testing.T) {
 		t.Fatal("Haven't responded to hello message within a time period")
 	case msg := <-respondedChan:
 		if protoext.IsDigestMsg(msg) {
-			require.Equal(t, 1, len(msg.GetDataDig().Digests), "Number of digests returned by channel blockPuller incorrect")
+			require.Len(t, msg.GetDataDig().GetDigests(), 1, "Number of digests returned by channel blockPuller incorrect")
 		} else {
 			t.Fatal("Not correct pull msg type in response - expect digest")
 		}
@@ -1075,19 +1074,19 @@ func TestChannelBadBlocks(t *testing.T) {
 
 	// Send a block with wrong channel
 	gc.HandleMessage(&receivedMsg{msg: createDataMsg(2, common.ChannelID("B")), PKIID: pkiIDInOrg1})
-	require.Len(t, receivedMessages, 0)
+	require.Empty(t, receivedMessages)
 
 	// Send a block with empty payload
 	dataMsg := createDataMsg(3, channelA)
 	dataMsg.GetDataMsg().Payload = nil
 	gc.HandleMessage(&receivedMsg{msg: dataMsg, PKIID: pkiIDInOrg1})
-	require.Len(t, receivedMessages, 0)
+	require.Empty(t, receivedMessages)
 
 	// Send a block with a bad signature
 	cs.Mock = mock.Mock{}
 	cs.On("VerifyBlock", mock.Anything).Return(errors.New("Bad signature"))
 	gc.HandleMessage(&receivedMsg{msg: createDataMsg(4, channelA), PKIID: pkiIDInOrg1})
-	require.Len(t, receivedMessages, 0)
+	require.Empty(t, receivedMessages)
 }
 
 func TestNoGossipOrSigningWhenEmptyMembership(t *testing.T) {
@@ -1120,14 +1119,14 @@ func TestNoGossipOrSigningWhenEmptyMembership(t *testing.T) {
 
 	gc := NewGossipChannel(pkiIDInOrg1, orgInChannelA, cs, channelA, adapter, &joinChanMsg{}, disabledMetrics, nil)
 	// We have signed only once at creation time
-	assert.Equal(t, uint32(1), atomic.LoadUint32(&adapter.signCallCount))
+	require.Equal(t, uint32(1), adapter.signCallCount.Load())
 	defer gc.Stop()
 	gc.UpdateLedgerHeight(1)
 
 	// The first time we have membership, so we should gossip and sign
 	gossipedWG.Wait()
 	// So far we have signed twice: Once at creation time, and once before we gossiped
-	assert.Equal(t, uint32(2), atomic.LoadUint32(&adapter.signCallCount))
+	require.Equal(t, uint32(2), adapter.signCallCount.Load())
 
 	// Membership is now empty
 	dynamicMembership.Store(emptyMembership)
@@ -1136,15 +1135,15 @@ func TestNoGossipOrSigningWhenEmptyMembership(t *testing.T) {
 	// Wait some time and ensure we do not sign because membership is now empty
 	time.Sleep(conf.PublishStateInfoInterval * 3)
 	// We haven't signed anything
-	assert.Equal(t, uint32(2), atomic.LoadUint32(&adapter.signCallCount))
+	require.Equal(t, uint32(2), adapter.signCallCount.Load())
 
-	assert.Empty(t, gc.Self().GetStateInfo().Properties.Chaincodes)
+	require.Empty(t, gc.Self().GetStateInfo().GetProperties().GetChaincodes())
 	gossipedWG.Add(1)
 	// Now, update chaincodes and check our chaincode information was indeed updated
 	gc.UpdateChaincodes([]*proto.Chaincode{{Name: "mycc"}})
 	// We should have signed regardless!
-	assert.Equal(t, uint32(3), atomic.LoadUint32(&adapter.signCallCount))
-	assert.Equal(t, "mycc", gc.Self().GetStateInfo().Properties.Chaincodes[0].Name)
+	require.Equal(t, uint32(3), adapter.signCallCount.Load())
+	require.Equal(t, "mycc", gc.Self().GetStateInfo().GetProperties().GetChaincodes()[0].GetName())
 }
 
 func TestChannelPulledBadBlocks(t *testing.T) {
@@ -1288,7 +1287,7 @@ func TestChannelStateInfoSnapshot(t *testing.T) {
 	stateInfoMsg := &receivedMsg{PKIID: pkiIDInOrg1, msg: stateInfoSnapshotForChannel(channelA, createStateInfoMsg(4, pkiIDInOrg1, channelA))}
 	gc.HandleMessage(stateInfoMsg)
 	require.NotEmpty(t, gc.GetPeers())
-	require.Equal(t, 4, int(gc.GetPeers()[0].Properties.LedgerHeight))
+	require.Equal(t, 4, int(gc.GetPeers()[0].Properties.GetLedgerHeight()))
 
 	// Check we don't respond to stateInfoSnapshot requests with wrong MAC
 	sMsg, _ := protoext.NoopSign(&proto.GossipMessage{
@@ -1336,11 +1335,11 @@ func TestChannelStateInfoSnapshot(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Haven't received a state info snapshot on time")
 	case msg := <-sentMessages:
-		elements := msg.GetStateSnapshot().Elements
+		elements := msg.GetStateSnapshot().GetElements()
 		require.Len(t, elements, 1)
 		sMsg, err := protoext.EnvelopeToGossipMessage(elements[0])
 		require.NoError(t, err)
-		require.Equal(t, 4, int(sMsg.GetStateInfo().Properties.LedgerHeight))
+		require.Equal(t, 4, int(sMsg.GetStateInfo().GetProperties().GetLedgerHeight()))
 	}
 
 	// Ensure we don't crash if we got an invalid state info message
@@ -1405,11 +1404,11 @@ func TestInterOrgExternalEndpointDisclosure(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "Should have responded to this StateInfoSnapshot, but didn't")
 	case msg := <-sentMessages:
-		elements := msg.GetStateSnapshot().Elements
+		elements := msg.GetStateSnapshot().GetElements()
 		require.Len(t, elements, 2)
 		m1, _ := protoext.EnvelopeToGossipMessage(elements[0])
 		m2, _ := protoext.EnvelopeToGossipMessage(elements[1])
-		pkiIDs := [][]byte{m1.GetStateInfo().PkiId, m2.GetStateInfo().PkiId}
+		pkiIDs := [][]byte{m1.GetStateInfo().GetPkiId(), m2.GetStateInfo().GetPkiId()}
 		require.Contains(t, pkiIDs, []byte(pkiID1))
 		require.Contains(t, pkiIDs, []byte(pkiID3))
 	}
@@ -1437,12 +1436,12 @@ func TestInterOrgExternalEndpointDisclosure(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "Should have responded to this StateInfoSnapshot, but didn't")
 	case msg := <-sentMessages:
-		elements := msg.GetStateSnapshot().Elements
+		elements := msg.GetStateSnapshot().GetElements()
 		require.Len(t, elements, 3)
 		m1, _ := protoext.EnvelopeToGossipMessage(elements[0])
 		m2, _ := protoext.EnvelopeToGossipMessage(elements[1])
 		m3, _ := protoext.EnvelopeToGossipMessage(elements[2])
-		pkiIDs := [][]byte{m1.GetStateInfo().PkiId, m2.GetStateInfo().PkiId, m3.GetStateInfo().PkiId}
+		pkiIDs := [][]byte{m1.GetStateInfo().GetPkiId(), m2.GetStateInfo().GetPkiId(), m3.GetStateInfo().GetPkiId()}
 		require.Contains(t, pkiIDs, []byte(pkiID1))
 		require.Contains(t, pkiIDs, []byte(pkiID2))
 		require.Contains(t, pkiIDs, []byte(pkiID3))
@@ -1453,22 +1452,22 @@ func TestChannelStop(t *testing.T) {
 	cs := &cryptoService{}
 	cs.On("VerifyBlock", mock.Anything).Return(nil)
 	adapter := new(gossipAdapterMock)
-	var sendCount int32
+	var sendCount atomic.Int32
 	configureAdapter(adapter, discovery.NetworkMember{PKIid: pkiIDInOrg1})
 	adapter.On("Send", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
-		atomic.AddInt32(&sendCount, int32(1))
+		sendCount.Add(int32(1))
 	})
 	gc := NewGossipChannel(pkiIDInOrg1, orgInChannelA, cs, channelA, adapter, &joinChanMsg{}, disabledMetrics, nil)
 	time.Sleep(time.Second)
 	gc.Stop()
-	oldCount := atomic.LoadInt32(&sendCount)
+	oldCount := sendCount.Load()
 	t1 := time.Now()
 	for {
 		if time.Since(t1).Nanoseconds() > (time.Second * 15).Nanoseconds() {
 			t.Fatal("Stop failed")
 		}
 		time.Sleep(time.Second)
-		newCount := atomic.LoadInt32(&sendCount)
+		newCount := sendCount.Load()
 		if newCount == oldCount {
 			break
 		}
@@ -1749,14 +1748,14 @@ func TestChannelGetPeers(t *testing.T) {
 
 	// Ensure envelope from GetPeers is valid
 	gMsg, _ := protoext.EnvelopeToGossipMessage(gc.GetPeers()[0].Envelope)
-	require.Equal(t, []byte(pkiIDInOrg1), gMsg.GetStateInfo().PkiId)
+	require.Equal(t, []byte(pkiIDInOrg1), gMsg.GetStateInfo().GetPkiId())
 
 	gc.HandleMessage(&receivedMsg{msg: createStateInfoMsg(10, pkiIDInOrg1ButNotEligible, channelA), PKIID: pkiIDInOrg1ButNotEligible})
 	cs.On("VerifyByChannel", mock.Anything).Return(errors.New("Not eligible"))
 	cs.mocked = true
 	// Simulate a config update
 	gc.ConfigureChannel(&joinChanMsg{})
-	require.Len(t, gc.GetPeers(), 0)
+	require.Empty(t, gc.GetPeers())
 
 	// Now recreate gc and corrupt the MAC
 	// and ensure that the StateInfo message doesn't count
@@ -1764,7 +1763,25 @@ func TestChannelGetPeers(t *testing.T) {
 	msg := &receivedMsg{PKIID: pkiIDInOrg1, msg: createStateInfoMsg(1, pkiIDInOrg1, channelA)}
 	msg.GetGossipMessage().GetStateInfo().Channel_MAC = GenerateMAC(pkiIDinOrg2, channelA)
 	gc.HandleMessage(msg)
-	require.Len(t, gc.GetPeers(), 0)
+	require.Empty(t, gc.GetPeers())
+}
+
+// expectGossip waits for the next dissemination, and then for the publish cycle
+// that produced it to clear the dirty flag. The flag is cleared after Gossip
+// returns, so without that second wait the next UpdateLedgerHeight can be
+// overwritten by the still-running cycle and would never be published.
+func expectGossip(t *testing.T, gc *gossipChannel, gossipedEvents <-chan struct{}, failMsg string) {
+	t.Helper()
+
+	select {
+	case <-gossipedEvents:
+	case <-time.After(time.Second):
+		require.FailNow(t, failMsg)
+	}
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&gc.shouldGossipStateInfo) == int32(0)
+	}, time.Second, 5*time.Millisecond, "Publish cycle did not finish")
 }
 
 func TestOnDemandGossip(t *testing.T) {
@@ -1806,7 +1823,7 @@ func TestOnDemandGossip(t *testing.T) {
 	adapter.On("Forward", mock.Anything)
 
 	gc := NewGossipChannel(pkiIDInOrg1, orgInChannelA, cs, channelA, adapter, api.JoinChannelMessage(&joinChanMsg{}),
-		disabledMetrics, nil)
+		disabledMetrics, nil).(*gossipChannel)
 	defer gc.Stop()
 	select {
 	case <-gossipedEvents:
@@ -1819,33 +1836,16 @@ func TestOnDemandGossip(t *testing.T) {
 	membershipKnown = true
 	lock.Unlock()
 
-	select {
-	case <-gossipedEvents:
-	case <-time.After(time.Second):
-		require.Fail(t, "Didn't gossip within a timely manner")
-	}
+	expectGossip(t, gc, gossipedEvents, "Didn't gossip within a timely manner")
 	gc.UpdateLedgerHeight(2)
-	adapter.On("Gossip", mock.Anything).Run(func(mock.Arguments) {
-		gossipedEvents <- struct{}{}
-	})
-	adapter.On("Forward", mock.Anything)
-	gc.(*gossipChannel).Adapter = adapter
-	select {
-	case <-gossipedEvents:
-	case <-time.After(time.Second):
-		require.Fail(t, "Should have gossiped a third time")
-	}
+	expectGossip(t, gc, gossipedEvents, "Should have gossiped a third time")
 	select {
 	case <-gossipedEvents:
 		require.Fail(t, "Should not have gossiped a fourth time, because dirty flag should have been turned off")
 	case <-time.After(time.Millisecond * 500):
 	}
 	gc.UpdateLedgerHeight(3)
-	select {
-	case <-gossipedEvents:
-	case <-time.After(time.Second):
-		require.Fail(t, "Should have gossiped a block now, because got a new StateInfo message")
-	}
+	expectGossip(t, gc, gossipedEvents, "Should have gossiped a block now, because got a new StateInfo message")
 }
 
 func TestChannelPullWithDigestsFilter(t *testing.T) {
@@ -1881,7 +1881,7 @@ func TestChannelPullWithDigestsFilter(t *testing.T) {
 	case <-time.After(time.Second * 5):
 		t.Fatal("Haven't received blocks on time")
 	case msg := <-receivedBlocksChan:
-		require.Equal(t, uint64(11), msg.GetDataMsg().Payload.SeqNum)
+		require.Equal(t, uint64(11), msg.GetDataMsg().GetPayload().GetSeqNum())
 	}
 }
 
@@ -1945,7 +1945,7 @@ func TestFilterForeignOrgLeadershipMessages(t *testing.T) {
 
 	gc.HandleMessage(leadershipMsg(p1, p1))
 	require.Len(t, relayedLeadershipMsgs, 1, "should have relayed a message from p1 (same org)")
-	require.Len(t, loggedEntries, 0)
+	require.Empty(t, loggedEntries)
 
 	gc.HandleMessage(leadershipMsg(p2, p1))
 	require.Len(t, relayedLeadershipMsgs, 1, "should not have relayed a message from p2 (foreign org)")
@@ -2083,7 +2083,7 @@ func simulatePullPhaseWithVariableDigest(gc GossipChannel, t *testing.T, wg *syn
 					DataDig: &proto.DataDigest{
 						MsgType: proto.PullMsgType_BLOCK_MSG,
 						Digests: proposedDigestSeqs,
-						Nonce:   msg.GetHello().Nonce,
+						Nonce:   msg.GetHello().GetNonce(),
 					},
 				},
 			})
@@ -2097,15 +2097,15 @@ func simulatePullPhaseWithVariableDigest(gc GossipChannel, t *testing.T, wg *syn
 			sentReq = true
 			dataReq := msg.GetDataReq()
 			for _, expectedDigest := range util.StringsToBytes(resultDigestSeqs) {
-				require.Contains(t, dataReq.Digests, expectedDigest)
+				require.Contains(t, dataReq.GetDigests(), expectedDigest)
 			}
-			require.Equal(t, len(resultDigestSeqs), len(dataReq.Digests))
+			require.Len(t, dataReq.GetDigests(), len(resultDigestSeqs))
 			// When we send a data request, simulate a response of a data update
 			// from the imaginary peer that got the request
 			dataUpdateMsg := new(receivedMsg)
 			dataUpdateMsg.PKIID = pkiIDInOrg1
-			dataUpdateMsg.msg = createDataUpdateMsg(dataReq.Nonce, seqs...)
-			mutator(dataUpdateMsg.msg.GetDataUpdate().Data[0])
+			dataUpdateMsg.msg = createDataUpdateMsg(dataReq.GetNonce(), seqs...)
+			mutator(dataUpdateMsg.msg.GetDataUpdate().GetData()[0])
 			gc.HandleMessage(dataUpdateMsg)
 			wg.Done()
 		}
@@ -2241,14 +2241,15 @@ func TestChangesInPeers(t *testing.T) {
 			getPeersToTrackCallCount := 0
 			getListOfPeers := func() []discovery.NetworkMember {
 				var members []discovery.NetworkMember
-				if getPeersToTrackCallCount == 0 {
+				switch getPeersToTrackCallCount {
+				case 0:
 					members = buildMembers(test.oldMembers)
 					getPeersToTrackCallCount++
-				} else if getPeersToTrackCallCount == 1 {
+				case 1:
 					members = buildMembers(test.newMembers)
 					getPeersToTrackCallCount++
 					close(stopChan) // no more ticks, stop tracking changes
-				} else {
+				default:
 					t.Fatal("getPeersToTrack called too many times")
 				}
 				return members
@@ -2288,7 +2289,7 @@ func TestChangesInPeers(t *testing.T) {
 				t.Fatal("did not get Set() call")
 			}
 			require.Equal(t, []string{"channel", "test"}, testMetricProvider.FakeTotalGauge.WithArgsForCall(0))
-			require.EqualValues(t, test.expectedTotal, testMetricProvider.FakeTotalGauge.SetArgsForCall(0))
+			require.InDelta(t, test.expectedTotal, testMetricProvider.FakeTotalGauge.SetArgsForCall(0), 0)
 		})
 	}
 }
@@ -2336,11 +2337,11 @@ func TestMembershiptrackerStopWhenGCStops(t *testing.T) {
 		waitForHandleMsgChan <- struct{}{}
 	}).Once()
 
-	var check uint32
-	atomic.StoreUint32(&check, 0)
+	var check atomic.Uint32
+	check.Store(0)
 	logger := util.GetLogger(util.ChannelLogger, adapter.GetConf().ID)
 	logger = logger.(*flogging.FabricLogger).WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
-		if atomic.LoadUint32(&check) == 1 {
+		if check.Load() == 1 {
 			if !strings.Contains(entry.Message, "Membership view has changed. peers went offline:  [[a]] , peers went online:  [[b]] , current view:  [[b]]") {
 				return nil
 			}
@@ -2364,7 +2365,7 @@ func TestMembershiptrackerStopWhenGCStops(t *testing.T) {
 	}).Once()
 
 	flogging.ActivateSpec("info")
-	atomic.StoreUint32(&check, 1)
+	check.Store(1)
 	<-membershipReported
 
 	wg.Wait()

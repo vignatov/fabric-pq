@@ -117,7 +117,7 @@ func TestSetGetChaincodeInstallPath(t *testing.T) {
 
 	path := filepath.Join(tempDir, "blahblah")
 	ccprovider.SetChaincodesPath(path)
-	require.DirExistsf(t, path, "expect %s to be created")
+	require.DirExistsf(t, path, "expect %s to be created", path)
 
 	require.Equal(t, path, c.GetChaincodeInstallPath())
 }
@@ -159,7 +159,7 @@ func setupDirectoryStructure(t *testing.T) (string, map[string][]byte) {
 		}
 
 		codehash := sha256.New()
-		codehash.Write(cds.CodePackage)
+		codehash.Write(cds.GetCodePackage())
 
 		metahash := sha256.New()
 		metahash.Write([]byte(name))

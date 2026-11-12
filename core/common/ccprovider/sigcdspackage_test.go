@@ -22,7 +22,7 @@ import (
 func processSignedCDS(cds *pb.ChaincodeDeploymentSpec, policy *common.SignaturePolicyEnvelope, tofs bool) (*SignedCDSPackage, []byte, *ChaincodeData, error) {
 	env, err := ccpackage.OwnerCreateSignedCCDepSpec(cds, policy, nil)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("could not create package %s", err)
+		return nil, nil, nil, fmt.Errorf("could not create package %w", err)
 	}
 
 	b := protoutil.MarshalOrPanic(env)
@@ -34,12 +34,12 @@ func processSignedCDS(cds *pb.ChaincodeDeploymentSpec, policy *common.SignatureP
 	ccpack := &SignedCDSPackage{GetHasher: cryptoProvider}
 	cd, err := ccpack.InitFromBuffer(b)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("error owner creating package %s", err)
+		return nil, nil, nil, fmt.Errorf("error owner creating package %w", err)
 	}
 
 	if tofs {
 		if err = ccpack.PutChaincodeToFS(); err != nil {
-			return nil, nil, nil, fmt.Errorf("error putting package on the FS %s", err)
+			return nil, nil, nil, fmt.Errorf("error putting package on the FS %w", err)
 		}
 	}
 
@@ -184,7 +184,7 @@ func TestGetCDSDataErrorPaths(t *testing.T) {
 	require.Error(t, err)
 
 	// Error case 3: instantiation policy is nil
-	instPolicy := ccpack.sDepSpec.InstantiationPolicy
+	instPolicy := ccpack.sDepSpec.GetInstantiationPolicy()
 	ccpack.sDepSpec.InstantiationPolicy = nil
 	_, _, _, err = ccpack.getCDSData(ccpack.sDepSpec)
 	require.Error(t, err)
@@ -243,7 +243,7 @@ func TestValidateSignedCCErrorPaths(t *testing.T) {
 	require.Contains(t, err.Error(), "uninitialized package", "Unexpected error validating package")
 	ccpack.sDepSpec = savDepSpec
 
-	cdspec := ccpack.sDepSpec.ChaincodeDeploymentSpec
+	cdspec := ccpack.sDepSpec.GetChaincodeDeploymentSpec()
 	ccpack.sDepSpec.ChaincodeDeploymentSpec = nil
 	err = ccpack.ValidateCC(cd)
 	require.Error(t, err)
@@ -301,7 +301,7 @@ func TestSigCDSGetCCPackage(t *testing.T) {
 		return
 	}
 
-	if cds2.ChaincodeSpec.ChaincodeId.Name != cds.ChaincodeSpec.ChaincodeId.Name || cds2.ChaincodeSpec.ChaincodeId.Version != cds.ChaincodeSpec.ChaincodeId.Version {
+	if cds2.GetChaincodeSpec().GetChaincodeId().GetName() != cds.GetChaincodeSpec().GetChaincodeId().GetName() || cds2.GetChaincodeSpec().GetChaincodeId().GetVersion() != cds.GetChaincodeSpec().GetChaincodeId().GetVersion() {
 		t.Fatalf("dep spec in Signed CDS CCPackage does not match %v != %v", cds, cds2)
 		return
 	}

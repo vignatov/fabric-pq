@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package msgprocessor
 
 import (
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
@@ -56,19 +56,19 @@ func (ms *mockSystemChannelFilterSupport) OrdererConfig() (channelconfig.Orderer
 func TestClassifyMsg(t *testing.T) {
 	t.Run("ConfigUpdate", func(t *testing.T) {
 		class := (&StandardChannel{}).ClassifyMsg(&cb.ChannelHeader{Type: int32(cb.HeaderType_CONFIG_UPDATE)})
-		require.Equal(t, class, ConfigUpdateMsg)
+		require.Equal(t, ConfigUpdateMsg, class)
 	})
 	t.Run("OrdererTx", func(t *testing.T) {
 		class := (&StandardChannel{}).ClassifyMsg(&cb.ChannelHeader{Type: int32(cb.HeaderType_ORDERER_TRANSACTION)})
-		require.Equal(t, class, UnsupportedMsg)
+		require.Equal(t, UnsupportedMsg, class)
 	})
 	t.Run("ConfigTx", func(t *testing.T) {
 		class := (&StandardChannel{}).ClassifyMsg(&cb.ChannelHeader{Type: int32(cb.HeaderType_CONFIG)})
-		require.Equal(t, class, ConfigMsg)
+		require.Equal(t, ConfigMsg, class)
 	})
 	t.Run("EndorserTx", func(t *testing.T) {
 		class := (&StandardChannel{}).ClassifyMsg(&cb.ChannelHeader{Type: int32(cb.HeaderType_ENDORSER_TRANSACTION)})
-		require.Equal(t, class, NormalMsg)
+		require.Equal(t, NormalMsg, class)
 	})
 }
 
@@ -82,7 +82,7 @@ func TestProcessNormalMsg(t *testing.T) {
 		require.NoError(t, err)
 		cs, err := NewStandardChannel(ms, NewRuleSet([]Rule{AcceptRule}), cryptoProvider).ProcessNormalMsg(nil)
 		require.Equal(t, cs, ms.SequenceVal)
-		require.Nil(t, err)
+		require.NoError(t, err)
 	})
 	t.Run("Maintenance", func(t *testing.T) {
 		ms := &mockSystemChannelFilterSupport{
@@ -100,7 +100,7 @@ func TestConfigUpdateMsg(t *testing.T) {
 	t.Run("BadUpdate", func(t *testing.T) {
 		ms := &mockSystemChannelFilterSupport{
 			ProposeConfigUpdateVal: &cb.ConfigEnvelope{},
-			ProposeConfigUpdateErr: fmt.Errorf("An error"),
+			ProposeConfigUpdateErr: errors.New("An error"),
 			OrdererConfigVal:       &mocks.OrdererConfig{},
 		}
 		cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
@@ -113,7 +113,7 @@ func TestConfigUpdateMsg(t *testing.T) {
 	t.Run("BadMsg", func(t *testing.T) {
 		ms := &mockSystemChannelFilterSupport{
 			ProposeConfigUpdateVal: &cb.ConfigEnvelope{},
-			ProposeConfigUpdateErr: fmt.Errorf("An error"),
+			ProposeConfigUpdateErr: errors.New("An error"),
 			OrdererConfigVal:       &mocks.OrdererConfig{},
 		}
 		cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
@@ -121,7 +121,7 @@ func TestConfigUpdateMsg(t *testing.T) {
 		config, cs, err := NewStandardChannel(ms, NewRuleSet([]Rule{EmptyRejectRule}), cryptoProvider).ProcessConfigUpdateMsg(&cb.Envelope{})
 		require.Nil(t, config)
 		require.Equal(t, uint64(0), cs)
-		require.NotNil(t, err)
+		require.Error(t, err)
 	})
 	t.Run("SignedEnvelopeFailure", func(t *testing.T) {
 		ms := &mockSystemChannelFilterSupport{
@@ -132,7 +132,7 @@ func TestConfigUpdateMsg(t *testing.T) {
 		config, cs, err := NewStandardChannel(ms, NewRuleSet([]Rule{AcceptRule}), cryptoProvider).ProcessConfigUpdateMsg(nil)
 		require.Nil(t, config)
 		require.Equal(t, uint64(0), cs)
-		require.NotNil(t, err)
+		require.Error(t, err)
 		require.Regexp(t, "Marshal called with nil", err)
 	})
 	t.Run("Success", func(t *testing.T) {
@@ -148,7 +148,7 @@ func TestConfigUpdateMsg(t *testing.T) {
 		config, cs, err := stdChan.ProcessConfigUpdateMsg(nil)
 		require.NotNil(t, config)
 		require.Equal(t, cs, ms.SequenceVal)
-		require.Nil(t, err)
+		require.NoError(t, err)
 	})
 }
 
@@ -196,13 +196,14 @@ func TestProcessConfigMsg(t *testing.T) {
 		})
 		require.NotNil(t, config)
 		require.Equal(t, cs, ms.SequenceVal)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		hdr, err := protoutil.ChannelHeader(config)
 		require.NoError(t, err)
 		require.Equal(
 			t,
 			int32(cb.HeaderType_CONFIG),
-			hdr.Type,
-			"Expect type of returned envelope to be %d, but got %d", cb.HeaderType_CONFIG, hdr.Type)
+			hdr.GetType(),
+			"Expect type of returned envelope to be %d, but got %d", cb.HeaderType_CONFIG, hdr.GetType(),
+		)
 	})
 }

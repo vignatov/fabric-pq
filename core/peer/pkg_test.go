@@ -104,13 +104,14 @@ func createMSPConfig(mspID string, rootCerts, tlsRootCerts, tlsIntermediateCerts
 }
 
 func createConfigBlock(channelID string, appMSPConf, ordererMSPConf *mspproto.MSPConfig,
-	appOrgID, ordererOrgID string) (*cb.Block, error) {
+	appOrgID, ordererOrgID string,
+) (*cb.Block, error) {
 	block, err := configtxtest.MakeGenesisBlockFromMSPs(channelID, appMSPConf, ordererMSPConf, appOrgID, ordererOrgID)
 	if block == nil || err != nil {
 		return block, err
 	}
 
-	txsFilter := txflags.NewWithValues(len(block.Data.Data), pb.TxValidationCode_VALID)
+	txsFilter := txflags.NewWithValues(len(block.GetData().GetData()), pb.TxValidationCode_VALID)
 	block.Metadata.Metadata[cb.BlockMetadataIndex_TRANSACTIONS_FILTER] = txsFilter
 
 	return block, nil

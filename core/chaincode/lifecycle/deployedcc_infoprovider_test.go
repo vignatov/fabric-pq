@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package lifecycle_test
 
 import (
-	"fmt"
+	"errors"
 
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/queryresult"
@@ -160,7 +160,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when the legacy provider returns an error", func() {
 			BeforeEach(func() {
-				fakeLegacyProvider.UpdatedChaincodesReturns(nil, fmt.Errorf("legacy-error"))
+				fakeLegacyProvider.UpdatedChaincodesReturns(nil, errors.New("legacy-error"))
 			})
 
 			It("wraps and returns the error", func() {
@@ -177,7 +177,7 @@ var _ = Describe("ValidatorCommitter", func() {
 			Expect(res.Name).To(Equal("cc-name"))
 			Expect(res.Version).To(Equal("version"))
 			Expect(res.Hash).To(Equal(util.ComputeSHA256([]byte("cc-name:version"))))
-			Expect(len(res.ExplicitCollectionConfigPkg.Config)).To(Equal(1))
+			Expect(len(res.ExplicitCollectionConfigPkg.GetConfig())).To(Equal(1))
 		})
 
 		Context("when the requested chaincode is _lifecycle", func() {
@@ -191,7 +191,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when the ledger returns an error", func() {
 			BeforeEach(func() {
-				fakeQueryExecutor.GetStateReturns(nil, fmt.Errorf("state-error"))
+				fakeQueryExecutor.GetStateReturns(nil, errors.New("state-error"))
 			})
 
 			It("wraps and returns the error", func() {
@@ -206,7 +206,7 @@ var _ = Describe("ValidatorCommitter", func() {
 					Name:    "legacy-name",
 					Hash:    []byte("hash"),
 					Version: "cc-version",
-				}, fmt.Errorf("chaincode-info-error"))
+				}, errors.New("chaincode-info-error"))
 			})
 
 			It("passes through to the legacy impl", func() {
@@ -269,13 +269,13 @@ var _ = Describe("ValidatorCommitter", func() {
 			Expect(ok).To(BeTrue())
 			Expect(ccInfo.Name).To(Equal("cc-name"))
 			Expect(ccInfo.IsLegacy).To(BeFalse())
-			Expect(ccInfo.Version).To(Equal(fakeChaincodeDef.EndorsementInfo.Version))
+			Expect(ccInfo.Version).To(Equal(fakeChaincodeDef.EndorsementInfo.GetVersion()))
 			Expect(ccInfo.ExplicitCollectionConfigPkg).To(ProtoEqual(fakeChaincodeDef.Collections))
 		})
 
 		Context("when state range scan returns an error", func() {
 			BeforeEach(func() {
-				fakeQueryExecutor.GetStateRangeScanIteratorReturns(nil, fmt.Errorf("rangescan-error"))
+				fakeQueryExecutor.GetStateRangeScanIteratorReturns(nil, errors.New("rangescan-error"))
 			})
 
 			It("returns the error", func() {
@@ -286,7 +286,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when get state returns an error", func() {
 			BeforeEach(func() {
-				fakeQueryExecutor.GetStateReturns(nil, fmt.Errorf("getstate-error"))
+				fakeQueryExecutor.GetStateReturns(nil, errors.New("getstate-error"))
 			})
 
 			It("returns the error", func() {
@@ -341,7 +341,7 @@ var _ = Describe("ValidatorCommitter", func() {
 				Expect(ok).To(BeTrue())
 				Expect(newlifecycleCCInfo.Name).To(Equal("cc-name"))
 				Expect(newlifecycleCCInfo.IsLegacy).To(BeFalse())
-				Expect(newlifecycleCCInfo.Version).To(Equal(fakeChaincodeDef.EndorsementInfo.Version))
+				Expect(newlifecycleCCInfo.Version).To(Equal(fakeChaincodeDef.EndorsementInfo.GetVersion()))
 				Expect(newlifecycleCCInfo.ExplicitCollectionConfigPkg).To(ProtoEqual(fakeChaincodeDef.Collections))
 
 				legacyCCInfo, ok := res["another-cc-name"]
@@ -352,7 +352,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when LegacyProvider.AllChaincodesInfo returns an error", func() {
 			BeforeEach(func() {
-				fakeLegacyProvider.AllChaincodesInfoReturns(nil, fmt.Errorf("chaincode-info-error"))
+				fakeLegacyProvider.AllChaincodesInfoReturns(nil, errors.New("chaincode-info-error"))
 			})
 
 			It("passes through to the legacy impl", func() {
@@ -401,7 +401,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when the ledger returns an error", func() {
 			BeforeEach(func() {
-				fakeQueryExecutor.GetStateReturns(nil, fmt.Errorf("state-error"))
+				fakeQueryExecutor.GetStateReturns(nil, errors.New("state-error"))
 			})
 
 			It("wraps and returns the error", func() {
@@ -415,7 +415,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 			BeforeEach(func() {
 				collInfo = &pb.StaticCollectionConfig{}
-				fakeLegacyProvider.CollectionInfoReturns(collInfo, fmt.Errorf("collection-info-error"))
+				fakeLegacyProvider.CollectionInfoReturns(collInfo, errors.New("collection-info-error"))
 			})
 
 			It("passes through to the legacy impl", func() {
@@ -451,7 +451,7 @@ var _ = Describe("ValidatorCommitter", func() {
 			Expect(len(res)).To(Equal(2))
 			var firstOrg, secondOrg *pb.StaticCollectionConfig
 			for _, collection := range res {
-				switch collection.Name {
+				switch collection.GetName() {
 				case "_implicit_org_first-mspid":
 					firstOrg = collection
 				case "_implicit_org_second-mspid":
@@ -460,12 +460,12 @@ var _ = Describe("ValidatorCommitter", func() {
 			}
 			// Required/MaxPeerCount should match privdataConfig when the implicit collection is for peer's own org
 			Expect(firstOrg).NotTo(BeNil())
-			Expect(firstOrg.RequiredPeerCount).To(Equal(int32(privdataConfig.ImplicitCollDisseminationPolicy.RequiredPeerCount)))
-			Expect(firstOrg.MaximumPeerCount).To(Equal(int32(privdataConfig.ImplicitCollDisseminationPolicy.MaxPeerCount)))
+			Expect(firstOrg.GetRequiredPeerCount()).To(Equal(int32(privdataConfig.ImplicitCollDisseminationPolicy.RequiredPeerCount)))
+			Expect(firstOrg.GetMaximumPeerCount()).To(Equal(int32(privdataConfig.ImplicitCollDisseminationPolicy.MaxPeerCount)))
 			// Required/MaxPeerCount should be 0 when the implicit collection is for other org
 			Expect(secondOrg).NotTo(BeNil())
-			Expect(secondOrg.RequiredPeerCount).To(Equal(int32(0)))
-			Expect(secondOrg.MaximumPeerCount).To(Equal(int32(0)))
+			Expect(secondOrg.GetRequiredPeerCount()).To(Equal(int32(0)))
+			Expect(secondOrg.GetMaximumPeerCount()).To(Equal(int32(0)))
 		})
 
 		Context("when the chaincode does not exist", func() {
@@ -478,7 +478,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when the ledger returns an error", func() {
 			BeforeEach(func() {
-				fakeQueryExecutor.GetStateReturns(nil, fmt.Errorf("state-error"))
+				fakeQueryExecutor.GetStateReturns(nil, errors.New("state-error"))
 			})
 
 			It("wraps and returns the error", func() {
@@ -515,7 +515,7 @@ var _ = Describe("ValidatorCommitter", func() {
 			ccPkg, err := vc.AllCollectionsConfigPkg("channel-name", "cc-name", fakeQueryExecutor)
 			Expect(err).NotTo(HaveOccurred())
 			collectionNames := []string{}
-			for _, config := range ccPkg.Config {
+			for _, config := range ccPkg.GetConfig() {
 				collectionNames = append(collectionNames, config.GetStaticCollectionConfig().GetName())
 			}
 			Expect(collectionNames).Should(ConsistOf("collection-name", "_implicit_org_first-mspid", "_implicit_org_second-mspid"))
@@ -540,7 +540,7 @@ var _ = Describe("ValidatorCommitter", func() {
 				ccPkg, err := vc.AllCollectionsConfigPkg("channel-name", "cc-without-explicit-collection", fakeQueryExecutor)
 				Expect(err).NotTo(HaveOccurred())
 				collectionNames := []string{}
-				for _, config := range ccPkg.Config {
+				for _, config := range ccPkg.GetConfig() {
 					collectionNames = append(collectionNames, config.GetStaticCollectionConfig().GetName())
 				}
 				Expect(collectionNames).Should(ConsistOf("_implicit_org_first-mspid", "_implicit_org_second-mspid"))
@@ -549,7 +549,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when the ledger returns an error", func() {
 			BeforeEach(func() {
-				fakeQueryExecutor.GetStateReturns(nil, fmt.Errorf("state-error"))
+				fakeQueryExecutor.GetStateReturns(nil, errors.New("state-error"))
 			})
 
 			It("wraps and returns the error", func() {
@@ -608,7 +608,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when the chaincode is not in the new lifecycle and legacy info provider returns error", func() {
 			BeforeEach(func() {
-				fakeLegacyProvider.ChaincodeInfoReturns(nil, fmt.Errorf("legacy-chaincode-info-error"))
+				fakeLegacyProvider.ChaincodeInfoReturns(nil, errors.New("legacy-chaincode-info-error"))
 			})
 
 			It("passes through to the legacy impl", func() {
@@ -662,7 +662,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when the ledger returns an error", func() {
 			BeforeEach(func() {
-				fakeQueryExecutor.GetStateReturns(nil, fmt.Errorf("state-error"))
+				fakeQueryExecutor.GetStateReturns(nil, errors.New("state-error"))
 			})
 
 			It("wraps and returns the error", func() {
@@ -713,7 +713,7 @@ var _ = Describe("ValidatorCommitter", func() {
 
 		Context("when the chaincode definition cannot be retrieved", func() {
 			BeforeEach(func() {
-				fakeValidationState.GetStateMultipleKeysReturns(nil, fmt.Errorf("state-error"))
+				fakeValidationState.GetStateMultipleKeysReturns(nil, errors.New("state-error"))
 			})
 
 			It("returns an unexpected error", func() {
@@ -724,7 +724,7 @@ var _ = Describe("ValidatorCommitter", func() {
 		})
 
 		Context("when the chaincode does not exist in the new lifecycle", func() {
-			It("returns nil nil nil", func() {
+			It("returns all nil", func() {
 				ep, uErr, vErr := vc.CollectionValidationInfo("channel-id", "missing-name", "collection-name", fakeValidationState)
 				Expect(uErr).NotTo(HaveOccurred())
 				Expect(vErr).NotTo(HaveOccurred())

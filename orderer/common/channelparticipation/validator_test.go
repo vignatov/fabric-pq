@@ -204,6 +204,16 @@ func TestValidateFetchBlockID(t *testing.T) {
 			blockID:     "1n0",
 			expectedErr: errors.New("'1n0' not equal <newest|oldest|config|(number)>"),
 		},
+		{
+			testName:    "block ID is -1",
+			blockID:     "-1",
+			expectedErr: errors.New("'-1' not equal <newest|oldest|config|(number)>"),
+		},
+		{
+			testName:    "block ID is +1",
+			blockID:     "+1",
+			expectedErr: errors.New("'+1' not equal <newest|oldest|config|(number)>"),
+		},
 	}
 
 	for _, test := range tests {
@@ -258,7 +268,7 @@ func blockWithGroups(groups map[string]*cb.ConfigGroup, channelID string) *cb.Bl
 			}),
 		},
 	}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 	protoutil.InitBlockMetadata(block)
 
 	return block
@@ -279,7 +289,7 @@ func nonConfigBlock() *cb.Block {
 			}),
 		},
 	}
-	block.Header.DataHash, _ = protoutil.BlockDataHash(block.Data)
+	block.Header.DataHash, _ = protoutil.BlockDataHash(block.GetData())
 	protoutil.InitBlockMetadata(block)
 
 	return block

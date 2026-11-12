@@ -187,14 +187,12 @@ func Test_Start(t *testing.T) {
 	conner := &mock.Conner{}
 	conner.ReadReturns(0, io.EOF)
 	dockerClient.ContainerAttachReturns(dcli.ContainerAttachResult{
-		HijackedResponse: dcli.HijackedResponse{
-			Reader: bufio.NewReader(conner),
-			Conn:   conner,
-		},
+		Reader: bufio.NewReader(conner),
+		Conn:   conner,
 	}, nil)
 	err = dvm.Start(ccid, "GOLANG", peerConnection)
 	gt.Expect(err).NotTo(HaveOccurred())
-	gt.Eventually(conner.ReadCallCount()).Should(Equal(1))
+	gt.Eventually(conner.ReadCallCount).Should(Equal(1))
 }
 
 func Test_streamOutput(t *testing.T) {
@@ -211,10 +209,8 @@ func Test_streamOutput(t *testing.T) {
 		return len(s), io.EOF
 	}
 	client.ContainerAttachReturns(dcli.ContainerAttachResult{
-		HijackedResponse: dcli.HijackedResponse{
-			Reader: bufio.NewReader(conner),
-			Conn:   conner,
-		},
+		Reader: bufio.NewReader(conner),
+		Conn:   conner,
 	}, nil)
 
 	streamOutput(logger, client, "container-name", containerLogger)
@@ -372,7 +368,7 @@ func TestGetVMNameForDocker(t *testing.T) {
 
 	for _, test := range tc {
 		name, err := test.vm.GetVMNameForDocker(test.ccid)
-		require.Nil(t, err, "Expected nil error")
+		require.NoError(t, err, "Expected nil error")
 		require.Equal(t, test.expectedOutput, name, "Unexpected output for test case name: %s", test.name)
 	}
 }
@@ -410,7 +406,7 @@ func Test_buildImage(t *testing.T) {
 
 	_, in, opts := client.ImageBuildArgsForCall(0)
 	require.Equal(t, "simple-a7a39b72f29718e653e73503210fbb597057b7a1c77d1fe321a1afcff041d4e1", opts.Tags[0])
-	require.True(t, opts.PullParent)
+	require.Equal(t, dvm.ChaincodePull, opts.PullParent)
 	require.Equal(t, "network-mode", opts.NetworkMode)
 	require.Equal(t, &bytes.Buffer{}, in)
 }

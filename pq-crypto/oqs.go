@@ -62,10 +62,6 @@ package oqs
 */
 import "C"
 
-import (
-	"unsafe"
-)
-
 func getSig(sigType SigType) (*OQSSig, error) {
 	lib, err := GetLib()
 	if err != nil {
@@ -96,11 +92,11 @@ func KeyPair(algName SigType) (publicKey PublicKey, secretKey SecretKey, err err
 
 	pubKeyLen := C.int(s.sig.length_public_key)
 	pk := C.malloc(C.ulong(pubKeyLen))
-	defer C.free(unsafe.Pointer(pk))
+	defer C.free(pk)
 
 	secKeyLen := C.int(s.sig.length_secret_key)
 	sk := C.malloc(C.ulong(secKeyLen))
-	defer C.free(unsafe.Pointer(sk))
+	defer C.free(sk)
 
 	res := C.OQS_KeyPair(s.sig, (*C.uchar)(pk), (*C.uchar)(sk))
 	if res != C.ERR_OK {
@@ -125,8 +121,8 @@ func Sign(secretKey SecretKey, message []byte) (signature []byte, err error) {
 	}
 	var signatureLen C.ulong
 
-	sig := C.malloc(C.ulong(s.sig.length_signature))
-	defer C.free(unsafe.Pointer(sig))
+	sig := C.malloc(s.sig.length_signature)
+	defer C.free(sig)
 
 	mes_len := C.size_t(len(message))
 	msg := C.CBytes(message)

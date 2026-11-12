@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package operations_test
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -56,16 +56,14 @@ var _ = Describe("System", func() {
 
 		fakeLogger = &fakes.Logger{}
 		options = operations.Options{
-			Options: fabhttp.Options{
-				Logger:        fakeLogger,
-				ListenAddress: "127.0.0.1:0",
-				TLS: fabhttp.TLS{
-					Enabled:            true,
-					CertFile:           filepath.Join(tempDir, "server-cert.pem"),
-					KeyFile:            filepath.Join(tempDir, "server-key.pem"),
-					ClientCertRequired: false,
-					ClientCACertFiles:  []string{filepath.Join(tempDir, "client-ca.pem")},
-				},
+			Logger:        fakeLogger,
+			ListenAddress: "127.0.0.1:0",
+			TLS: fabhttp.TLS{
+				Enabled:            true,
+				CertFile:           filepath.Join(tempDir, "server-cert.pem"),
+				KeyFile:            filepath.Join(tempDir, "server-key.pem"),
+				ClientCertRequired: false,
+				ClientCACertFiles:  []string{filepath.Join(tempDir, "client-ca.pem")},
 			},
 			Metrics: operations.MetricsOptions{
 				Provider: "disabled",
@@ -200,7 +198,8 @@ var _ = Describe("System", func() {
 
 			_, err = unauthClient.Get(fmt.Sprintf("https://%s/healthz", system.Addr()))
 			Expect(err).To(BeAssignableToTypeOf(&url.Error{}))
-			Expect(err.(*url.Error).Err.Error()).To(ContainSubstring("remote error: tls: certificate required"))
+			cerr, _ := errors.AsType[*url.Error](err)
+			Expect(cerr.Err.Error()).To(ContainSubstring("remote error: tls: certificate required"))
 		})
 	})
 
@@ -389,7 +388,7 @@ var _ = Describe("System", func() {
 
 			conn.SetReadDeadline(time.Now().Add(time.Minute))
 			_, err = io.Copy(w, conn)
-			if err != nil && err != io.EOF {
+			if err != nil && !errors.Is(err, io.EOF) {
 				Expect(err).NotTo(HaveOccurred())
 			}
 		}

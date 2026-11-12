@@ -8,7 +8,7 @@ package endorser_test
 
 import (
 	"context"
-	"fmt"
+	"encoding/hex"
 	"slices"
 	"strings"
 
@@ -32,17 +32,17 @@ import (
 )
 
 func sortChaincodeCall(a, b *pb.ChaincodeCall) int {
-	if a.Name != b.Name {
-		return strings.Compare(a.Name, b.Name)
+	if a.GetName() != b.GetName() {
+		return strings.Compare(a.GetName(), b.GetName())
 	}
 
-	if len(a.CollectionNames) != len(b.CollectionNames) {
-		return len(a.CollectionNames) - len(b.CollectionNames)
+	if len(a.GetCollectionNames()) != len(b.GetCollectionNames()) {
+		return len(a.GetCollectionNames()) - len(b.GetCollectionNames())
 	}
 
-	for ii := range a.CollectionNames {
-		if a.CollectionNames[ii] != b.CollectionNames[ii] {
-			return strings.Compare(a.CollectionNames[ii], b.CollectionNames[ii])
+	for ii := range a.GetCollectionNames() {
+		if a.GetCollectionNames()[ii] != b.GetCollectionNames()[ii] {
+			return strings.Compare(a.GetCollectionNames()[ii], b.GetCollectionNames()[ii])
 		}
 	}
 
@@ -178,7 +178,7 @@ var _ = Describe("Endorser", func() {
 
 		fakeSupport.GetTxSimulatorReturns(fakeTxSimulator, nil)
 
-		fakeSupport.GetTransactionByIDReturns(nil, fmt.Errorf("txid-error"))
+		fakeSupport.GetTransactionByIDReturns(nil, errors.New("txid-error"))
 
 		e = &endorser.Endorser{
 			LocalMSP:               fakeLocalMSPIdentityDeserializer,
@@ -235,14 +235,14 @@ var _ = Describe("Endorser", func() {
 	It("successfully endorses the proposal", func() {
 		proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(proposalResponse.Endorsement).To(ProtoEqual(&pb.Endorsement{
+		Expect(proposalResponse.GetEndorsement()).To(ProtoEqual(&pb.Endorsement{
 			Endorser:  []byte("endorser-identity"),
 			Signature: []byte("endorser-signature"),
 		}))
-		Expect(proposalResponse.Timestamp).To(BeNil())
-		Expect(proposalResponse.Version).To(Equal(int32(1)))
-		Expect(proposalResponse.Payload).To(Equal([]byte("endorser-modified-payload")))
-		Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+		Expect(proposalResponse.GetTimestamp()).To(BeNil())
+		Expect(proposalResponse.GetVersion()).To(Equal(int32(1)))
+		Expect(proposalResponse.GetPayload()).To(Equal([]byte("endorser-modified-payload")))
+		Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 			Status:  200,
 			Payload: []byte("response-payload"),
 		}))
@@ -256,13 +256,13 @@ var _ = Describe("Endorser", func() {
 		prp := &pb.ProposalResponsePayload{}
 		err = proto.Unmarshal(propRespPayloadBytes, prp)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(fmt.Sprintf("%x", prp.ProposalHash)).To(Equal("6fa450b00ebef6c7de9f3479148f6d6ff2c645762e17fcaae989ff7b668be001"))
+		Expect(hex.EncodeToString(prp.GetProposalHash())).To(Equal("6fa450b00ebef6c7de9f3479148f6d6ff2c645762e17fcaae989ff7b668be001"))
 
 		ccAct := &pb.ChaincodeAction{}
-		err = proto.Unmarshal(prp.Extension, ccAct)
+		err = proto.Unmarshal(prp.GetExtension(), ccAct)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(ccAct.Events).To(Equal(protoutil.MarshalOrPanic(chaincodeEvent)))
-		Expect(ccAct.Response).To(ProtoEqual(&pb.Response{
+		Expect(ccAct.GetEvents()).To(Equal(protoutil.MarshalOrPanic(chaincodeEvent)))
+		Expect(ccAct.GetResponse()).To(ProtoEqual(&pb.Response{
 			Status:  200,
 			Payload: []byte("response-payload"),
 		}))
@@ -273,14 +273,14 @@ var _ = Describe("Endorser", func() {
 
 	Context("when the chaincode endorsement fails", func() {
 		BeforeEach(func() {
-			fakeSupport.EndorseWithPluginReturns(nil, nil, fmt.Errorf("fake-endorserment-error"))
+			fakeSupport.EndorseWithPluginReturns(nil, nil, errors.New("fake-endorserment-error"))
 		})
 
 		It("returns the error, but with no payload encoded", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "endorsing with plugin failed: fake-endorserment-error",
 			}))
@@ -324,14 +324,14 @@ var _ = Describe("Endorser", func() {
 
 	Context("when getting the tx simulator fails", func() {
 		BeforeEach(func() {
-			fakeSupport.GetTxSimulatorReturns(nil, fmt.Errorf("fake-simulator-error"))
+			fakeSupport.GetTxSimulatorReturns(nil, errors.New("fake-simulator-error"))
 		})
 
 		It("returns a response with the error", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "fake-simulator-error",
 			}))
@@ -348,14 +348,14 @@ var _ = Describe("Endorser", func() {
 
 	Context("when getting the history query executor fails", func() {
 		BeforeEach(func() {
-			fakeSupport.GetHistoryQueryExecutorReturns(nil, fmt.Errorf("fake-history-error"))
+			fakeSupport.GetHistoryQueryExecutorReturns(nil, errors.New("fake-history-error"))
 		})
 
 		It("returns a response with the error", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "fake-history-error",
 			}))
@@ -378,8 +378,8 @@ var _ = Describe("Endorser", func() {
 		It("returns a response with the error", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "channel 'channel-id' not found",
 			}))
@@ -400,7 +400,7 @@ var _ = Describe("Endorser", func() {
 
 	Context("when the proposal is not validly signed", func() {
 		BeforeEach(func() {
-			fakeChannelMSPIdentityDeserializer.DeserializeIdentityReturns(nil, fmt.Errorf("fake-deserialize-error"))
+			fakeChannelMSPIdentityDeserializer.DeserializeIdentityReturns(nil, errors.New("fake-deserialize-error"))
 		})
 
 		It("wraps and returns an error and responds to the client", func() {
@@ -426,7 +426,7 @@ var _ = Describe("Endorser", func() {
 
 	Context("when the acl check fails", func() {
 		BeforeEach(func() {
-			fakeSupport.CheckACLReturns(fmt.Errorf("fake-acl-error"))
+			fakeSupport.CheckACLReturns(errors.New("fake-acl-error"))
 		})
 
 		It("wraps and returns an error and responds to the client", func() {
@@ -448,7 +448,7 @@ var _ = Describe("Endorser", func() {
 			It("skips the acl check", func() {
 				proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Response.Status).To(Equal(int32(200)))
+				Expect(proposalResponse.GetResponse().GetStatus()).To(Equal(int32(200)))
 			})
 		})
 	})
@@ -465,13 +465,13 @@ var _ = Describe("Endorser", func() {
 
 	Context("when the chaincode definition is not found", func() {
 		BeforeEach(func() {
-			fakeSupport.ChaincodeEndorsementInfoReturns(nil, fmt.Errorf("fake-definition-error"))
+			fakeSupport.ChaincodeEndorsementInfoReturns(nil, errors.New("fake-definition-error"))
 		})
 
 		It("returns an error in the response", func() {
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "make sure the chaincode chaincode-name has been successfully defined on channel channel-id and try again: fake-definition-error",
 			}))
@@ -495,14 +495,14 @@ var _ = Describe("Endorser", func() {
 
 	Context("when calling the chaincode returns an error", func() {
 		BeforeEach(func() {
-			fakeSupport.ExecuteReturns(nil, nil, fmt.Errorf("fake-chaincode-execution-error"))
+			fakeSupport.ExecuteReturns(nil, nil, errors.New("fake-chaincode-execution-error"))
 		})
 
 		It("returns a response with the error and no payload", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "error in simulation: fake-chaincode-execution-error",
 			}))
@@ -523,19 +523,19 @@ var _ = Describe("Endorser", func() {
 		// really seems far too jumbled to be in the endorser package.  There are separate
 		// tests of the private data assembly functions in their test file.
 		Expect(privateData).NotTo(BeNil())
-		Expect(privateData.EndorsedAt).To(Equal(uint64(7)))
+		Expect(privateData.GetEndorsedAt()).To(Equal(uint64(7)))
 	})
 
 	Context("when the private data cannot be distributed", func() {
 		BeforeEach(func() {
-			fakePrivateDataDistributor.DistributePrivateDataReturns(fmt.Errorf("fake-private-data-error"))
+			fakePrivateDataDistributor.DistributePrivateDataReturns(errors.New("fake-private-data-error"))
 		})
 
 		It("returns a response with the error and no payload", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "error in simulation: fake-private-data-error",
 			}))
@@ -551,14 +551,14 @@ var _ = Describe("Endorser", func() {
 
 	Context("when the block height cannot be determined", func() {
 		BeforeEach(func() {
-			fakeSupport.GetLedgerHeightReturns(0, fmt.Errorf("fake-block-height-error"))
+			fakeSupport.GetLedgerHeightReturns(0, errors.New("fake-block-height-error"))
 		})
 
 		It("returns a response with the error and no payload", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "error in simulation: failed to obtain ledger height for channel 'channel-id': fake-block-height-error",
 			}))
@@ -591,11 +591,11 @@ var _ = Describe("Endorser", func() {
 		It("returns a successful proposal response with no endorsement", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Endorsement).To(BeNil())
-			Expect(proposalResponse.Timestamp).To(BeNil())
-			Expect(proposalResponse.Version).To(Equal(int32(0)))
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetEndorsement()).To(BeNil())
+			Expect(proposalResponse.GetTimestamp()).To(BeNil())
+			Expect(proposalResponse.GetVersion()).To(Equal(int32(0)))
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  200,
 				Payload: []byte("response-payload"),
 			}))
@@ -633,7 +633,7 @@ var _ = Describe("Endorser", func() {
 
 		Context("when the proposal is not validly signed", func() {
 			BeforeEach(func() {
-				fakeLocalMSPIdentityDeserializer.DeserializeIdentityReturns(nil, fmt.Errorf("fake-deserialize-error"))
+				fakeLocalMSPIdentityDeserializer.DeserializeIdentityReturns(nil, errors.New("fake-deserialize-error"))
 			})
 
 			It("wraps and returns an error and responds to the client", func() {
@@ -675,10 +675,10 @@ var _ = Describe("Endorser", func() {
 			It("returns the result, but with the proposal encoded, and no endorsements", func() {
 				proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Endorsement).To(BeNil())
-				Expect(proposalResponse.Timestamp).To(BeNil())
-				Expect(proposalResponse.Version).To(Equal(int32(0)))
-				Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+				Expect(proposalResponse.GetEndorsement()).To(BeNil())
+				Expect(proposalResponse.GetTimestamp()).To(BeNil())
+				Expect(proposalResponse.GetVersion()).To(Equal(int32(0)))
+				Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  500,
 					Payload: []byte("response-payload"),
 				}))
@@ -687,21 +687,21 @@ var _ = Describe("Endorser", func() {
 				// When the response is >= 500, we return a payload, but not on success.  A payload is only meaningful
 				// if it is endorsed, so it's unclear why we're returning it here.
 				prp := &pb.ProposalResponsePayload{}
-				err = proto.Unmarshal(proposalResponse.Payload, prp)
+				err = proto.Unmarshal(proposalResponse.GetPayload(), prp)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(fmt.Sprintf("%x", prp.ProposalHash)).To(Equal("f2c27f04f897dc28fd1b2983e7b22ebc8fbbb3d0617c140d913b33e463886788"))
+				Expect(hex.EncodeToString(prp.GetProposalHash())).To(Equal("f2c27f04f897dc28fd1b2983e7b22ebc8fbbb3d0617c140d913b33e463886788"))
 
 				ccAct := &pb.ChaincodeAction{}
-				err = proto.Unmarshal(prp.Extension, ccAct)
+				err = proto.Unmarshal(prp.GetExtension(), ccAct)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(ccAct.Response).To(ProtoEqual(&pb.Response{
+				Expect(ccAct.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  500,
 					Payload: []byte("response-payload"),
 				}))
 
 				// This is an especially weird bit of the behavior, the chaincode event is nil-ed before creating
 				// the proposal response. (That probably shouldn't be created)
-				Expect(ccAct.Events).To(BeNil())
+				Expect(ccAct.GetEvents()).To(BeNil())
 			})
 		})
 
@@ -713,14 +713,14 @@ var _ = Describe("Endorser", func() {
 			It("returns the result, but with the proposal encoded, and no endorsements", func() {
 				proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Endorsement).To(BeNil())
-				Expect(proposalResponse.Timestamp).To(BeNil())
-				Expect(proposalResponse.Version).To(Equal(int32(0)))
-				Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+				Expect(proposalResponse.GetEndorsement()).To(BeNil())
+				Expect(proposalResponse.GetTimestamp()).To(BeNil())
+				Expect(proposalResponse.GetVersion()).To(Equal(int32(0)))
+				Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  499,
 					Payload: []byte("response-payload"),
 				}))
-				Expect(proposalResponse.Payload).To(BeNil())
+				Expect(proposalResponse.GetPayload()).To(BeNil())
 			})
 		})
 	})
@@ -736,8 +736,8 @@ var _ = Describe("Endorser", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).ToNot(BeNil())
 			Expect(err.Error()).To(HavePrefix("error unmarshalling Proposal"))
-			Expect(proposalResponse.Response.Status).To(Equal(int32(500)))
-			Expect(proposalResponse.Response.Message).To(HavePrefix("error unmarshalling Proposal"))
+			Expect(proposalResponse.GetResponse().GetStatus()).To(Equal(int32(500)))
+			Expect(proposalResponse.GetResponse().GetMessage()).To(HavePrefix("error unmarshalling Proposal"))
 		})
 	})
 
@@ -749,14 +749,14 @@ var _ = Describe("Endorser", func() {
 		It("returns the result, but with the proposal encoded, and no endorsements", func() {
 			proposalResponse, err := e.ProcessProposal(context.Background(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Endorsement).To(BeNil())
-			Expect(proposalResponse.Timestamp).To(BeNil())
-			Expect(proposalResponse.Version).To(Equal(int32(0)))
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetEndorsement()).To(BeNil())
+			Expect(proposalResponse.GetTimestamp()).To(BeNil())
+			Expect(proposalResponse.GetVersion()).To(Equal(int32(0)))
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Payload: []byte("response-payload"),
 			}))
-			Expect(proposalResponse.Payload).NotTo(BeNil())
+			Expect(proposalResponse.GetPayload()).NotTo(BeNil())
 		})
 	})
 
@@ -794,8 +794,8 @@ var _ = Describe("Endorser", func() {
 		It("returns the response with no payload", func() {
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Payload).To(BeNil())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetPayload()).To(BeNil())
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  400,
 				Payload: []byte("response-payload"),
 			}))
@@ -833,7 +833,7 @@ var _ = Describe("Endorser", func() {
 		It("triggers the legacy init, and returns the response from lscc", func() {
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  200,
 				Payload: []byte("response-payload"),
 			}))
@@ -842,7 +842,7 @@ var _ = Describe("Endorser", func() {
 			_, name, version, input := fakeSupport.ExecuteLegacyInitArgsForCall(0)
 			Expect(name).To(Equal("deploy-name"))
 			Expect(version).To(Equal("deploy-version"))
-			Expect(input.Args).To(Equal([][]byte{[]byte("target-arg")}))
+			Expect(input.GetArgs()).To(Equal([][]byte{[]byte("target-arg")}))
 		})
 
 		Context("when the chaincode spec contains a code package", func() {
@@ -868,7 +868,7 @@ var _ = Describe("Endorser", func() {
 			It("returns an error to the client", func() {
 				proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+				Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  500,
 					Message: "error in simulation: lscc upgrade/deploy should not include a code packages",
 				}))
@@ -890,7 +890,7 @@ var _ = Describe("Endorser", func() {
 			It("returns an error to the client", func() {
 				proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+				Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  500,
 					Message: "error in simulation: Private data is forbidden to be used in instantiate",
 				}))
@@ -912,7 +912,7 @@ var _ = Describe("Endorser", func() {
 			It("returns an error to the client", func() {
 				proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+				Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  500,
 					Message: "error in simulation: bad simulation",
 				}))
@@ -931,7 +931,7 @@ var _ = Describe("Endorser", func() {
 			It("returns an error to the client", func() {
 				proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+				Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  500,
 					Message: "error in simulation: proto: Marshal called with nil",
 				}))
@@ -941,13 +941,13 @@ var _ = Describe("Endorser", func() {
 
 		Context("when the init fails", func() {
 			BeforeEach(func() {
-				fakeSupport.ExecuteLegacyInitReturns(nil, nil, fmt.Errorf("fake-legacy-init-error"))
+				fakeSupport.ExecuteLegacyInitReturns(nil, nil, errors.New("fake-legacy-init-error"))
 			})
 
 			It("returns an error and increments the metric", func() {
 				proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+				Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  500,
 					Message: "error in simulation: fake-legacy-init-error",
 				}))
@@ -971,7 +971,7 @@ var _ = Describe("Endorser", func() {
 			It("triggers the legacy init, and returns the response from lscc", func() {
 				proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+				Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 					Status:  500,
 					Message: "error in simulation: attempting to deploy a system chaincode deploy-name/channel-id",
 				}))
@@ -989,8 +989,8 @@ var _ = Describe("Endorser", func() {
 			It("returns an error to the client", func() {
 				proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(proposalResponse.Response.Status).To(Equal(int32(500)))
-				Expect(proposalResponse.Response.Message).To(ContainSubstring("error in simulation: error unmarshalling ChaincodeDeploymentSpec"))
+				Expect(proposalResponse.GetResponse().GetStatus()).To(Equal(int32(500)))
+				Expect(proposalResponse.GetResponse().GetMessage()).To(ContainSubstring("error in simulation: error unmarshalling ChaincodeDeploymentSpec"))
 				Expect(fakeSimulateFailure.AddCallCount()).To(Equal(1))
 			})
 		})
@@ -1027,7 +1027,7 @@ var _ = Describe("Endorser", func() {
 		It("returns an error to the client", func() {
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(proposalResponse.Response).To(ProtoEqual(&pb.Response{
+			Expect(proposalResponse.GetResponse()).To(ProtoEqual(&pb.Response{
 				Status:  500,
 				Message: "error in simulation: failed to obtain collections config: no collection config for chaincode \"myCC\"",
 			}))
@@ -1124,8 +1124,8 @@ var _ = Describe("Endorser", func() {
 
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			slices.SortFunc(proposalResponse.Interest.Chaincodes, sortChaincodeCall)
-			Expect(proposalResponse.Interest).To(ProtoEqual(&pb.ChaincodeInterest{
+			slices.SortFunc(proposalResponse.GetInterest().GetChaincodes(), sortChaincodeCall)
+			Expect(proposalResponse.GetInterest()).To(ProtoEqual(&pb.ChaincodeInterest{
 				Chaincodes: []*pb.ChaincodeCall{{
 					Name:            "myCC",
 					CollectionNames: []string{"mycollection-1"},
@@ -1161,8 +1161,8 @@ var _ = Describe("Endorser", func() {
 
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			slices.SortFunc(proposalResponse.Interest.Chaincodes, sortChaincodeCall)
-			Expect(proposalResponse.Interest).To(ProtoEqual(&pb.ChaincodeInterest{
+			slices.SortFunc(proposalResponse.GetInterest().GetChaincodes(), sortChaincodeCall)
+			Expect(proposalResponse.GetInterest()).To(ProtoEqual(&pb.ChaincodeInterest{
 				Chaincodes: []*pb.ChaincodeCall{
 					{
 						Name: "myCC",
@@ -1201,8 +1201,8 @@ var _ = Describe("Endorser", func() {
 
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
-			slices.SortFunc(proposalResponse.Interest.Chaincodes, sortChaincodeCall)
-			Expect(proposalResponse.Interest).To(ProtoEqual(&pb.ChaincodeInterest{
+			slices.SortFunc(proposalResponse.GetInterest().GetChaincodes(), sortChaincodeCall)
+			Expect(proposalResponse.GetInterest()).To(ProtoEqual(&pb.ChaincodeInterest{
 				Chaincodes: []*pb.ChaincodeCall{{
 					Name:            "myCC",
 					CollectionNames: []string{"mycollection-1"},
@@ -1240,8 +1240,8 @@ var _ = Describe("Endorser", func() {
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
 
-			slices.SortFunc(proposalResponse.Interest.Chaincodes, sortChaincodeCall)
-			Expect(proposalResponse.Interest).To(ProtoEqual(
+			slices.SortFunc(proposalResponse.GetInterest().GetChaincodes(), sortChaincodeCall)
+			Expect(proposalResponse.GetInterest()).To(ProtoEqual(
 				&pb.ChaincodeInterest{
 					Chaincodes: []*pb.ChaincodeCall{
 						{
@@ -1284,8 +1284,8 @@ var _ = Describe("Endorser", func() {
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
 
-			slices.SortFunc(proposalResponse.Interest.Chaincodes, sortChaincodeCall)
-			Expect(proposalResponse.Interest).To(ProtoEqual(
+			slices.SortFunc(proposalResponse.GetInterest().GetChaincodes(), sortChaincodeCall)
+			Expect(proposalResponse.GetInterest()).To(ProtoEqual(
 				&pb.ChaincodeInterest{
 					Chaincodes: []*pb.ChaincodeCall{{
 						Name:                     "myCC",
@@ -1327,18 +1327,18 @@ var _ = Describe("Endorser", func() {
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(proto.Equal(proposalResponse.Interest.Chaincodes[0],
+			Expect(proto.Equal(proposalResponse.GetInterest().GetChaincodes()[0],
 				&pb.ChaincodeCall{
 					Name: "myCC",
-				}) || proto.Equal(proposalResponse.Interest.Chaincodes[0],
+				}) || proto.Equal(proposalResponse.GetInterest().GetChaincodes()[0],
 				&pb.ChaincodeCall{
 					Name: "otherCC",
 				})).To(BeTrue())
 
-			Expect(proto.Equal(proposalResponse.Interest.Chaincodes[1],
+			Expect(proto.Equal(proposalResponse.GetInterest().GetChaincodes()[1],
 				&pb.ChaincodeCall{
 					Name: "myCC",
-				}) || proto.Equal(proposalResponse.Interest.Chaincodes[1],
+				}) || proto.Equal(proposalResponse.GetInterest().GetChaincodes()[1],
 				&pb.ChaincodeCall{
 					Name: "otherCC",
 				})).To(BeTrue())
@@ -1405,7 +1405,7 @@ var _ = Describe("Endorser", func() {
 			proposalResponse, err := e.ProcessProposal(context.TODO(), signedProposal)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(proposalResponse.Interest.Chaincodes[0]).To(ProtoEqual(&pb.ChaincodeCall{
+			Expect(proposalResponse.GetInterest().GetChaincodes()[0]).To(ProtoEqual(&pb.ChaincodeCall{
 				Name:            "myCC",
 				CollectionNames: []string{"mycollection-1"},
 			}))

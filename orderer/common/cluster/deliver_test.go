@@ -61,14 +61,14 @@ type wrappedBalancer struct {
 }
 
 func (wb *wrappedBalancer) Close() {
-	defer atomic.AddUint32(&wb.cd.connectionCount, ^uint32(0))
+	defer wb.cd.connectionCount.Add(^uint32(0))
 	wb.Balancer.Close()
 }
 
 type countingDialer struct {
 	name            string
 	baseBuilder     balancer.Builder
-	connectionCount uint32
+	connectionCount atomic.Uint32
 }
 
 func newCountingDialer() *countingDialer {
@@ -91,7 +91,7 @@ func newCountingDialer() *countingDialer {
 }
 
 func (d *countingDialer) Build(cc balancer.ClientConn, opts balancer.BuildOptions) balancer.Balancer {
-	defer atomic.AddUint32(&d.connectionCount, 1)
+	defer d.connectionCount.Add(1)
 	lb := d.baseBuilder.Build(cc, opts)
 	return &wrappedBalancer{
 		Balancer: lb,
@@ -105,10 +105,10 @@ func (d *countingDialer) Name() string {
 
 func (d *countingDialer) assertAllConnectionsClosed(t *testing.T) {
 	timeLimit := time.Now().Add(timeout)
-	for atomic.LoadUint32(&d.connectionCount) != uint32(0) && time.Now().Before(timeLimit) {
+	for d.connectionCount.Load() != uint32(0) && time.Now().Before(timeLimit) {
 		time.Sleep(time.Millisecond)
 	}
-	require.Equal(t, uint32(0), atomic.LoadUint32(&d.connectionCount))
+	require.Equal(t, uint32(0), d.connectionCount.Load())
 }
 
 func (d *countingDialer) Dial(address cluster.EndpointCriteria) (*grpc.ClientConn, error) {
@@ -130,19 +130,19 @@ func readSeekEnvelope(stream orderer.AtomicBroadcast_DeliverServer) (*orderer.Se
 	if err != nil {
 		return nil, "", err
 	}
-	payload, err := protoutil.UnmarshalPayload(env.Payload)
+	payload, err := protoutil.UnmarshalPayload(env.GetPayload())
 	if err != nil {
 		return nil, "", err
 	}
 	seekInfo := &orderer.SeekInfo{}
-	if err = proto.Unmarshal(payload.Data, seekInfo); err != nil {
+	if err = proto.Unmarshal(payload.GetData(), seekInfo); err != nil {
 		return nil, "", err
 	}
 	chdr := &common.ChannelHeader{}
-	if err = proto.Unmarshal(payload.Header.ChannelHeader, chdr); err != nil {
+	if err = proto.Unmarshal(payload.GetHeader().GetChannelHeader(), chdr); err != nil {
 		return nil, "", err
 	}
-	return seekInfo, chdr.ChannelId, nil
+	return seekInfo, chdr.GetChannelId(), nil
 }
 
 type deliverServer struct {
@@ -217,8 +217,11 @@ func (ds *deliverServer) Deliver(stream orderer.AtomicBroadcast_DeliverServer) e
 }
 
 func (ds *deliverServer) deliverBlocks(stream orderer.AtomicBroadcast_DeliverServer) error {
+	// Read the block buffer once per stream. Tests end a stream by closing the
+	// buffer and then swap in a new one, and this stream must not take blocks
+	// from the new buffer that are meant for the next stream.
+	blockChan := ds.blocks()
 	for {
-		blockChan := ds.blocks()
 		var response *orderer.DeliverResponse
 		select {
 		case response = <-blockChan:
@@ -297,7 +300,7 @@ func (ds *deliverServer) addExpectProbeAssert() {
 	select {
 	case ds.seekAssertions <- func(info *orderer.SeekInfo, _ string) {
 		require.NotNil(ds.t, info.GetStart().GetNewest())
-		require.Equal(ds.t, info.ErrorResponse, orderer.SeekInfo_BEST_EFFORT)
+		require.Equal(ds.t, orderer.SeekInfo_BEST_EFFORT, info.GetErrorResponse())
 	}:
 	case <-ds.done:
 	}
@@ -310,8 +313,8 @@ func (ds *deliverServer) addExpectPullAssert(seq uint64) {
 		require.NotNil(ds.t, seekPosition)
 		seekSpecified := seekPosition.GetSpecified()
 		require.NotNil(ds.t, seekSpecified)
-		require.Equal(ds.t, seq, seekSpecified.Number)
-		require.Equal(ds.t, info.ErrorResponse, orderer.SeekInfo_BEST_EFFORT)
+		require.Equal(ds.t, seq, seekSpecified.GetNumber())
+		require.Equal(ds.t, orderer.SeekInfo_BEST_EFFORT, info.GetErrorResponse())
 	}:
 	case <-ds.done:
 	}
@@ -405,9 +408,9 @@ func TestBlockPullerBasicHappyPath(t *testing.T) {
 	}
 
 	for i := 5; i <= 10; i++ {
-		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
+		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).GetHeader().GetNumber())
 	}
-	require.Len(t, osn.blockResponses, 0)
+	require.Empty(t, osn.blockResponses)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -438,9 +441,9 @@ func TestBlockPullerDuplicate(t *testing.T) {
 	}
 
 	for i := 1; i <= 3; i++ {
-		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
+		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).GetHeader().GetNumber())
 	}
-	require.Len(t, osn.blockResponses, 0)
+	require.Empty(t, osn.blockResponses)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -466,7 +469,7 @@ func TestBlockPullerHeavyBlocks(t *testing.T) {
 					Block: protoutil.NewBlock(seq, nil),
 				},
 			}
-			data := resp.GetBlock().Data.Data
+			data := resp.GetBlock().GetData().GetData()
 			resp.GetBlock().Data.Data = append(data, make([]byte, 1024))
 			osn.blockResponses <- resp
 		}
@@ -489,7 +492,7 @@ func TestBlockPullerHeavyBlocks(t *testing.T) {
 	for i := range uint64(5) {
 		enqueueBlockBatch(i*10+uint64(1), i*10+uint64(10))
 		for seq := i*10 + uint64(1); seq <= i*10+uint64(10); seq++ {
-			require.Equal(t, seq, bp.PullBlock(seq).Header.Number)
+			require.Equal(t, seq, bp.PullBlock(seq).GetHeader().GetNumber())
 		}
 	}
 
@@ -529,7 +532,7 @@ func TestBlockPullerClone(t *testing.T) {
 	require.Equal(t, "mychannel", bp.Channel)
 
 	block := bp.PullBlock(1)
-	require.Equal(t, uint64(1), block.Header.Number)
+	require.Equal(t, uint64(1), block.GetHeader().GetNumber())
 
 	// After the original block puller is closed, the
 	// clone should not be affected
@@ -545,7 +548,7 @@ func TestBlockPullerClone(t *testing.T) {
 	osn1.enqueueResponse(2)
 
 	block = bpClone.PullBlock(2)
-	require.Equal(t, uint64(2), block.Header.Number)
+	require.Equal(t, uint64(2), block.GetHeader().GetNumber())
 
 	bpClone.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -689,7 +692,7 @@ func TestBlockPullerMultipleOrderers(t *testing.T) {
 	initialTotalBlockAmount := len(osn1.blockResponses) + len(osn2.blockResponses) + len(osn3.blockResponses)
 
 	for i := 3; i <= 5; i++ {
-		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
+		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).GetHeader().GetNumber())
 	}
 
 	// Assert the cumulative amount of blocks in the OSNs went down by 6:
@@ -764,9 +767,9 @@ func TestBlockPullerFailover(t *testing.T) {
 	}()
 
 	// Assert reception of blocks 1 to 3
-	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
-	require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
+	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).GetHeader().GetNumber())
+	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).GetHeader().GetNumber())
+	require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).GetHeader().GetNumber())
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -842,9 +845,9 @@ func TestBlockPullerNoneResponsiveOrderer(t *testing.T) {
 	}()
 
 	// Assert reception of blocks 1 to 3
-	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
-	require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
+	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).GetHeader().GetNumber())
+	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).GetHeader().GetNumber())
+	require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).GetHeader().GetNumber())
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -890,8 +893,8 @@ func TestBlockPullerNoOrdererAliveAtStartup(t *testing.T) {
 		osn.enqueueResponse(2)
 	}()
 
-	require.Equal(t, uint64(1), bp.PullBlock(1).Header.Number)
-	require.Equal(t, uint64(2), bp.PullBlock(2).Header.Number)
+	require.Equal(t, uint64(1), bp.PullBlock(1).GetHeader().GetNumber())
+	require.Equal(t, uint64(2), bp.PullBlock(2).GetHeader().GetNumber())
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -1041,9 +1044,9 @@ func TestBlockPullerFailures(t *testing.T) {
 			osn.enqueueResponse(2)
 			osn.enqueueResponse(3)
 
-			require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-			require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
-			require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
+			require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).GetHeader().GetNumber())
+			require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).GetHeader().GetNumber())
+			require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).GetHeader().GetNumber())
 
 			bp.Close()
 			dialer.assertAllConnectionsClosed(t)
@@ -1156,7 +1159,7 @@ func TestBlockPullerBadBlocks(t *testing.T) {
 			detectedBadBlockDone := make(chan struct{})
 			var closeOnce sync.Once
 			bp.Logger = bp.Logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
-				if strings.Contains(entry.Message, fmt.Sprintf("Failed pulling blocks: %s", testCase.expectedErrMsg)) {
+				if strings.Contains(entry.Message, "Failed pulling blocks: "+testCase.expectedErrMsg) {
 					closeOnce.Do(func() { close(detectedBadBlockDone) })
 
 					// Close the channel to make the current server-side deliver stream close
@@ -1200,7 +1203,7 @@ func TestBlockPullerBadBlocks(t *testing.T) {
 func TestImpatientStreamDetectSelf(t *testing.T) {
 	osn := newClusterNodeWithTLS(t)
 	osn.Lock()
-	osn.err = fmt.Errorf("service unavailable")
+	osn.err = errors.New("service unavailable")
 	osn.Unlock()
 
 	defer osn.stop()
@@ -1243,15 +1246,15 @@ func TestImpatientStreamFailure(t *testing.T) {
 	// Shutdown the OSN
 	osn.stop()
 	// Ensure the port isn't open anymore
-	gt.Eventually(func() (bool, error) {
+	gt.Eventually(func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
 		defer cancel()
 		conn, _ := grpc.DialContext(ctx, osn.srv.Address(), grpc.WithBlock(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if conn != nil {
 			conn.Close()
-			return false, nil
+			return false
 		}
-		return true, nil
+		return true
 	}).Should(gomega.BeTrue())
 	stream, err := newStream()
 	if err != nil {
@@ -1323,8 +1326,8 @@ func TestBlockPullerMaxRetriesExhausted(t *testing.T) {
 	bp.MaxTotalBufferBytes = 1
 
 	// Assert reception of blocks 1 to 3
-	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).GetHeader().GetNumber())
+	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).GetHeader().GetNumber())
 	require.Nil(t, bp.PullBlock(uint64(3)))
 
 	bp.Close()
@@ -1359,22 +1362,21 @@ func TestBlockPullerToBadEndpointWithStop(t *testing.T) {
 	bp.MaxPullBlockRetries = 100
 	bp.RetryTimeout = time.Hour
 
-	releaseDone := make(chan struct{})
-	var closeOnce sync.Once
-
+	pullResult := make(chan *common.Block, 1)
 	go func() {
 		// But this will get stuck until the StopChannel is closed
-		require.Nil(t, bp.PullBlock(uint64(1)))
-		bp.Close()
-		closeOnce.Do(func() { close(releaseDone) })
+		pullResult <- bp.PullBlock(uint64(1))
 	}()
 
 	close(bp.StopChannel)
 	select {
-	case <-releaseDone:
+	case block := <-pullResult:
+		require.Nil(t, block)
 	case <-time.After(10 * time.Second):
 		t.Fatalf("timed out waiting for PullBlock to complete")
 	}
+
+	bp.Close()
 
 	dialer.assertAllConnectionsClosed(t)
 	require.True(t, couldNotConnectLogged)
@@ -1489,8 +1491,8 @@ func TestBlockPuller_UpdateEndpoint(t *testing.T) {
 		dialer := newCountingDialer()
 		bp := newBlockPuller(dialer, osn1.srv.Address())
 
-		require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-		require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+		require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).GetHeader().GetNumber())
+		require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).GetHeader().GetNumber())
 
 		osn2 := newClusterNode(t)
 		defer osn2.stop()
@@ -1505,8 +1507,8 @@ func TestBlockPuller_UpdateEndpoint(t *testing.T) {
 		// This will disconnect
 		bp.UpdateEndpoints(endpointCriteriaFromEndpoints(osn2.srv.Address()))
 
-		require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
-		require.Equal(t, uint64(4), bp.PullBlock(uint64(4)).Header.Number)
+		require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).GetHeader().GetNumber())
+		require.Equal(t, uint64(4), bp.PullBlock(uint64(4)).GetHeader().GetNumber())
 
 		bp.Close()
 		dialer.assertAllConnectionsClosed(t)
@@ -1548,12 +1550,12 @@ func TestBlockPuller_UpdateEndpoint(t *testing.T) {
 		// to prevent flakes due to CPU starvation.
 		bp.FetchTimeout = time.Second
 
-		require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
+		require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).GetHeader().GetNumber())
 		osn.stop()
 		// This will disconnect
 		bp.UpdateEndpoints(endpointCriteriaFromEndpoints("10.10.10.10:666"))
 		// Block 2 from the buffer
-		require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+		require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).GetHeader().GetNumber())
 		// Block 3 will never arrive
 		require.Nil(t, bp.PullBlock(uint64(3)))
 

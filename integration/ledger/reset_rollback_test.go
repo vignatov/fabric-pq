@@ -8,7 +8,7 @@ package ledger
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -444,7 +444,7 @@ func (nh *networkHelper) getLedgerHeight(peer *nwo.Peer) int {
 	channelInfo := common.BlockchainInfo{}
 	err = json.Unmarshal([]byte(channelInfoStr), &channelInfo)
 	Expect(err).NotTo(HaveOccurred())
-	return int(channelInfo.Height)
+	return int(channelInfo.GetHeight())
 }
 
 func (nh *networkHelper) queryChaincode(peer *nwo.Peer, command commands.ChaincodeQuery, expectedMessage string, expectSuccess bool) {
@@ -627,6 +627,6 @@ func (th *testHelper) assertUnjoinedChannel(peer *nwo.Peer) {
 	Eventually(sess, th.EventuallyTimeout).Should(gexec.Exit(1))
 	Expect(sess.Err).To(gbytes.Say("Invalid chain ID"))
 
-	channelLedgerDir := filepath.Join(th.Network.PeerLedgerDir(peer), "chains/chains", th.channelID)
+	channelLedgerDir := filepath.Join(th.PeerLedgerDir(peer), "chains/chains", th.channelID)
 	Expect(channelLedgerDir).NotTo(BeADirectory())
 }

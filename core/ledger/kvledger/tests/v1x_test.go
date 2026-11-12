@@ -87,7 +87,7 @@ func TestV11CommitHashes(t *testing.T) {
 			"testdata/v11/sample_ledgers/ledgersData.zip",
 			false,
 			func(h *testLedger, ledgerFSRoot string) {
-				require.NoError(t, kvledger.ResetAllKVLedgers(ledgerFSRoot))
+				require.NoError(t, kvledger.ResetAllKVLedgers(ledgerFSRoot, ledger.GoLevelDB))
 			},
 			true,
 		},
@@ -97,7 +97,7 @@ func TestV11CommitHashes(t *testing.T) {
 			"testdata/v11/sample_ledgers/ledgersData.zip",
 			false,
 			func(h *testLedger, ledgerFSRoot string) {
-				require.NoError(t, kvledger.RollbackKVLedger(ledgerFSRoot, h.lgrid, 0))
+				require.NoError(t, kvledger.RollbackKVLedger(ledgerFSRoot, h.lgrid, 0, ledger.GoLevelDB))
 			},
 			true,
 		},
@@ -107,7 +107,7 @@ func TestV11CommitHashes(t *testing.T) {
 			"testdata/v11/sample_ledgers/ledgersData.zip",
 			false,
 			func(h *testLedger, ledgerFSRoot string) {
-				require.NoError(t, kvledger.RollbackKVLedger(ledgerFSRoot, h.lgrid, h.currentHeight()/2+1))
+				require.NoError(t, kvledger.RollbackKVLedger(ledgerFSRoot, h.lgrid, h.currentHeight()/2+1, ledger.GoLevelDB))
 			},
 			false,
 		},
@@ -117,7 +117,7 @@ func TestV11CommitHashes(t *testing.T) {
 			"testdata/v11/sample_ledgers_with_commit_hashes/ledgersData.zip",
 			true,
 			func(h *testLedger, ledgerFSRoot string) {
-				require.NoError(t, kvledger.ResetAllKVLedgers(ledgerFSRoot))
+				require.NoError(t, kvledger.ResetAllKVLedgers(ledgerFSRoot, ledger.GoLevelDB))
 			},
 			true,
 		},
@@ -127,7 +127,7 @@ func TestV11CommitHashes(t *testing.T) {
 			"testdata/v11/sample_ledgers_with_commit_hashes/ledgersData.zip",
 			true,
 			func(h *testLedger, ledgerFSRoot string) {
-				require.NoError(t, kvledger.RollbackKVLedger(ledgerFSRoot, h.lgrid, 0))
+				require.NoError(t, kvledger.RollbackKVLedger(ledgerFSRoot, h.lgrid, 0, ledger.GoLevelDB))
 			},
 			true,
 		},
@@ -137,7 +137,7 @@ func TestV11CommitHashes(t *testing.T) {
 			"testdata/v11/sample_ledgers_with_commit_hashes/ledgersData.zip",
 			true,
 			func(h *testLedger, ledgerFSRoot string) {
-				require.NoError(t, kvledger.RollbackKVLedger(ledgerFSRoot, h.lgrid, h.currentHeight()/2+1))
+				require.NoError(t, kvledger.RollbackKVLedger(ledgerFSRoot, h.lgrid, h.currentHeight()/2+1, ledger.GoLevelDB))
 			},
 			true,
 		},
@@ -154,7 +154,8 @@ func TestV11CommitHashes(t *testing.T) {
 					testCase.resetFunc,
 					testCase.postResetCommitHashExists,
 				)
-			})
+			},
+		)
 	}
 }
 
@@ -196,11 +197,11 @@ func testV11CommitHashes(t *testing.T,
 	for i := int(h.currentHeight()); i < len(blocksAndPvtData); i++ {
 		d := blocksAndPvtData[i]
 		// add metadata slot for commit hash, as this would have be missing in the blocks from 1.1 prior to this feature
-		for len(d.Block.Metadata.Metadata) < int(common.BlockMetadataIndex_COMMIT_HASH)+1 {
+		for len(d.Block.GetMetadata().GetMetadata()) < int(common.BlockMetadataIndex_COMMIT_HASH)+1 {
 			d.Block.Metadata.Metadata = append(d.Block.Metadata.Metadata, []byte{})
 		}
 		// set previous block hash, as this is not present in the test blocks from 1.1
-		d.Block.Header.PreviousHash = protoutil.BlockHeaderHash(blocksAndPvtData[i-1].Block.Header)
+		d.Block.Header.PreviousHash = protoutil.BlockHeaderHash(blocksAndPvtData[i-1].Block.GetHeader())
 		require.NoError(t, h.lgr.CommitLegacy(d, &ledger.CommitOptions{FetchPvtDataFromLedger: true}))
 	}
 
@@ -216,8 +217,8 @@ func testV11CommitHashes(t *testing.T,
 
 	bcInfo, err := h.lgr.GetBlockchainInfo()
 	require.NoError(t, err)
-	h.committer.blkgen.lastNum = bcInfo.Height - 1
-	h.committer.blkgen.lastHash = bcInfo.CurrentBlockHash
+	h.blkgen.lastNum = bcInfo.GetHeight() - 1
+	h.blkgen.lastHash = bcInfo.GetCurrentBlockHash()
 
 	h.simulateDataTx("txid1_with_new_binary", func(s *simulator) {
 		s.setState("cc1", "new_key", "new_value")
@@ -273,7 +274,7 @@ func TestV13WithStateCouchdb(t *testing.T) {
 }
 
 // TestInitLedgerPanicWithV11Data tests init ledger panic cases caused by ledger dbs in old formats.
-// It tests stateleveldb.
+// It tests statekvdb.
 func TestInitLedgerPanicWithV11Data(t *testing.T) {
 	env := newEnv(t)
 	defer env.cleanup()
@@ -313,7 +314,7 @@ func testInitLedgerPanic(t *testing.T, env *env, ledgerFSRoot string, couchdbCon
 		func() { env.initLedgerMgmt() },
 		"A panic should occur because idstore is in format 1.x",
 	)
-	kvledger.UpgradeIDStoreFormat(t, ledgerFSRoot)
+	kvledger.UpgradeIDStoreFormat(t, ledgerFSRoot, ledger.GoLevelDB)
 
 	t.Logf("verifying that a panic occurs because blockstore index has old format and then drop the idstore to proceed")
 	blkIndexPath := path.Join(kvledger.BlockStorePath(ledgerFSRoot), "index")
@@ -338,7 +339,7 @@ func testInitLedgerPanic(t *testing.T, env *env, ledgerFSRoot string, couchdbCon
 	require.NoError(t, os.RemoveAll(historyDBPath))
 
 	if couchdbConfig == nil {
-		t.Logf("verifying that a panic occurs because stateleveldb has old format and then drop the statedb to proceed")
+		t.Logf("verifying that a panic occurs because statekvdb has old format and then drop the statedb to proceed")
 		stateLevelDBPath := kvledger.StateDBPath(ledgerFSRoot)
 		require.PanicsWithValue(
 			t,
@@ -389,6 +390,7 @@ func startCouchDBWithV13Data(t *testing.T, ledgerFSRoot string) (*ledger.CouchDB
 		MaxRetriesOnStartup: 3,
 		RequestTimeout:      10 * time.Second,
 		RedoLogPath:         filepath.Join(ledgerFSRoot, "couchdbRedoLogs"),
+		RedoLogDBType:       ledger.GoLevelDB,
 	}
 
 	return couchdbConfig, cleanup

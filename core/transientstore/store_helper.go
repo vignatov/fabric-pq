@@ -187,17 +187,18 @@ func trimPvtWSet(pvtWSet *rwset.TxPvtReadWriteSet, filter ledger.PvtNsCollFilter
 	}
 
 	var filteredNsRwSet []*rwset.NsPvtReadWriteSet
-	for _, ns := range pvtWSet.NsPvtRwset {
+	for _, ns := range pvtWSet.GetNsPvtRwset() {
 		var filteredCollRwSet []*rwset.CollectionPvtReadWriteSet
-		for _, coll := range ns.CollectionPvtRwset {
-			if filter.Has(ns.Namespace, coll.CollectionName) {
+		for _, coll := range ns.GetCollectionPvtRwset() {
+			if filter.Has(ns.GetNamespace(), coll.GetCollectionName()) {
 				filteredCollRwSet = append(filteredCollRwSet, coll)
 			}
 		}
 		if filteredCollRwSet != nil {
-			filteredNsRwSet = append(filteredNsRwSet,
+			filteredNsRwSet = append(
+				filteredNsRwSet,
 				&rwset.NsPvtReadWriteSet{
-					Namespace:          ns.Namespace,
+					Namespace:          ns.GetNamespace(),
 					CollectionPvtRwset: filteredCollRwSet,
 				},
 			)
@@ -214,7 +215,8 @@ func trimPvtWSet(pvtWSet *rwset.TxPvtReadWriteSet, filter ledger.PvtNsCollFilter
 }
 
 func trimPvtCollectionConfigs(configs map[string]*peer.CollectionConfigPackage,
-	filter ledger.PvtNsCollFilter) (map[string]*peer.CollectionConfigPackage, error) {
+	filter ledger.PvtNsCollFilter,
+) (map[string]*peer.CollectionConfigPackage, error) {
 	if filter == nil {
 		return configs, nil
 	}
@@ -223,9 +225,9 @@ func trimPvtCollectionConfigs(configs map[string]*peer.CollectionConfigPackage,
 	for ns, pkg := range configs {
 		result[ns] = &peer.CollectionConfigPackage{}
 		for _, colConf := range pkg.GetConfig() {
-			switch cconf := colConf.Payload.(type) {
+			switch cconf := colConf.GetPayload().(type) {
 			case *peer.CollectionConfig_StaticCollectionConfig:
-				if filter.Has(ns, cconf.StaticCollectionConfig.Name) {
+				if filter.Has(ns, cconf.StaticCollectionConfig.GetName()) {
 					result[ns].Config = append(result[ns].Config, colConf)
 				}
 			default:

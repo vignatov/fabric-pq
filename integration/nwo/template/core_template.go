@@ -168,7 +168,7 @@ vm:
       Memory: 2147483648
 
 chaincode:
-  builder: $(DOCKER_NS)/fabric-ccenv:$(PROJECT_VERSION)
+  builder: $(DOCKER_NS)/fabric-ccenv:{{ .CCEnvVersion }}
   pull: false
   golang:
     runtime: $(DOCKER_NS)/fabric-baseos:$(PROJECT_VERSION)
@@ -207,7 +207,7 @@ chaincode:
 ledger:
   blockchain:
   state:
-    stateDatabase: goleveldb
+    stateDatabase: {{ .StateStateDatabase }}
     couchDBConfig:
       couchDBAddress: 127.0.0.1:5984
       username:

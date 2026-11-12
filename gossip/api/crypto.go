@@ -9,7 +9,8 @@ package api
 import (
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"encoding/pem"
 	"fmt"
 	"time"
@@ -126,20 +127,20 @@ func (pit PeerIdentityType) String() string {
 	sID := &msp.SerializedIdentity{}
 	err := proto.Unmarshal(pit, sID)
 	if err != nil {
-		return fmt.Sprintf("non SerializedIdentity: %s", base64Representation)
+		return "non SerializedIdentity: " + base64Representation
 	}
 
-	bl, _ := pem.Decode(sID.IdBytes)
+	bl, _ := pem.Decode(sID.GetIdBytes())
 	if bl == nil {
-		return fmt.Sprintf("non PEM encoded identity: %s", base64Representation)
+		return "non PEM encoded identity: " + base64Representation
 	}
 
 	cert, _ := x509.ParseCertificate(bl.Bytes)
 	if cert == nil {
-		return fmt.Sprintf("non x509 identity: %s", base64Representation)
+		return "non x509 identity: " + base64Representation
 	}
 	m := make(map[string]any)
-	m["MSP"] = sID.Mspid
+	m["MSP"] = sID.GetMspid()
 	s := cert.Subject
 	m["CN"] = s.CommonName
 	m["OU"] = s.OrganizationalUnit
@@ -149,7 +150,7 @@ func (pit PeerIdentityType) String() string {
 	m["Issuer-OU"] = i.OrganizationalUnit
 	m["Issuer-L-ST-C"] = fmt.Sprintf("%s-%s-%s", i.Locality, i.StreetAddress, i.Country)
 
-	rawJSON, err := json.Marshal(m)
+	rawJSON, err := json.Marshal(m, json.Deterministic(true), jsontext.EscapeForHTML(true))
 	if err != nil {
 		return base64Representation
 	}

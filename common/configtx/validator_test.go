@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package configtx
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
@@ -104,7 +104,8 @@ func TestDifferentChannelID(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 0, []byte("foo"))),
 		"foonamespace",
-		defaultPolicyManager())
+		defaultPolicyManager(),
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -123,7 +124,8 @@ func TestOldConfigReplay(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 0, []byte("foo"))),
 		"foonamespace",
-		defaultPolicyManager())
+		defaultPolicyManager(),
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -141,7 +143,8 @@ func TestValidConfigChange(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 0, []byte("foo"))),
 		"foonamespace",
-		defaultPolicyManager())
+		defaultPolicyManager(),
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -166,7 +169,8 @@ func TestConfigChangeRegressedSequence(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 1, []byte("foo"))),
 		"foonamespace",
-		defaultPolicyManager())
+		defaultPolicyManager(),
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -188,7 +192,8 @@ func TestConfigChangeOldSequence(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 1, []byte("foo"))),
 		"foonamespace",
-		defaultPolicyManager())
+		defaultPolicyManager(),
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -217,7 +222,8 @@ func TestConfigPartialUpdate(t *testing.T) {
 			makeConfigPair("bar", "bar", 0, []byte("bar")),
 		),
 		"foonamespace",
-		defaultPolicyManager())
+		defaultPolicyManager(),
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -238,7 +244,8 @@ func TestEmptyConfigUpdate(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 0, []byte("foo"))),
 		"foonamespace",
-		defaultPolicyManager())
+		defaultPolicyManager(),
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -260,7 +267,8 @@ func TestSilentConfigModification(t *testing.T) {
 			makeConfigPair("bar", "bar", 0, []byte("bar")),
 		),
 		"foonamespace",
-		defaultPolicyManager())
+		defaultPolicyManager(),
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -286,13 +294,14 @@ func TestConfigChangeViolatesPolicy(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 0, []byte("foo"))),
 		"foonamespace",
-		pm)
+		pm,
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
 	// Set the mock policy to error
 	fakePolicy := &mockpolicies.Policy{}
-	fakePolicy.EvaluateSignedDataReturns(fmt.Errorf("err"))
+	fakePolicy.EvaluateSignedDataReturns(errors.New("err"))
 	pm.GetPolicyReturns(fakePolicy, true)
 
 	newConfig := makeConfigUpdateEnvelope(defaultChannel, makeConfigSet(), makeConfigSet(makeConfigPair("foo", "foo", 1, []byte("foo"))))
@@ -309,7 +318,8 @@ func TestUnchangedConfigViolatesPolicy(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 0, []byte("foo"))),
 		"foonamespace",
-		pm)
+		pm,
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
@@ -339,13 +349,14 @@ func TestInvalidProposal(t *testing.T) {
 		defaultChannel,
 		makeConfig(makeConfigPair("foo", "foo", 0, []byte("foo"))),
 		"foonamespace",
-		pm)
+		pm,
+	)
 	if err != nil {
 		t.Fatalf("Error constructing config manager: %s", err)
 	}
 
 	fakePolicy := &mockpolicies.Policy{}
-	fakePolicy.EvaluateSignedDataReturns(fmt.Errorf("err"))
+	fakePolicy.EvaluateSignedDataReturns(errors.New("err"))
 	pm.GetPolicyReturns(fakePolicy, true)
 
 	newConfig := makeConfigUpdateEnvelope(defaultChannel, makeConfigSet(), makeConfigSet(makeConfigPair("foo", "foo", 1, []byte("foo"))))

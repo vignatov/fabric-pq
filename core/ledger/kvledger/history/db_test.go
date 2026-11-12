@@ -118,7 +118,8 @@ func TestMarkStartingSavepoint(t *testing.T) {
 		p := env.testHistoryDBProvider
 		p.Close()
 		err := p.MarkStartingSavepoint("testLedger", version.NewHeight(25, 30))
-		require.Contains(t,
+		require.Contains(
+			t,
 			err.Error(),
 			"error while writing the starting save point for ledger [testLedger]",
 		)
@@ -205,10 +206,10 @@ func TestHistory(t *testing.T) {
 		if kmod == nil {
 			break
 		}
-		txid = kmod.(*queryresult.KeyModification).TxId
-		retrievedValue := kmod.(*queryresult.KeyModification).Value
-		retrievedTimestamp := kmod.(*queryresult.KeyModification).Timestamp
-		retrievedIsDelete := kmod.(*queryresult.KeyModification).IsDelete
+		txid = kmod.(*queryresult.KeyModification).GetTxId()
+		retrievedValue := kmod.(*queryresult.KeyModification).GetValue()
+		retrievedTimestamp := kmod.(*queryresult.KeyModification).GetTimestamp()
+		retrievedIsDelete := kmod.(*queryresult.KeyModification).GetIsDelete()
 		t.Logf("Retrieved history record for key=key7 at TxId=%s with value %v and timestamp %v",
 			txid, retrievedValue, retrievedTimestamp)
 		count++
@@ -260,7 +261,7 @@ func TestHistoryForInvalidTran(t *testing.T) {
 	block1 := bg.NextBlock([][]byte{pubSimResBytes})
 
 	// for this invalid tran test, set the transaction to invalid
-	txsFilter := txflags.ValidationFlags(block1.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsFilter := txflags.ValidationFlags(block1.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	txsFilter.SetFlag(0, peer.TxValidationCode_INVALID_OTHER_REASON)
 	block1.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txsFilter
 
@@ -485,7 +486,7 @@ func TestDrop(t *testing.T) {
 	require.NoError(t, err)
 	testutilVerifyResults(t, historydbQE, "ns1", "key1", []string{})
 	testutilVerifyResults(t, historydbQE, "ns2", "key2", []string{})
-	empty, err := historydb.levelDB.IsEmpty()
+	empty, err := historydb.dbHandle.IsEmpty()
 	require.NoError(t, err)
 	require.True(t, empty)
 
@@ -552,7 +553,7 @@ func TestHistoryWithKVWriteOfNilValue(t *testing.T) {
 	require.NoError(t, err)
 	keyModification := kmod.(*queryresult.KeyModification)
 	// despite IsDelete set to "false" in the write-set, historydb results should set this to "true"
-	require.True(t, keyModification.IsDelete)
+	require.True(t, keyModification.GetIsDelete())
 
 	kmod, err = itr.Next()
 	require.NoError(t, err)
@@ -569,8 +570,8 @@ func testutilVerifyResults(t *testing.T, hqe ledger.HistoryQueryExecutor, ns, ke
 		if kmod == nil {
 			break
 		}
-		txid := kmod.(*queryresult.KeyModification).TxId
-		retrievedValue := string(kmod.(*queryresult.KeyModification).Value)
+		txid := kmod.(*queryresult.KeyModification).GetTxId()
+		retrievedValue := string(kmod.(*queryresult.KeyModification).GetValue())
 		retrievedVals = append(retrievedVals, retrievedValue)
 		t.Logf("Retrieved history record at TxId=%s with value %s", txid, retrievedValue)
 	}
@@ -583,10 +584,7 @@ func testutilCheckKeyNotInRange(t *testing.T, hqe ledger.HistoryQueryExecutor, n
 	require.NoError(t, err, "Error upon GetHistoryForKey()")
 	scanner := itr.(*historyScanner)
 	rangeScanKeys := constructRangeScan(ns, falseKey)
-	for {
-		if !scanner.dbItr.Next() {
-			break
-		}
+	for scanner.dbItr.Next() {
 		historyKey := scanner.dbItr.Key()
 		if bytes.Contains(historyKey, rangeScanKeys.startKey) {
 			require.Failf(t, "false key %s should not be returned in range query for key %s", falseKey, desiredKey)

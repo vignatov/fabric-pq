@@ -36,10 +36,10 @@ func (gs *Server) Submit(ctx context.Context, request *gp.SubmitRequest) (*gp.Su
 	if txn == nil {
 		return nil, status.Error(codes.InvalidArgument, "a prepared transaction is required")
 	}
-	if len(txn.Signature) == 0 {
+	if len(txn.GetSignature()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "prepared transaction must be signed")
 	}
-	orderers, clusterSize, err := gs.registry.orderers(request.ChannelId)
+	orderers, clusterSize, err := gs.registry.orderers(request.GetChannelId())
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%s", err)
 	}
@@ -48,11 +48,11 @@ func (gs *Server) Submit(ctx context.Context, request *gp.SubmitRequest) (*gp.Su
 		return nil, status.Errorf(codes.Unavailable, "no orderer nodes available")
 	}
 
-	logger := logger.With("txID", request.TransactionId)
-	config := gs.getChannelConfig(request.ChannelId)
+	logger := logger.With("txID", request.GetTransactionId())
+	config := gs.getChannelConfig(request.GetChannelId())
 	oc, ok := config.OrdererConfig()
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "failed to create block deliverer for channel `%s`, missing OrdererConfig", request.ChannelId)
+		return nil, status.Errorf(codes.NotFound, "failed to create block deliverer for channel `%s`, missing OrdererConfig", request.GetChannelId())
 	}
 	if oc.ConsensusType() == "BFT" {
 		return gs.submitBFT(ctx, orderers, txn, clusterSize, logger)
@@ -98,7 +98,7 @@ loop:
 
 func (gs *Server) broadcastToAll(orderers []*orderer, txn *common.Envelope, waitCh chan<- *gp.ErrorDetail, logger *flogging.FabricLogger) {
 	everyoneSubmitted := make(chan struct{})
-	var numFinishedSend uint32
+	var numFinishedSend atomic.Uint32
 
 	broadcastContext, broadcastCancel := context.WithCancel(context.Background())
 	defer broadcastCancel()
@@ -109,7 +109,7 @@ func (gs *Server) broadcastToAll(orderers []*orderer, txn *common.Envelope, wait
 			defer cancel()
 			response, err := gs.broadcast(ctx, ord, txn)
 			// If I'm the last to submit, notify this
-			if atomic.AddUint32(&numFinishedSend, 1) == uint32(len(orderers)) {
+			if numFinishedSend.Add(1) == uint32(len(orderers)) {
 				close(everyoneSubmitted)
 			}
 			if err != nil {
@@ -227,7 +227,7 @@ func (gs *Server) broadcast(ctx context.Context, orderer *orderer, txn *common.E
 }
 
 func prepareTransaction(header *common.Header, payload *peer.ChaincodeProposalPayload, action *peer.ChaincodeEndorsedAction) (*common.Envelope, error) {
-	cppNoTransient := &peer.ChaincodeProposalPayload{Input: payload.Input, TransientMap: nil}
+	cppNoTransient := &peer.ChaincodeProposalPayload{Input: payload.GetInput(), TransientMap: nil}
 	cppBytes, err := protoutil.GetBytesChaincodeProposalPayload(cppNoTransient)
 	if err != nil {
 		return nil, err
@@ -239,7 +239,7 @@ func prepareTransaction(header *common.Header, payload *peer.ChaincodeProposalPa
 		return nil, err
 	}
 
-	tx := &peer.Transaction{Actions: []*peer.TransactionAction{{Header: header.SignatureHeader, Payload: capBytes}}}
+	tx := &peer.Transaction{Actions: []*peer.TransactionAction{{Header: header.GetSignatureHeader(), Payload: capBytes}}}
 	txBytes, err := protoutil.GetBytesTransaction(tx)
 	if err != nil {
 		return nil, err

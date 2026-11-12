@@ -30,7 +30,8 @@ import (
 )
 
 func Setup(mock *mocks2.CollectionAccessPolicy, requiredPeerCount int, maxPeerCount int,
-	accessFilter privdata.Filter, orgs map[string]struct{}, memberOnlyRead bool) {
+	accessFilter privdata.Filter, orgs map[string]struct{}, memberOnlyRead bool,
+) {
 	mock.On("AccessFilter").Return(accessFilter)
 	mock.On("RequiredPeerCount").Return(requiredPeerCount)
 	mock.On("MaximumPeerCount").Return(maxPeerCount)
@@ -73,12 +74,10 @@ func TestDistributor(t *testing.T) {
 	channelID := "test"
 
 	g := &gossipMock{
-		Mock: mock.Mock{},
-		PeerSignature: api.PeerSignature{
-			Signature:    []byte{3, 4, 5},
-			Message:      []byte{6, 7, 8},
-			PeerIdentity: []byte{0, 1, 2},
-		},
+		Mock:         mock.Mock{},
+		Signature:    []byte{3, 4, 5},
+		Message:      []byte{6, 7, 8},
+		PeerIdentity: []byte{0, 1, 2},
 	}
 	sendings := make(chan struct {
 		*proto.PrivatePayload
@@ -108,7 +107,7 @@ func TestDistributor(t *testing.T) {
 			*proto.PrivatePayload
 			gossip2.SendCriteria
 		}{
-			PrivatePayload: msg.GetPrivateData().Payload,
+			PrivatePayload: msg.GetPrivateData().GetPayload(),
 			SendCriteria:   sendCriteria,
 		}
 	}).Return(nil)
@@ -175,9 +174,9 @@ func TestDistributor(t *testing.T) {
 	i := 0
 	require.Len(t, sendings, 8)
 	for dis := range sendings {
-		key := fmt.Sprintf("%s~%s", dis.PrivatePayload.Namespace, dis.PrivatePayload.CollectionName)
-		expectedMaxCount[key] += dis.SendCriteria.MaxPeers
-		expectedMinAck[key] += dis.SendCriteria.MinAck
+		key := fmt.Sprintf("%s~%s", dis.GetNamespace(), dis.GetCollectionName())
+		expectedMaxCount[key] += dis.MaxPeers
+		expectedMinAck[key] += dis.MinAck
 		i++
 		if i == 8 {
 			break
@@ -193,7 +192,7 @@ func TestDistributor(t *testing.T) {
 	require.Equal(t, 1, expectedMinAck["ns2~c2"])
 
 	// Channel is empty after we read 8 times from it
-	require.Len(t, sendings, 0)
+	require.Empty(t, sendings)
 
 	// Bad path: dependencies (gossip and others) don't work properly
 	g.err = errors.New("failed obtaining filter")
@@ -233,9 +232,10 @@ func TestDistributor(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Failed disseminating 2 out of 2 private dissemination plans")
 
-	require.Equal(t,
+	require.Equal(
+		t,
 		[]string{"channel", channelID},
 		testMetricProvider.FakeSendDuration.WithArgsForCall(0),
 	)
-	require.True(t, testMetricProvider.FakeSendDuration.ObserveArgsForCall(0) > 0)
+	require.Positive(t, testMetricProvider.FakeSendDuration.ObserveArgsForCall(0))
 }

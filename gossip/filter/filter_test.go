@@ -138,7 +138,7 @@ func BenchmarkSelectPeers(t *testing.B) {
 	var l1, l2, l3, l4 int
 
 	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
+	for range t.N {
 		// individual filters
 		l1 = len(SelectPeers(3, []discovery.NetworkMember{nm1, nm2, nm3}, a))
 		l2 = len(SelectPeers(3, []discovery.NetworkMember{nm1, nm2, nm3}, b))
@@ -148,8 +148,8 @@ func BenchmarkSelectPeers(t *testing.B) {
 	}
 	t.StopTimer()
 
-	require.Equal(t, l1, 2)
-	require.Equal(t, l2, 3)
-	require.Equal(t, l3, 2)
-	require.Equal(t, l4, 1)
+	require.Equal(t, 2, l1)
+	require.Equal(t, 3, l2)
+	require.Equal(t, 2, l3)
+	require.Equal(t, 1, l4)
 }

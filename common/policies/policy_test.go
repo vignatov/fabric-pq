@@ -69,9 +69,9 @@ func TestUnnestedManager(t *testing.T) {
 	require.True(t, ok, "Should have found the root manager")
 	require.Equal(t, m, r)
 
-	require.Len(t, m.Policies, len(config.Policies))
+	require.Len(t, m.Policies, len(config.GetPolicies()))
 
-	for policyName := range config.Policies {
+	for policyName := range config.GetPolicies() {
 		_, ok := m.GetPolicy(policyName)
 		require.True(t, ok, "Should have found policy %s", policyName)
 	}
@@ -134,7 +134,7 @@ func TestNestedManager(t *testing.T) {
 	require.Equal(t, n2b, n2bs)
 
 	absPrefix := PathSeparator + "nest0" + PathSeparator
-	for policyName := range config.Policies {
+	for policyName := range config.GetPolicies() {
 		_, ok := m.GetPolicy(policyName)
 		require.True(t, ok, "Should have found policy %s", policyName)
 
@@ -143,7 +143,7 @@ func TestNestedManager(t *testing.T) {
 		require.True(t, ok, "Should have found absolute policy %s", absName)
 	}
 
-	for policyName := range config.Groups["nest1"].Policies {
+	for policyName := range config.GetGroups()["nest1"].GetPolicies() {
 		_, ok := n1.GetPolicy(policyName)
 		require.True(t, ok, "Should have found policy %s", policyName)
 
@@ -158,7 +158,7 @@ func TestNestedManager(t *testing.T) {
 		}
 	}
 
-	for policyName := range config.Groups["nest1"].Groups["nest2a"].Policies {
+	for policyName := range config.GetGroups()["nest1"].GetGroups()["nest2a"].GetPolicies() {
 		_, ok := n2a.GetPolicy(policyName)
 		require.True(t, ok, "Should have found policy %s", policyName)
 
@@ -177,7 +177,7 @@ func TestNestedManager(t *testing.T) {
 		}
 	}
 
-	for policyName := range config.Groups["nest1"].Groups["nest2b"].Policies {
+	for policyName := range config.GetGroups()["nest1"].GetGroups()["nest2b"].GetPolicies() {
 		_, ok := n2b.GetPolicy(policyName)
 		require.True(t, ok, "Should have found policy %s", policyName)
 
@@ -214,8 +214,8 @@ func TestPrincipalUniqueSet(t *testing.T) {
 	addPrincipal(3)
 
 	for principal, plurality := range principalSet.UniqueSet() {
-		require.Equal(t, int(principal.PrincipalClassification), plurality)
-		require.Equal(t, fmt.Sprintf("%d", plurality), string(principal.Principal))
+		require.Equal(t, int(principal.GetPrincipalClassification()), plurality)
+		require.Equal(t, strconv.Itoa(plurality), string(principal.GetPrincipal()))
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(msp.MSPPrincipal{}))
@@ -242,7 +242,7 @@ func TestPrincipalSetContainingOnly(t *testing.T) {
 	}
 
 	between20And30 := func(principal *msp.MSPPrincipal) bool {
-		n, _ := strconv.ParseInt(string(principal.Principal), 10, 32)
+		n, _ := strconv.ParseInt(string(principal.GetPrincipal()), 10, 32)
 		return n >= 20 && n <= 29
 	}
 
@@ -336,7 +336,7 @@ func TestSignatureSetToValidIdentitiesDeserializeErr(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.spec, func(t *testing.T) {
 			ids := SignatureSetToValidIdentities(tc.signedData, fakeIdentityDeserializer)
-			require.Len(t, ids, 0)
+			require.Empty(t, ids)
 			assertLogContains(t, recorder, tc.expectedLogEntryContains...)
 		})
 	}
@@ -361,7 +361,7 @@ func TestSignatureSetToValidIdentitiesVerifyErr(t *testing.T) {
 	fIDDs.DeserializeIdentityReturns(fID, nil)
 
 	ids := SignatureSetToValidIdentities(sd, fIDDs)
-	require.Len(t, ids, 0)
+	require.Empty(t, ids)
 	data, sig := fID.VerifyArgsForCall(0)
 	require.Equal(t, []byte("data1"), data)
 	require.Equal(t, []byte("signature1"), sig)

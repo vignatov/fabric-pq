@@ -40,8 +40,8 @@ type Mgr struct {
 }
 
 // NewMgr constructs an instance that implements interface `Mgr`
-func NewMgr(dbPath string, ccInfoProvider ledger.DeployedChaincodeInfoProvider) (*Mgr, error) {
-	p, err := newDBProvider(dbPath)
+func NewMgr(dbPath string, ccInfoProvider ledger.DeployedChaincodeInfoProvider, dbType string) (*Mgr, error) {
+	p, err := newDBProvider(dbPath, dbType)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (m *Mgr) HandleStateUpdates(trigger *ledger.StateUpdateTrigger) error {
 
 		// DeployedChaincodeInfoProvider implementation in new lifecycle return an empty 'CollectionConfigPackage'
 		// (instead of a nil) to indicate the absence of collection config, so check for both conditions
-		if ccInfo.ExplicitCollectionConfigPkg == nil || len(ccInfo.ExplicitCollectionConfigPkg.Config) == 0 {
+		if ccInfo.ExplicitCollectionConfigPkg == nil || len(ccInfo.ExplicitCollectionConfigPkg.GetConfig()) == 0 {
 			continue
 		}
 		updatedCollConfigs[ccInfo.Name] = ccInfo.ExplicitCollectionConfigPkg
@@ -139,6 +139,8 @@ func (m *Mgr) ImportFromSnapshot(ledgerID string, dir string) error {
 	if err != nil {
 		return err
 	}
+	defer configMetadata.Close()
+
 	numCollectionConfigs, err := configMetadata.DecodeUVarInt()
 	if err != nil {
 		return err
@@ -147,6 +149,7 @@ func (m *Mgr) ImportFromSnapshot(ledgerID string, dir string) error {
 	if err != nil {
 		return err
 	}
+	defer collectionConfigData.Close()
 
 	batch := db.NewUpdateBatch()
 	currentBatchSize := 0

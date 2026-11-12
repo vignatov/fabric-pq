@@ -7,7 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 package ccmetadata
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -80,12 +81,12 @@ func buildMetadataFileErrorMessage(filePathName string) string {
 	dir, filename := filepath.Split(filePathName)
 
 	if !strings.HasPrefix(filePathName, "META-INF/statedb") {
-		return fmt.Sprintf("metadata file path must begin with META-INF/statedb, found: %s", dir)
+		return "metadata file path must begin with META-INF/statedb, found: " + dir
 	}
 	directoryArray := strings.Split(filepath.Clean(dir), "/")
 	// verify the minimum directory depth
 	if len(directoryArray) < 4 {
-		return fmt.Sprintf("metadata file path must include a database and index directory: %s", dir)
+		return "metadata file path must include a database and index directory: " + dir
 	}
 	// validate the database type
 	if !contains(validDatabases, directoryArray[2]) {
@@ -93,27 +94,27 @@ func buildMetadataFileErrorMessage(filePathName string) string {
 	}
 	// verify "indexes" is under the database name
 	if len(directoryArray) == 4 && directoryArray[3] != "indexes" {
-		return fmt.Sprintf("metadata file path does not have an indexes directory: %s", dir)
+		return "metadata file path does not have an indexes directory: " + dir
 	}
 	// if this is for collections, check the path length
 	if len(directoryArray) != 6 {
-		return fmt.Sprintf("metadata file path for collections must include a collections and index directory: %s", dir)
+		return "metadata file path for collections must include a collections and index directory: " + dir
 	}
 	// verify "indexes" is under the collections and collection directories
 	if directoryArray[3] != "collections" || directoryArray[5] != "indexes" {
-		return fmt.Sprintf("metadata file path for collections must have a collections and indexes directory: %s", dir)
+		return "metadata file path for collections must have a collections and indexes directory: " + dir
 	}
 	// validate the collection name
 	if !collectionNameValid.MatchString(directoryArray[4]) {
-		return fmt.Sprintf("collection name is not valid: %s", directoryArray[4])
+		return "collection name is not valid: " + directoryArray[4]
 	}
 
 	// validate the file name
 	if !fileNameValid.MatchString(filename) {
-		return fmt.Sprintf("artifact file name is not valid: %s", filename)
+		return "artifact file name is not valid: " + filename
 	}
 
-	return fmt.Sprintf("metadata file path or name is not supported: %s", dir)
+	return "metadata file path or name is not supported: " + dir
 }
 
 func contains(validStrings []string, target string) bool {
@@ -160,11 +161,9 @@ func validateIndexJSON(indexDefinition map[string]any) error {
 	for jsonKey, jsonValue := range indexDefinition {
 		// create a case for the top level entries
 		switch jsonKey {
-
 		case "index":
-
 			if reflect.TypeOf(jsonValue).Kind() != reflect.Map {
-				return fmt.Errorf("Invalid entry, \"index\" must be a JSON")
+				return errors.New("Invalid entry, \"index\" must be a JSON")
 			}
 
 			if err := processIndexMap(jsonValue.(map[string]any)); err != nil {
@@ -174,40 +173,35 @@ func validateIndexJSON(indexDefinition map[string]any) error {
 			indexIncluded = true
 
 		case "ddoc":
-
 			// Verify the design doc is a string
 			if reflect.TypeOf(jsonValue).Kind() != reflect.String {
-				return fmt.Errorf("Invalid entry, \"ddoc\" must be a string")
+				return errors.New("Invalid entry, \"ddoc\" must be a string")
 			}
 
 			logger.Debugf("Found index object: \"%s\":\"%s\"", jsonKey, jsonValue)
 
 		case "name":
-
 			// Verify the name is a string
 			if reflect.TypeOf(jsonValue).Kind() != reflect.String {
-				return fmt.Errorf("Invalid entry, \"name\" must be a string")
+				return errors.New("Invalid entry, \"name\" must be a string")
 			}
 
 			logger.Debugf("Found index object: \"%s\":\"%s\"", jsonKey, jsonValue)
 
 		case "type":
-
 			if jsonValue != "json" {
-				return fmt.Errorf("Index type must be json")
+				return errors.New("Index type must be json")
 			}
 
 			logger.Debugf("Found index object: \"%s\":\"%s\"", jsonKey, jsonValue)
 
 		default:
-
 			return fmt.Errorf("Invalid Entry.  Entry %s", jsonKey)
-
 		}
 	}
 
 	if !indexIncluded {
-		return fmt.Errorf("Index definition must include a \"fields\" definition")
+		return errors.New("Index definition must include a \"fields\" definition")
 	}
 
 	return nil
@@ -219,17 +213,12 @@ func processIndexMap(jsonFragment map[string]any) error {
 	// iterate the item in the map
 	for jsonKey, jsonValue := range jsonFragment {
 		switch jsonKey {
-
 		case "fields":
-
 			switch jsonValueType := jsonValue.(type) {
-
 			case []any:
-
 				// iterate the index field objects
 				for _, itemValue := range jsonValueType {
 					switch reflect.TypeOf(itemValue).Kind() {
-
 					case reflect.String:
 						// String is a valid field descriptor  ex: "color", "size"
 						logger.Debugf("Found index field name: \"%s\"", itemValue)
@@ -239,12 +228,11 @@ func processIndexMap(jsonFragment map[string]any) error {
 						if err := validateFieldMap(itemValue.(map[string]any)); err != nil {
 							return err
 						}
-
 					}
 				}
 
 			default:
-				return fmt.Errorf("Expecting a JSON array of fields")
+				return errors.New("Expecting a JSON array of fields")
 			}
 
 		case "partial_filter_selector":
@@ -257,7 +245,6 @@ func processIndexMap(jsonFragment map[string]any) error {
 			// if anything other than "fields" or "partial_filter_selector" was found,
 			// return an error
 			return fmt.Errorf("Invalid Entry.  Entry %s", jsonKey)
-
 		}
 	}
 
@@ -269,7 +256,6 @@ func validateFieldMap(jsonFragment map[string]any) error {
 	// iterate the fields to validate the sort criteria
 	for jsonKey, jsonValue := range jsonFragment {
 		switch jsonValue := jsonValue.(type) {
-
 		case string:
 			// Ensure the sort is either "asc" or "desc"
 			jv := strings.ToLower(jsonValue)
@@ -279,7 +265,7 @@ func validateFieldMap(jsonFragment map[string]any) error {
 			logger.Debugf("Found index field name: \"%s\":\"%s\"", jsonKey, jsonValue)
 
 		default:
-			return fmt.Errorf("Invalid field definition, fields must be in the form \"fieldname\":\"sort\"")
+			return errors.New("Invalid field definition, fields must be in the form \"fieldname\":\"sort\"")
 		}
 	}
 

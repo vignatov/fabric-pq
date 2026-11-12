@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package sbe
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -420,7 +420,7 @@ func getLedgerHeight(n *nwo.Network, peer *nwo.Peer, channelName string) int {
 	channelInfo := common.BlockchainInfo{}
 	err = json.Unmarshal([]byte(channelInfoStr), &channelInfo)
 	Expect(err).NotTo(HaveOccurred())
-	return int(channelInfo.Height)
+	return int(channelInfo.GetHeight())
 }
 
 func syncLedgerHeights(n *nwo.Network, peer1 *nwo.Peer, peer2 *nwo.Peer) {

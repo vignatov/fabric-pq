@@ -113,7 +113,7 @@ func (vdb *VersionedDB) buildCommittersForNs(ns string, nsUpdates map[string]*st
 
 	cacheEnabled := vdb.cache.enabled(ns)
 
-	for i := 0; i < numCommitters; i++ {
+	for i := range numCommitters {
 		committers[i] = &committer{
 			db:             db,
 			batchUpdateMap: make(map[string]*batchableDocument),
@@ -281,7 +281,7 @@ func (vdb *VersionedDB) addMissingRevisionsFromCache(ns string, keys []string, r
 			missingKeys = append(missingKeys, k)
 			continue
 		}
-		revs[k] = string(cv.AdditionalInfo)
+		revs[k] = string(cv.GetAdditionalInfo())
 	}
 	return missingKeys, nil
 }

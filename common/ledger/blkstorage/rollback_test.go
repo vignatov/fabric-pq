@@ -13,6 +13,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
@@ -38,8 +39,8 @@ func TestRollback(t *testing.T) {
 	// 2. Check the BlockchainInfo
 	expectedBlockchainInfo := &common.BlockchainInfo{
 		Height:            50,
-		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[49].Header),
-		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[48].Header),
+		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[49].GetHeader()),
+		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[48].GetHeader()),
 	}
 	actualBlockchainInfo := blkfileMgrWrapper.blockfileMgr.getBlockchainInfo()
 	require.Equal(t, expectedBlockchainInfo, actualBlockchainInfo)
@@ -51,7 +52,7 @@ func TestRollback(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expectedblkfilesInfoLastBlockNumber, actualBlkfilesInfo.lastPersistedBlock)
 	require.Equal(t, expectedBlkfilesInfoIsNoFiles, actualBlkfilesInfo.noBlockFiles)
-	require.Equal(t, actualBlkfilesInfo.latestFileNumber, 4)
+	require.Equal(t, 4, actualBlkfilesInfo.latestFileNumber)
 
 	// 4. Check whether all blocks are stored correctly
 	blkfileMgrWrapper.testGetBlockByNumber(blocks)
@@ -67,22 +68,22 @@ func TestRollback(t *testing.T) {
 
 	// 7. Rollback to one before the lastBlockNumberInLastFile
 	indexConfig := &IndexConfig{AttrsToIndex: attrsToIndex}
-	err = Rollback(path, "testLedger", lastBlockNumberInLastFile-uint64(1), indexConfig)
+	err = Rollback(path, "testLedger", lastBlockNumberInLastFile-uint64(1), indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, lastBlockNumberInLastFile-uint64(1), 4, indexConfig)
 
 	// 8. Rollback to middleBlockNumberInLastFile
-	err = Rollback(path, "testLedger", middleBlockNumberInLastFile, indexConfig)
+	err = Rollback(path, "testLedger", middleBlockNumberInLastFile, indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, middleBlockNumberInLastFile, 4, indexConfig)
 
 	// 9. Rollback to firstBlockNumberInLastFile
-	err = Rollback(path, "testLedger", firstBlockNumberInLastFile, indexConfig)
+	err = Rollback(path, "testLedger", firstBlockNumberInLastFile, indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, firstBlockNumberInLastFile, 4, indexConfig)
 
 	// 10. Rollback to one before the firstBlockNumberInLastFile
-	err = Rollback(path, "testLedger", firstBlockNumberInLastFile-1, indexConfig)
+	err = Rollback(path, "testLedger", firstBlockNumberInLastFile-1, indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, firstBlockNumberInLastFile-1, 3, indexConfig)
 
@@ -90,17 +91,17 @@ func TestRollback(t *testing.T) {
 	middleBlockNumberInMiddleFile := uint64(25)
 
 	// 12. Rollback to middleBlockNumberInMiddleFile
-	err = Rollback(path, "testLedger", middleBlockNumberInMiddleFile, indexConfig)
+	err = Rollback(path, "testLedger", middleBlockNumberInMiddleFile, indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, middleBlockNumberInMiddleFile, 2, indexConfig)
 
 	// 13. Rollback to block 5
-	err = Rollback(path, "testLedger", 5, indexConfig)
+	err = Rollback(path, "testLedger", 5, indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, 5, 0, indexConfig)
 
 	// 14. Rollback to block 1
-	err = Rollback(path, "testLedger", 1, indexConfig)
+	err = Rollback(path, "testLedger", 1, indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, 1, 0, indexConfig)
 }
@@ -131,8 +132,8 @@ func TestRollbackWithOnlyBlockIndexAttributes(t *testing.T) {
 	// 2. Check the BlockchainInfo
 	expectedBlockchainInfo := &common.BlockchainInfo{
 		Height:            50,
-		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[49].Header),
-		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[48].Header),
+		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[49].GetHeader()),
+		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[48].GetHeader()),
 	}
 	actualBlockchainInfo := blkfileMgrWrapper.blockfileMgr.getBlockchainInfo()
 	require.Equal(t, expectedBlockchainInfo, actualBlockchainInfo)
@@ -144,7 +145,7 @@ func TestRollbackWithOnlyBlockIndexAttributes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expectedBlkfilesInfoLastBlockNumber, actualBlkfilesInfo.lastPersistedBlock)
 	require.Equal(t, expectedBlkfilesInfoIsNoBlkFiles, actualBlkfilesInfo.noBlockFiles)
-	require.Equal(t, actualBlkfilesInfo.latestFileNumber, 4)
+	require.Equal(t, 4, actualBlkfilesInfo.latestFileNumber)
 
 	// 4. Close the blkfileMgrWrapper
 	env.provider.Close()
@@ -154,7 +155,7 @@ func TestRollbackWithOnlyBlockIndexAttributes(t *testing.T) {
 	onlyBlockNumIndexCfg := &IndexConfig{
 		AttrsToIndex: onlyBlockNumIndex,
 	}
-	err = Rollback(path, "testLedger", 2, onlyBlockNumIndexCfg)
+	err = Rollback(path, "testLedger", 2, onlyBlockNumIndexCfg, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, 2, 0, onlyBlockNumIndexCfg)
 }
@@ -181,8 +182,8 @@ func TestRollbackWithNoIndexDir(t *testing.T) {
 	// 2. Check the BlockchainInfo
 	expectedBlockchainInfo := &common.BlockchainInfo{
 		Height:            50,
-		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[49].Header),
-		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[48].Header),
+		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[49].GetHeader()),
+		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[48].GetHeader()),
 	}
 	actualBlockchainInfo := blkfileMgrWrapper.blockfileMgr.getBlockchainInfo()
 	require.Equal(t, expectedBlockchainInfo, actualBlockchainInfo)
@@ -194,7 +195,7 @@ func TestRollbackWithNoIndexDir(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expectedBlkfilesInfoLastBlockNumber, actualBlkfilesInfo.lastPersistedBlock)
 	require.Equal(t, expectedBlkfilesInfoIsChainEmpty, actualBlkfilesInfo.noBlockFiles)
-	require.Equal(t, actualBlkfilesInfo.latestFileNumber, 4)
+	require.Equal(t, 4, actualBlkfilesInfo.latestFileNumber)
 
 	// 4. Close the blkfileMgrWrapper
 	env.provider.Close()
@@ -207,7 +208,7 @@ func TestRollbackWithNoIndexDir(t *testing.T) {
 
 	// 6. Rollback to block 2
 	indexConfig := &IndexConfig{AttrsToIndex: attrsToIndex}
-	err = Rollback(path, "testLedger", 2, indexConfig)
+	err = Rollback(path, "testLedger", 2, indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 	assertBlockStoreRollback(t, path, "testLedger", blocks, 2, 0, indexConfig)
 }
@@ -252,14 +253,14 @@ func TestDuplicateTxIDDuringRollback(t *testing.T) {
 	// 2. Check the BlockchainInfo
 	expectedBlockchainInfo := &common.BlockchainInfo{
 		Height:            4,
-		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[3].Header),
-		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[2].Header),
+		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[3].GetHeader()),
+		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[2].GetHeader()),
 	}
 	actualBlockchainInfo := blkfileMgrWrapper.blockfileMgr.getBlockchainInfo()
 	require.Equal(t, expectedBlockchainInfo, actualBlockchainInfo)
 
 	// 3. Retrieve tx
-	blkfileMgrWrapper.testGetTransactionByTxID("tx0", blocks[2].Data.Data[0], nil)
+	blkfileMgrWrapper.testGetTransactionByTxID("tx0", blocks[2].GetData().GetData()[0], nil)
 
 	// 4. Close the blkfileMgrWrapper
 	env.provider.Close()
@@ -267,7 +268,7 @@ func TestDuplicateTxIDDuringRollback(t *testing.T) {
 
 	// 5. Rollback to block 2
 	indexConfig := &IndexConfig{AttrsToIndex: attrsToIndex}
-	err := Rollback(path, "testLedger", 2, indexConfig)
+	err := Rollback(path, "testLedger", 2, indexConfig, db.GoLevelDB)
 	require.NoError(t, err)
 
 	env = newTestEnv(t, NewConf(path, maxFileSize))
@@ -276,26 +277,27 @@ func TestDuplicateTxIDDuringRollback(t *testing.T) {
 	// 6. Check the BlockchainInfo
 	expectedBlockchainInfo = &common.BlockchainInfo{
 		Height:            3,
-		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[2].Header),
-		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[1].Header),
+		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[2].GetHeader()),
+		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[1].GetHeader()),
 	}
 	actualBlockchainInfo = blkfileMgrWrapper.blockfileMgr.getBlockchainInfo()
 	require.Equal(t, expectedBlockchainInfo, actualBlockchainInfo)
 
 	// 8. Retrieve tx (should not have been deleted)
-	blkfileMgrWrapper.testGetTransactionByTxID("tx0", blocks[2].Data.Data[0], nil)
+	blkfileMgrWrapper.testGetTransactionByTxID("tx0", blocks[2].GetData().GetData()[0], nil)
 }
 
 func assertBlockStoreRollback(t *testing.T, path, ledgerID string, blocks []*common.Block,
-	rollbackedToBlkNum uint64, lastFileSuffixNum int, indexConfig *IndexConfig) {
+	rollbackedToBlkNum uint64, lastFileSuffixNum int, indexConfig *IndexConfig,
+) {
 	env := newTestEnvSelectiveIndexing(t, NewConf(path, 0), indexConfig.AttrsToIndex, &disabled.Provider{})
 	blkfileMgrWrapper := newTestBlockfileWrapper(env, ledgerID)
 
 	// 1. Check the BlockchainInfo after the rollback
 	expectedBlockchainInfo := &common.BlockchainInfo{
 		Height:            rollbackedToBlkNum + 1,
-		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[rollbackedToBlkNum].Header),
-		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[rollbackedToBlkNum-1].Header),
+		CurrentBlockHash:  protoutil.BlockHeaderHash(blocks[rollbackedToBlkNum].GetHeader()),
+		PreviousBlockHash: protoutil.BlockHeaderHash(blocks[rollbackedToBlkNum-1].GetHeader()),
 	}
 	actualBlockchainInfo := blkfileMgrWrapper.blockfileMgr.getBlockchainInfo()
 	require.Equal(t, expectedBlockchainInfo, actualBlockchainInfo)

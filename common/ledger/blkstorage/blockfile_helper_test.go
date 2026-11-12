@@ -28,7 +28,8 @@ func TestConstructBlockfilesInfo(t *testing.T) {
 	// constructBlockfilesInfo on an empty block folder should return blockfileInfo with noBlockFiles: true
 	blkfilesInfo, err := constructBlockfilesInfo(blkStoreDir)
 	require.NoError(t, err)
-	require.Equal(t,
+	require.Equal(
+		t,
 		&blockfilesInfo{
 			noBlockFiles:       true,
 			lastPersistedBlock: 0,
@@ -151,7 +152,7 @@ func TestGetLedgersBootstrappedFromSnapshot(t *testing.T) {
 
 		ledgersFromSnapshot, err := GetLedgersBootstrappedFromSnapshot(testDir)
 		require.NoError(t, err)
-		require.Equal(t, 0, len(ledgersFromSnapshot))
+		require.Empty(t, ledgersFromSnapshot)
 	})
 
 	t.Run("with_bootstrapping_snapshot_info_file", func(t *testing.T) {

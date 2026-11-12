@@ -9,7 +9,8 @@ package kvledger
 import (
 	"bufio"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"hash"
 	"io"
@@ -50,7 +51,7 @@ type SnapshotSignableMetadata struct {
 }
 
 func (m *SnapshotSignableMetadata) ToJSON() ([]byte, error) {
-	return json.MarshalIndent(m, "", jsonFileIndent)
+	return marshalIndentJSON(m)
 }
 
 type snapshotAdditionalMetadata struct {
@@ -59,7 +60,7 @@ type snapshotAdditionalMetadata struct {
 }
 
 func (m *snapshotAdditionalMetadata) ToJSON() ([]byte, error) {
-	return json.MarshalIndent(m, "", jsonFileIndent)
+	return marshalIndentJSON(m)
 }
 
 type SnapshotMetadata struct {
@@ -96,7 +97,7 @@ func (l *kvLedger) generateSnapshot() error {
 	if err != nil {
 		return err
 	}
-	lastBlockNum := bcInfo.Height - 1
+	lastBlockNum := bcInfo.GetHeight() - 1
 	snapshotTempDir, err := os.MkdirTemp(
 		SnapshotsTempDirPath(snapshotsRootDir),
 		fmt.Sprintf("%s-%d-", l.ledgerID, lastBlockNum),
@@ -157,7 +158,8 @@ func (l *kvLedger) generateSnapshotMetadataFiles(
 	dir string,
 	txIDsExportSummary,
 	configsHistoryExportSummary,
-	stateDBExportSummary map[string][]byte) error {
+	stateDBExportSummary map[string][]byte,
+) error {
 	// generate metadata file
 	filesAndHashes := map[string]string{}
 	for fileName, hashsum := range txIDsExportSummary {
@@ -180,9 +182,9 @@ func (l *kvLedger) generateSnapshotMetadataFiles(
 	}
 	signableMetadata := &SnapshotSignableMetadata{
 		ChannelName:            l.ledgerID,
-		LastBlockNumber:        bcInfo.Height - 1,
-		LastBlockHashInHex:     hex.EncodeToString(bcInfo.CurrentBlockHash),
-		PreviousBlockHashInHex: hex.EncodeToString(bcInfo.PreviousBlockHash),
+		LastBlockNumber:        bcInfo.GetHeight() - 1,
+		LastBlockHashInHex:     hex.EncodeToString(bcInfo.GetCurrentBlockHash()),
+		PreviousBlockHashInHex: hex.EncodeToString(bcInfo.GetPreviousBlockHash()),
 		FilesAndHashes:         filesAndHashes,
 		StateDBType:            stateDBType,
 	}
@@ -402,7 +404,8 @@ func verifyFileHash(dir, file string, expectedHashInHex string, hashProvider led
 	}
 	hashInHex := hex.EncodeToString(hashImpl.Sum(nil))
 	if hashInHex != expectedHashInHex {
-		return errors.Errorf("hash mismatch for file [%s]. Expected hash = [%s], Actual hash = [%s]",
+		return errors.Errorf(
+			"hash mismatch for file [%s]. Expected hash = [%s], Actual hash = [%s]",
 			file, expectedHashInHex, hashInHex,
 		)
 	}
@@ -425,11 +428,22 @@ func (c *mostRecentCollectionConfigFetcher) CollectionInfo(chaincodeName, collec
 		return nil, errors.WithMessage(err, "error while fetching most recent collection config")
 	}
 
-	for _, c := range explicitCollections.CollectionConfig.Config {
+	for _, c := range explicitCollections.CollectionConfig.GetConfig() {
 		stateCollectionConfig := c.GetStaticCollectionConfig()
-		if stateCollectionConfig.Name == collectionName {
+		if stateCollectionConfig.GetName() == collectionName {
 			return stateCollectionConfig, nil
 		}
 	}
 	return nil, nil
+}
+
+func marshalIndentJSON(v any) ([]byte, error) {
+	return json.Marshal(
+		v,
+		json.Deterministic(true),
+		jsontext.EscapeForHTML(true),
+		json.FormatNilSliceAsNull(true),
+		json.FormatNilMapAsNull(true),
+		jsontext.WithIndent(jsonFileIndent),
+	)
 }

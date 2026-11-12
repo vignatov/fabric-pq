@@ -8,6 +8,7 @@ package validation
 
 import (
 	crand "crypto/rand"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -41,29 +42,29 @@ func getChaincodeID() *peer.ChaincodeID {
 
 func createSignedTxTwoActions(proposal *peer.Proposal, signer msp.SigningIdentity, resps ...*peer.ProposalResponse) (*common.Envelope, error) {
 	if len(resps) == 0 {
-		return nil, fmt.Errorf("At least one proposal response is necessary")
+		return nil, errors.New("At least one proposal response is necessary")
 	}
 
 	// the original header
-	hdr, err := protoutil.UnmarshalHeader(proposal.Header)
+	hdr, err := protoutil.UnmarshalHeader(proposal.GetHeader())
 	if err != nil {
-		return nil, fmt.Errorf("Could not unmarshal the proposal header")
+		return nil, errors.New("Could not unmarshal the proposal header")
 	}
 
 	// the original payload
-	pPayl, err := protoutil.UnmarshalChaincodeProposalPayload(proposal.Payload)
+	pPayl, err := protoutil.UnmarshalChaincodeProposalPayload(proposal.GetPayload())
 	if err != nil {
-		return nil, fmt.Errorf("Could not unmarshal the proposal payload")
+		return nil, errors.New("Could not unmarshal the proposal payload")
 	}
 
 	// fill endorsements
 	endorsements := make([]*peer.Endorsement, len(resps))
 	for n, r := range resps {
-		endorsements[n] = r.Endorsement
+		endorsements[n] = r.GetEndorsement()
 	}
 
 	// create ChaincodeEndorsedAction
-	cea := &peer.ChaincodeEndorsedAction{ProposalResponsePayload: resps[0].Payload, Endorsements: endorsements}
+	cea := &peer.ChaincodeEndorsedAction{ProposalResponsePayload: resps[0].GetPayload(), Endorsements: endorsements}
 
 	// obtain the bytes of the proposal payload that will go to the transaction
 	propPayloadBytes, err := protoutil.GetBytesProposalPayloadForTx(pPayl)
@@ -79,7 +80,7 @@ func createSignedTxTwoActions(proposal *peer.Proposal, signer msp.SigningIdentit
 	}
 
 	// create a transaction
-	taa := &peer.TransactionAction{Header: hdr.SignatureHeader, Payload: capBytes}
+	taa := &peer.TransactionAction{Header: hdr.GetSignatureHeader(), Payload: capBytes}
 	taas := make([]*peer.TransactionAction, 2)
 	taas[0] = taa
 	taas[1] = taa
@@ -120,7 +121,7 @@ func TestGoodPath(t *testing.T) {
 	simRes := []byte("simulation_result")
 
 	// endorse it to get a proposal response
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response, simRes, nil, getChaincodeID(), signer)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response, simRes, nil, getChaincodeID(), signer)
 	if err != nil {
 		t.Fatalf("CreateProposalResponse failed, err %s", err)
 		return
@@ -142,13 +143,13 @@ func TestGoodPath(t *testing.T) {
 		return
 	}
 
-	txx, err := protoutil.UnmarshalTransaction(payl.Data)
+	txx, err := protoutil.UnmarshalTransaction(payl.GetData())
 	if err != nil {
 		t.Fatalf("GetTransaction failed, err %s", err)
 		return
 	}
 
-	act := txx.Actions
+	act := txx.GetActions()
 
 	// expect one single action
 	if len(act) != 1 {
@@ -164,7 +165,7 @@ func TestGoodPath(t *testing.T) {
 	}
 
 	// compare it to the original action and expect it to be equal
-	if string(simRes) != string(simResBack.Results) {
+	if string(simRes) != string(simResBack.GetResults()) {
 		t.Fatal("Simulation results are different")
 		return
 	}
@@ -182,7 +183,7 @@ func TestTXWithTwoActionsRejected(t *testing.T) {
 	simRes := []byte("simulation_result")
 
 	// endorse it to get a proposal response
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response, simRes, nil, &peer.ChaincodeID{Name: "somename", Version: "someversion"}, signer)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response, simRes, nil, &peer.ChaincodeID{Name: "somename", Version: "someversion"}, signer)
 	if err != nil {
 		t.Fatalf("CreateProposalResponse failed, err %s", err)
 		return
@@ -224,7 +225,7 @@ func TestBadTx(t *testing.T) {
 	simRes := []byte("simulation_result")
 
 	// endorse it to get a proposal response
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response, simRes, nil, getChaincodeID(), signer)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response, simRes, nil, getChaincodeID(), signer)
 	if err != nil {
 		t.Fatalf("CreateProposalResponse failed, err %s", err)
 		return
@@ -238,7 +239,7 @@ func TestBadTx(t *testing.T) {
 	}
 
 	// mess with the transaction payload
-	paylOrig := tx.Payload
+	paylOrig := tx.GetPayload()
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	require.NoError(t, err)
 	for i := range paylOrig {
@@ -246,7 +247,7 @@ func TestBadTx(t *testing.T) {
 		copy(paylCopy, paylOrig)
 		paylCopy[i] = byte(int(paylCopy[i]+1) % 255)
 		// validate the transaction it should fail
-		_, txResult := ValidateTransaction(&common.Envelope{Signature: tx.Signature, Payload: paylCopy}, cryptoProvider)
+		_, txResult := ValidateTransaction(&common.Envelope{Signature: tx.GetSignature(), Payload: paylCopy}, cryptoProvider)
 		if txResult == peer.TxValidationCode_VALID {
 			t.Fatal("ValidateTransaction should have failed")
 			return
@@ -261,7 +262,7 @@ func TestBadTx(t *testing.T) {
 	}
 
 	// mess with the transaction payload
-	corrupt(tx.Signature)
+	corrupt(tx.GetSignature())
 
 	// validate the transaction it should fail
 	_, txResult := ValidateTransaction(tx, cryptoProvider)
@@ -283,7 +284,7 @@ func Test2EndorsersAgree(t *testing.T) {
 	simRes1 := []byte("simulation_result")
 
 	// endorse it to get a proposal response
-	presp1, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response1, simRes1, nil, getChaincodeID(), signer)
+	presp1, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response1, simRes1, nil, getChaincodeID(), signer)
 	if err != nil {
 		t.Fatalf("CreateProposalResponse failed, err %s", err)
 		return
@@ -293,7 +294,7 @@ func Test2EndorsersAgree(t *testing.T) {
 	simRes2 := []byte("simulation_result")
 
 	// endorse it to get a proposal response
-	presp2, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response2, simRes2, nil, getChaincodeID(), signer)
+	presp2, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response2, simRes2, nil, getChaincodeID(), signer)
 	if err != nil {
 		t.Fatalf("CreateProposalResponse failed, err %s", err)
 		return
@@ -328,7 +329,7 @@ func Test2EndorsersDisagree(t *testing.T) {
 	simRes1 := []byte("simulation_result1")
 
 	// endorse it to get a proposal response
-	presp1, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response1, simRes1, nil, getChaincodeID(), signer)
+	presp1, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response1, simRes1, nil, getChaincodeID(), signer)
 	if err != nil {
 		t.Fatalf("CreateProposalResponse failed, err %s", err)
 		return
@@ -338,7 +339,7 @@ func Test2EndorsersDisagree(t *testing.T) {
 	simRes2 := []byte("simulation_result2")
 
 	// endorse it to get a proposal response
-	presp2, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, response2, simRes2, nil, getChaincodeID(), signer)
+	presp2, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), response2, simRes2, nil, getChaincodeID(), signer)
 	if err != nil {
 		t.Fatalf("CreateProposalResponse failed, err %s", err)
 		return
@@ -357,7 +358,7 @@ func TestInvocationsBadArgs(t *testing.T) {
 	require.NoError(t, err)
 
 	_, code := ValidateTransaction(nil, cryptoProvider)
-	require.Equal(t, code, peer.TxValidationCode_NIL_ENVELOPE)
+	require.Equal(t, peer.TxValidationCode_NIL_ENVELOPE, code)
 	err = validateEndorserTransaction(nil, nil)
 	require.Error(t, err)
 	err = validateConfigTransaction(nil, nil)

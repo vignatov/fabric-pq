@@ -497,7 +497,7 @@ func TestCommitPvtDataOfOldBlocksWithDeprioritization(t *testing.T) {
 
 			prioMissingData, err := store.getMissingData(elgPrioritizedMissingDataGroup, math.MaxUint64, 3)
 			require.NoError(t, err)
-			require.Equal(t, len(tt.expectedPrioMissingDataKeys), len(prioMissingData))
+			require.Len(t, prioMissingData, len(tt.expectedPrioMissingDataKeys))
 			for blkNum, txsMissingData := range tt.expectedPrioMissingDataKeys {
 				for txNum, expectedMissingData := range txsMissingData {
 					require.ElementsMatch(t, expectedMissingData, prioMissingData[blkNum][txNum])
@@ -506,7 +506,7 @@ func TestCommitPvtDataOfOldBlocksWithDeprioritization(t *testing.T) {
 
 			deprioMissingData, err := store.getMissingData(elgDeprioritizedMissingDataGroup, math.MaxUint64, 3)
 			require.NoError(t, err)
-			require.Equal(t, len(tt.deprioritizedList), len(deprioMissingData))
+			require.Len(t, deprioMissingData, len(tt.deprioritizedList))
 			for blkNum, txsMissingData := range tt.deprioritizedList {
 				for txNum, expectedMissingData := range txsMissingData {
 					require.ElementsMatch(t, expectedMissingData, deprioMissingData[blkNum][txNum])
@@ -591,12 +591,10 @@ func constructPvtDataForTest(t *testing.T, blockInfo []*blockTxPvtDataInfoForTes
 			for _, coll := range colls {
 				nsColls = append(nsColls, fmt.Sprintf("%s:%s", ns, coll))
 				p.dataKeys = append(p.dataKeys, &dataKey{
-					nsCollBlk: nsCollBlk{
-						ns:     ns,
-						coll:   coll,
-						blkNum: b.blkNum,
-					},
-					txNum: b.txNum,
+					ns:     ns,
+					coll:   coll,
+					blkNum: b.blkNum,
+					txNum:  b.txNum,
 				})
 			}
 		}
@@ -613,21 +611,20 @@ func constructPvtDataForTest(t *testing.T, blockInfo []*blockTxPvtDataInfoForTes
 			require.NoError(t, err)
 			for _, ns := range txPvtWS.NsPvtRwSet {
 				for _, coll := range ns.CollPvtRwSets {
-					for _, kv := range coll.KvRwSet.Writes {
+					for _, kv := range coll.KvRwSet.GetWrites() {
 						p.hashedIndexEntries = append(p.hashedIndexEntries, &hashedIndexEntry{
 							key: &hashedIndexKey{
 								ns:         ns.NameSpace,
 								coll:       coll.CollectionName,
-								pvtkeyHash: util.ComputeStringHash(kv.Key),
+								pvtkeyHash: util.ComputeStringHash(kv.GetKey()),
 								blkNum:     b.blkNum,
 								txNum:      b.txNum,
 							},
-							value: kv.Key,
+							value: kv.GetKey(),
 						})
 					}
 				}
 			}
-
 		}
 	}
 
@@ -637,7 +634,7 @@ func constructPvtDataForTest(t *testing.T, blockInfo []*blockTxPvtDataInfoForTes
 func assertMissingDataInfo(t *testing.T, store *Store, expected ledger.MissingPvtDataInfo, numRecentBlocks int) {
 	missingPvtDataInfo, err := store.GetMissingPvtDataInfoForMostRecentBlocks(math.MaxUint64, numRecentBlocks)
 	require.NoError(t, err)
-	require.Equal(t, len(expected), len(missingPvtDataInfo))
+	require.Len(t, missingPvtDataInfo, len(expected))
 	for blkNum, txsMissingData := range expected {
 		for txNum, expectedMissingData := range txsMissingData {
 			require.ElementsMatch(t, expectedMissingData, missingPvtDataInfo[blkNum][txNum])

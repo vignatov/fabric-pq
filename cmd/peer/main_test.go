@@ -14,13 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
 	"github.com/onsi/gomega/gexec"
+	"github.com/spf13/viper"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPluginLoadingFailure(t *testing.T) {
@@ -60,21 +58,21 @@ func TestPluginLoadingFailure(t *testing.T) {
 		t.Run(plugin, func(t *testing.T) {
 			cmd := exec.Command(peer, "node", "start")
 			cmd.Env = []string{
-				fmt.Sprintf("CORE_PEER_FILESYSTEMPATH=%s", tempDir),
-				fmt.Sprintf("CORE_LEDGER_SNAPSHOTS_ROOTDIR=%s", filepath.Join(tempDir, "snapshots")),
+				"CORE_PEER_FILESYSTEMPATH=" + tempDir,
+				"CORE_LEDGER_SNAPSHOTS_ROOTDIR=" + filepath.Join(tempDir, "snapshots"),
 				fmt.Sprintf("CORE_PEER_HANDLERS_%s_LIBRARY=%s", plugin, filepath.Join(parentDir, "internal/peer/testdata/invalid_plugins/invalidplugin.so")),
 				fmt.Sprintf("CORE_PEER_LISTENADDRESS=%s", peerListenAddress),
 				fmt.Sprintf("CORE_PEER_CHAINCODELISTENADDRESS=%s", chaincodeListenAddress),
-				fmt.Sprintf("CORE_PEER_MSPCONFIGPATH=%s", "msp"),
+				"CORE_PEER_MSPCONFIGPATH=msp",
 				fmt.Sprintf("CORE_OPERATIONS_LISTENADDRESS=%s", operationsListenAddress),
 				"CORE_OPERATIONS_TLS_ENABLED=false",
-				fmt.Sprintf("FABRIC_CFG_PATH=%s", filepath.Join(parentDir, "sampleconfig")),
+				"FABRIC_CFG_PATH=" + filepath.Join(parentDir, "sampleconfig"),
 			}
 			sess, err := gexec.Start(cmd, nil, nil)
 			gt.Expect(err).NotTo(HaveOccurred())
 			gt.Eventually(sess, time.Minute).Should(gexec.Exit(2))
 
-			gt.Expect(sess.Err).To(gbytes.Say(fmt.Sprintf("panic: Error opening plugin at path %s", filepath.Join(parentDir, "internal/peer/testdata/invalid_plugins/invalidplugin.so"))))
+			gt.Expect(sess.Err).To(gbytes.Say("panic: Error opening plugin at path " + filepath.Join(parentDir, "internal/peer/testdata/invalid_plugins/invalidplugin.so")))
 			gt.Expect(sess.Err).To(gbytes.Say("plugin.Open"))
 		})
 	}
@@ -92,6 +90,6 @@ func TestSetEnvConfig(t *testing.T) {
 
 	setEnvConfig(vp)
 
-	assert.Equal(t, "Apple", vp.Get("Fruit"))
-	assert.Equal(t, "", vp.Get("Color"))
+	require.Equal(t, "Apple", vp.Get("Fruit"))
+	require.Empty(t, vp.Get("Color"))
 }

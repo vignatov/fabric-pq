@@ -28,17 +28,17 @@ func processCDS(cds *pb.ChaincodeDeploymentSpec, tofs bool) (*CDSPackage, []byte
 
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("error creating bootBCCSP: %s", err)
+		return nil, nil, nil, fmt.Errorf("error creating bootBCCSP: %w", err)
 	}
 	ccpack := &CDSPackage{GetHasher: cryptoProvider}
 	cd, err := ccpack.InitFromBuffer(b)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("error owner creating package %s", err)
+		return nil, nil, nil, fmt.Errorf("error owner creating package %w", err)
 	}
 
 	if tofs {
 		if err = ccpack.PutChaincodeToFS(); err != nil {
-			return nil, nil, nil, fmt.Errorf("error putting package on the FS %s", err)
+			return nil, nil, nil, fmt.Errorf("error putting package on the FS %w", err)
 		}
 	}
 
@@ -134,7 +134,7 @@ func TestCDSGetCCPackage(t *testing.T) {
 		return
 	}
 
-	if cds2.ChaincodeSpec.ChaincodeId.Name != cds.ChaincodeSpec.ChaincodeId.Name || cds2.ChaincodeSpec.ChaincodeId.Version != cds.ChaincodeSpec.ChaincodeId.Version {
+	if cds2.GetChaincodeSpec().GetChaincodeId().GetName() != cds.GetChaincodeSpec().GetChaincodeId().GetName() || cds2.GetChaincodeSpec().GetChaincodeId().GetVersion() != cds.GetChaincodeSpec().GetChaincodeId().GetVersion() {
 		t.Fatalf("dep spec in CDS CCPackage does not match %v != %v", cds, cds2)
 		return
 	}
@@ -229,7 +229,7 @@ func TestValidateCCErrorPaths(t *testing.T) {
 	cpack.depSpec = &pb.ChaincodeDeploymentSpec{
 		CodePackage: []byte("code"),
 		ChaincodeSpec: &pb.ChaincodeSpec{
-			ChaincodeId: &pb.ChaincodeID{Name: ccdata.Name, Version: "0"},
+			ChaincodeId: &pb.ChaincodeID{Name: ccdata.GetName(), Version: "0"},
 		},
 	}
 	cpack.data = &CDSData{}
@@ -257,7 +257,7 @@ func TestValidateCCErrorPaths(t *testing.T) {
 	cpack.depSpec = &pb.ChaincodeDeploymentSpec{
 		CodePackage: []byte("code"),
 		ChaincodeSpec: &pb.ChaincodeSpec{
-			ChaincodeId: &pb.ChaincodeID{Name: ccdata.Name, Version: "0"},
+			ChaincodeId: &pb.ChaincodeID{Name: ccdata.GetName(), Version: "0"},
 		},
 	}
 	cpack.data = &CDSData{}

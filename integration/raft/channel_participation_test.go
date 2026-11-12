@@ -9,7 +9,7 @@ package raft
 import (
 	"crypto"
 	"crypto/x509"
-	"encoding/json"
+	"encoding/json/v2"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -26,6 +26,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/ledger/blockledger/fileledger"
+	"github.com/hyperledger/fabric/core/ledger"
 	conftx "github.com/hyperledger/fabric/integration/configtx"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/ordererclient"
@@ -149,8 +150,8 @@ var _ = Describe("ChannelParticipation", func() {
 			By("ensuring orderer3 completes onboarding successfully")
 			expectedChannelInfoPTFollower.Status = "active"
 			expectedChannelInfoPTFollower.Height = 3
-			Eventually(func() nwo.ChannelInfo {
-				return nwo.ListOne(network, orderer3, "participation-trophy")
+			Eventually(func() (nwo.ChannelInfo, error) {
+				return nwo.ListOneE(network, orderer3, "participation-trophy")
 			}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPTFollower))
 
 			By("adding orderer3 to the consenters set")
@@ -163,8 +164,8 @@ var _ = Describe("ChannelParticipation", func() {
 			By("ensuring orderer3 transitions from follower to consenter")
 			// config update above added a block
 			expectedChannelInfoPT.Height = 4
-			Eventually(func() nwo.ChannelInfo {
-				return nwo.ListOne(network, orderer3, "participation-trophy")
+			Eventually(func() (nwo.ChannelInfo, error) {
+				return nwo.ListOneE(network, orderer3, "participation-trophy")
 			}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPT))
 
 			By("submitting transaction to orderer3 to ensure it is active")
@@ -201,8 +202,8 @@ var _ = Describe("ChannelParticipation", func() {
 			computeSignSubmitConfigUpdate(network, orderer2, peer, c, "participation-trophy")
 
 			By("ensuring orderer1 transitions to a follower")
-			Eventually(func() nwo.ChannelInfo {
-				return nwo.ListOne(network, orderer1, "participation-trophy")
+			Eventually(func() (nwo.ChannelInfo, error) {
+				return nwo.ListOneE(network, orderer1, "participation-trophy")
 			}, network.EventuallyTimeout).Should(Equal(nwo.ChannelInfo{
 				Name:              "participation-trophy",
 				URL:               "/participation/v1/channels/participation-trophy",
@@ -220,8 +221,8 @@ var _ = Describe("ChannelParticipation", func() {
 			})
 
 			By("ensuring orderer1 pulls the latest block as a follower")
-			Eventually(func() nwo.ChannelInfo {
-				return nwo.ListOne(network, orderer1, "participation-trophy")
+			Eventually(func() (nwo.ChannelInfo, error) {
+				return nwo.ListOneE(network, orderer1, "participation-trophy")
 			}, network.EventuallyTimeout).Should(Equal(nwo.ChannelInfo{
 				Name:              "participation-trophy",
 				URL:               "/participation/v1/channels/participation-trophy",
@@ -247,7 +248,7 @@ var _ = Describe("ChannelParticipation", func() {
 			env := ordererclient.CreateBroadcastEnvelope(network, peer, "participation-trophy", []byte("hello"))
 			resp, err := ordererclient.Broadcast(network, orderer1, env)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.Status).To(Equal(common.Status_BAD_REQUEST))
+			Expect(resp.GetStatus()).To(Equal(common.Status_BAD_REQUEST))
 
 			By("listing all channels for orderer1")
 			cl = nwo.List(network, orderer1)
@@ -267,8 +268,8 @@ var _ = Describe("ChannelParticipation", func() {
 			By("ensuring orderer1 completes onboarding successfully")
 			expectedChannelInfoPTFollower.Status = "active"
 			expectedChannelInfoPTFollower.Height = 7
-			Eventually(func() nwo.ChannelInfo {
-				return nwo.ListOne(network, orderer1, "participation-trophy")
+			Eventually(func() (nwo.ChannelInfo, error) {
+				return nwo.ListOneE(network, orderer1, "participation-trophy")
 			}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPTFollower))
 
 			By("adding orderer1 to the consenters set")
@@ -286,8 +287,8 @@ var _ = Describe("ChannelParticipation", func() {
 				ConsensusRelation: "consenter",
 				Height:            8,
 			}
-			Eventually(func() nwo.ChannelInfo {
-				return nwo.ListOne(network, orderer1, "participation-trophy")
+			Eventually(func() (nwo.ChannelInfo, error) {
+				return nwo.ListOneE(network, orderer1, "participation-trophy")
 			}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPT))
 
 			submitPeerTxn(orderer1, peer, network, nwo.ChannelInfo{
@@ -408,8 +409,8 @@ var _ = Describe("ChannelParticipation", func() {
 			By("ensuring orderer3 completes onboarding successfully")
 			expectedChannelInfoConsenter.Status = "active"
 			expectedChannelInfoConsenter.Height = 5
-			Eventually(func() nwo.ChannelInfo {
-				return nwo.ListOne(network, orderer3, "participation-trophy")
+			Eventually(func() (nwo.ChannelInfo, error) {
+				return nwo.ListOneE(network, orderer3, "participation-trophy")
 			}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoConsenter))
 
 			submitPeerTxn(orderer3, peer, network, nwo.ChannelInfo{
@@ -510,8 +511,8 @@ var _ = Describe("ChannelParticipation", func() {
 				By("ensuring orderer3 completes onboarding successfully")
 				expectedChannelInfoPTFollower.Status = "active"
 				expectedChannelInfoPTFollower.Height = 4
-				Eventually(func() nwo.ChannelInfo {
-					return nwo.ListOne(network, orderer3, "participation-trophy")
+				Eventually(func() (nwo.ChannelInfo, error) {
+					return nwo.ListOneE(network, orderer3, "participation-trophy")
 				}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPTFollower))
 
 				By("adding orderer3 to the consenters set")
@@ -530,8 +531,8 @@ var _ = Describe("ChannelParticipation", func() {
 					ConsensusRelation: "consenter",
 					Height:            5,
 				}
-				Eventually(func() nwo.ChannelInfo {
-					return nwo.ListOne(network, orderer3, "participation-trophy")
+				Eventually(func() (nwo.ChannelInfo, error) {
+					return nwo.ListOneE(network, orderer3, "participation-trophy")
 				}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPT))
 
 				submitPeerTxn(orderer3, peer, network, nwo.ChannelInfo{
@@ -565,8 +566,8 @@ var _ = Describe("ChannelParticipation", func() {
 					ConsensusRelation: "follower",
 					Height:            4,
 				}
-				Eventually(func() nwo.ChannelInfo {
-					return nwo.ListOne(network, orderer3, "participation-trophy")
+				Eventually(func() (nwo.ChannelInfo, error) {
+					return nwo.ListOneE(network, orderer3, "participation-trophy")
 				}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPTFollower))
 			})
 
@@ -597,8 +598,8 @@ var _ = Describe("ChannelParticipation", func() {
 					ConsensusRelation: "follower",
 					Height:            4,
 				}
-				Eventually(func() nwo.ChannelInfo {
-					return nwo.ListOne(network, orderer3, "participation-trophy")
+				Eventually(func() (nwo.ChannelInfo, error) {
+					return nwo.ListOneE(network, orderer3, "participation-trophy")
 				}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPTFollower))
 			})
 
@@ -615,7 +616,7 @@ var _ = Describe("ChannelParticipation", func() {
 
 				// create the ledger and add the genesis block
 				ledgerDir := filepath.Join(network.OrdererDir(orderer3), "system")
-				lf, err := fileledger.New(ledgerDir, &disabled.Provider{})
+				lf, err := fileledger.New(ledgerDir, ledger.GoLevelDB, &disabled.Provider{})
 				Expect(err).NotTo(HaveOccurred())
 				ledger, err := lf.GetOrCreate("participation-trophy")
 				Expect(err).NotTo(HaveOccurred())
@@ -634,8 +635,8 @@ var _ = Describe("ChannelParticipation", func() {
 					ConsensusRelation: "follower",
 					Height:            4,
 				}
-				Eventually(func() nwo.ChannelInfo {
-					return nwo.ListOne(network, orderer3, "participation-trophy")
+				Eventually(func() (nwo.ChannelInfo, error) {
+					return nwo.ListOneE(network, orderer3, "participation-trophy")
 				}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPTFollower))
 
 				By("killing orderer3")
@@ -672,8 +673,8 @@ var _ = Describe("ChannelParticipation", func() {
 					ConsensusRelation: "follower",
 					Height:            6,
 				}
-				Eventually(func() nwo.ChannelInfo {
-					return nwo.ListOne(network, orderer3, "participation-trophy")
+				Eventually(func() (nwo.ChannelInfo, error) {
+					return nwo.ListOneE(network, orderer3, "participation-trophy")
 				}, network.EventuallyTimeout).Should(Equal(expectedChannelInfoPTFollower))
 			})
 		})
@@ -719,9 +720,11 @@ func submitTxn(o *nwo.Orderer, env *common.Envelope, n *nwo.Network, expectedCha
 	Eventually(broadcastTransactionFunc(n, o, env), n.EventuallyTimeout, time.Second).Should(Equal(common.Status_SUCCESS))
 
 	By("checking the channel info on " + o.Name)
-	Eventually(func() nwo.ChannelInfo {
-		return nwo.ListOne(n, o, expectedChannelInfo.Name)
-	}, n.EventuallyTimeout).Should(Equal(expectedChannelInfo))
+	Eventually(
+		func() (nwo.ChannelInfo, error) { return nwo.ListOneE(n, o, expectedChannelInfo.Name) },
+		n.EventuallyTimeout,
+		time.Second,
+	).Should(Equal(expectedChannelInfo))
 }
 
 func applicationChannelGenesisBlock(n *nwo.Network, orderers []*nwo.Orderer, peers []*nwo.Peer, channel string) *common.Block {
@@ -943,7 +946,7 @@ func broadcastTransactionFunc(n *nwo.Network, o *nwo.Orderer, env *common.Envelo
 	return func() common.Status {
 		resp, err := ordererclient.Broadcast(n, o, env)
 		Expect(err).NotTo(HaveOccurred())
-		return resp.Status
+		return resp.GetStatus()
 	}
 }
 
@@ -992,7 +995,7 @@ func channelparticipationJoinConnectFailure(n *nwo.Network, o *nwo.Orderer, chan
 	req := nwo.GenerateJoinRequest(url, channel, blockBytes)
 	authClient, _ := nwo.OrdererOperationalClients(n, o)
 
-	_, err = authClient.Do(req)
+	_, err = authClient.Do(req) //nolint:bodyclose
 	Expect(err).To(HaveOccurred())
 	Expect(err.Error()).To(ContainSubstring(expectedError))
 }
@@ -1080,7 +1083,7 @@ func createJoinBlockDefineSystemChannel(channelID string) *common.Block {
 			}),
 		},
 	}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 	protoutil.InitBlockMetadata(block)
 
 	return block

@@ -21,8 +21,8 @@ import (
 	"github.com/hyperledger/fabric/internal/fileutil"
 	"github.com/hyperledger/fabric/internal/ledgerutil/jsonrw"
 	"github.com/hyperledger/fabric/internal/ledgerutil/models"
+	"github.com/hyperledger/fabric/internal/pkg/txflags"
 	"github.com/hyperledger/fabric/protoutil"
-
 	"github.com/pkg/errors"
 )
 
@@ -37,7 +37,7 @@ const (
 // Tool was originally created to map list of divergent records from ledgerutil compare output to their respective transactions
 // to identify list of transactions that have potentially caused divergent state
 // Returns two block numbers that represent the starting and ending blocks of the transaction search range
-func IdentifyTxs(recPath string, fsPath string, outputDirLoc string) (uint64, uint64, error) {
+func IdentifyTxs(recPath string, fsPath string, dbType string, outputDirLoc string) (uint64, uint64, error) {
 	// Read diffRecord list from json
 	var records *models.DiffRecordList
 	records, err := jsonrw.LoadRecords(recPath)
@@ -49,7 +49,7 @@ func IdentifyTxs(recPath string, fsPath string, outputDirLoc string) (uint64, ui
 	}
 
 	// Output directory creation
-	outputDirName := fmt.Sprintf("%s_identified_transactions", records.Ledgerid)
+	outputDirName := records.Ledgerid + "_identified_transactions"
 	outputDirPath := filepath.Join(outputDirLoc, outputDirName)
 
 	empty, err := fileutil.CreateDirIfMissing(outputDirPath)
@@ -67,7 +67,7 @@ func IdentifyTxs(recPath string, fsPath string, outputDirLoc string) (uint64, ui
 	}
 
 	// Set up block store and block iterator in preparation for traversal
-	blockStoreProvider, err := getBlockStoreProvider(fsPath)
+	blockStoreProvider, err := getBlockStoreProvider(fsPath, dbType)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -251,7 +251,7 @@ func generateRecordsMap(records []*models.DiffRecord, outputDirPath string) (ckm
 }
 
 // Get a default block store provider to access the peer's block store
-func getBlockStoreProvider(fsPath string) (*blkstorage.BlockStoreProvider, error) {
+func getBlockStoreProvider(fsPath string, dbType string) (*blkstorage.BlockStoreProvider, error) {
 	// Format path to block store
 	blockStorePath := kvledger.BlockStorePath(filepath.Join(fsPath, ledgersDataDirName))
 	isEmpty, err := fileutil.DirEmpty(blockStorePath)
@@ -273,7 +273,7 @@ func getBlockStoreProvider(fsPath string) (*blkstorage.BlockStoreProvider, error
 	}
 	metricsProvider := &disabled.Provider{}
 	// Create new block store provider
-	blockStoreProvider, err := blkstorage.NewProvider(conf, indexConfig, metricsProvider)
+	blockStoreProvider, err := blkstorage.NewProvider(conf, indexConfig, metricsProvider, dbType)
 	if err != nil {
 		return nil, err
 	}
@@ -332,6 +332,7 @@ func findAndWriteTxs(blockStore *blkstorage.BlockStore, inputKeyMapWrapper *comp
 		}
 		block := nextBlock.(*common.Block)
 		blockData := block.GetData().GetData()
+		txFilter := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 
 		// Iterate through block transactions
 		for txIndexInt, envBytes := range blockData {
@@ -345,12 +346,12 @@ func findAndWriteTxs(blockStore *blkstorage.BlockStore, inputKeyMapWrapper *comp
 			if err != nil {
 				return 0, 0, err
 			}
-			ch, err := protoutil.UnmarshalChannelHeader(pl.Header.ChannelHeader)
+			ch, err := protoutil.UnmarshalChannelHeader(pl.GetHeader().GetChannelHeader())
 			if err != nil {
 				return 0, 0, err
 			}
 			// Check that transaction is endorser transaction, otherwise skip
-			txType := common.HeaderType(ch.Type)
+			txType := common.HeaderType(ch.GetType())
 			if txType == common.HeaderType_ENDORSER_TRANSACTION {
 				txID := ch.GetTxId()
 				// Extract write set from transaction then iterate through transaction write set
@@ -375,17 +376,12 @@ func findAndWriteTxs(blockStore *blkstorage.BlockStore, inputKeyMapWrapper *comp
 						ck := compKey{namespace: namespace, key: key}
 						_, exists := inputKeyMap[ck]
 						if exists {
-							// Get txValidationCode
-							txvCode, _, err := blockStore.RetrieveTxValidationCodeByTxID(txID)
-							if err != nil {
-								return 0, 0, err
-							}
 							// Create new transaction entry
 							entry := txEntry{
 								TxID:      txID,
 								BlockNum:  blockIndex,
 								TxNum:     txIndex,
-								TxVStatus: txvCode.String(),
+								TxVStatus: txFilter.Flag(txIndexInt).String(),
 								KeyWrite:  string(write.GetValue()),
 							}
 							// Capture new transaction entry
@@ -410,17 +406,12 @@ func findAndWriteTxs(blockStore *blkstorage.BlockStore, inputKeyMapWrapper *comp
 							ck := compKey{namespace: namespace, collection: collection.CollectionName, key: hex.EncodeToString(keyHash)}
 							_, exists := inputKeyMap[ck]
 							if exists {
-								// Get txValidationCode
-								txvCode, _, err := blockStore.RetrieveTxValidationCodeByTxID(txID)
-								if err != nil {
-									return 0, 0, err
-								}
 								// Create new transaction entry
 								entry := txEntry{
 									TxID:      txID,
 									BlockNum:  blockIndex,
 									TxNum:     txIndex,
-									TxVStatus: txvCode.String(),
+									TxVStatus: txFilter.Flag(txIndexInt).String(),
 									KeyWrite:  hex.EncodeToString(hashedWrite.GetValueHash()),
 								}
 								// Capture new transaction entry

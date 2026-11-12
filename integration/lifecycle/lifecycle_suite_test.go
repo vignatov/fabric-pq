@@ -8,9 +8,10 @@ package lifecycle
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"math"
+	"strconv"
 	"testing"
 	"time"
 
@@ -72,7 +73,7 @@ func QueryChaincode(n *nwo.Network, chaincodeName string, peer *nwo.Peer, initia
 	})
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	EventuallyWithOffset(1, sess, n.EventuallyTimeout).Should(gexec.Exit(0))
-	ExpectWithOffset(1, sess).To(gbytes.Say(fmt.Sprint(initialQueryResult)))
+	ExpectWithOffset(1, sess).To(gbytes.Say(strconv.Itoa(initialQueryResult)))
 }
 
 func RunQueryInvokeQuery(n *nwo.Network, orderer *nwo.Orderer, chaincodeName string, initialQueryResult int, peers ...*nwo.Peer) {
@@ -203,16 +204,16 @@ func CommitTx(nw *nwo.Network, tx *pcommon.Envelope, peer *nwo.Peer, dc pb.Deliv
 		if err != nil {
 			return err
 		}
-		fb, ok := resp.Type.(*pb.DeliverResponse_FilteredBlock)
+		fb, ok := resp.GetType().(*pb.DeliverResponse_FilteredBlock)
 		if !ok {
-			return fmt.Errorf("unexpected filtered block, received %T", resp.Type)
+			return fmt.Errorf("unexpected filtered block, received %T", resp.GetType())
 		}
-		for _, tx := range fb.FilteredBlock.FilteredTransactions {
-			if tx.Txid != txid {
+		for _, tx := range fb.FilteredBlock.GetFilteredTransactions() {
+			if tx.GetTxid() != txid {
 				continue
 			}
-			if tx.TxValidationCode != pb.TxValidationCode_VALID {
-				return fmt.Errorf("transaction invalidated with status (%s)", tx.TxValidationCode)
+			if tx.GetTxValidationCode() != pb.TxValidationCode_VALID {
+				return fmt.Errorf("transaction invalidated with status (%s)", tx.GetTxValidationCode())
 			}
 			return nil
 		}

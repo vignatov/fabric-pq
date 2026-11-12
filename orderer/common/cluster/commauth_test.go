@@ -43,7 +43,7 @@ type clusterServiceNode struct {
 func (csn *clusterServiceNode) resurrect() {
 	gRPCServer, err := comm_utils.NewGRPCServer(csn.bindAddress, csn.serverConfig)
 	if err != nil {
-		panic(fmt.Errorf("failed starting gRPC server: %v", err))
+		panic(fmt.Errorf("failed starting gRPC server: %w", err))
 	}
 	csn.server = gRPCServer
 	orderer.RegisterClusterNodeServiceServer(gRPCServer.Server(), csn.service)
@@ -109,7 +109,7 @@ func newClusterServiceNode(t *testing.T) *clusterServiceNode {
 	require.NoError(t, err)
 
 	if err != nil {
-		panic(fmt.Errorf("failed creating client certificate %v", err))
+		panic(fmt.Errorf("failed creating client certificate %w", err))
 	}
 	cli := &cluster.AuthCommMgr{
 		SendBufferSize: 1,
@@ -463,7 +463,7 @@ func TestBuildStepRespone(t *testing.T) {
 			if err != nil {
 				require.EqualError(t, err, tc.err)
 			} else {
-				require.EqualValues(t, tc.res, res)
+				require.Equal(t, tc.res, res)
 			}
 		})
 	}

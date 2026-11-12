@@ -563,7 +563,6 @@ func TestGetVersion(t *testing.T, dbProvider statedb.VersionedDBProvider) {
 
 	// check to see if the bulk optimizable interface is supported (couchdb)
 	if bulkdb, ok := db.(statedb.BulkOptimizable); ok {
-
 		// clear the cached versions, this will force a read when getVerion is called
 		bulkdb.ClearCachedVersions()
 
@@ -579,7 +578,6 @@ func TestGetVersion(t *testing.T, dbProvider statedb.VersionedDBProvider) {
 		resp, err := db.GetVersion("ns", "key3")
 		require.NoError(t, err)
 		require.Equal(t, version.NewHeight(1, 3), resp)
-
 	}
 }
 
@@ -966,7 +964,6 @@ func executeRangeQuery(t *testing.T, db statedb.VersionedDB, namespace, startKey
 		if err != nil {
 			return "", err
 		}
-
 	} else {
 		itr, err = db.GetStateRangeScanIteratorWithPagination(namespace, startKey, endKey, pageSize)
 		if err != nil {
@@ -1047,10 +1044,10 @@ func TestDataExportImport(
 				switch {
 				case i < 3:
 					binaryVal := fmt.Sprintf("value-for-key-%d-for-%s", i, ns)
-					sampleKV.VersionedValue.Value = []byte(binaryVal)
+					sampleKV.Value = []byte(binaryVal)
 				default:
 					jsonVal := fmt.Sprintf(`{"color":"blue,"marble":"m%d", "namespace":"%s"}`, i, ns)
-					sampleKV.VersionedValue.Value = []byte(jsonVal)
+					sampleKV.Value = []byte(jsonVal)
 				}
 
 				sampleData = append(sampleData, sampleKV)
@@ -1073,7 +1070,7 @@ func TestDataExportImport(
 	verifyExportImport := func(destDBName string, skipNamespaces stringset) {
 		fullScanItr, err := sourceDB.GetFullScanIterator(
 			func(ns string) bool {
-				return skipNamespaces.contains(ns)
+				return slices.Contains(skipNamespaces, ns)
 			},
 		)
 		require.NoError(t, err)
@@ -1163,14 +1160,10 @@ func CreateTestData(t *testing.T, db statedb.VersionedDB, ns string, numKeys int
 
 type stringset []string
 
-func (s stringset) contains(str string) bool {
-	return slices.Contains(s, str)
-}
-
 func (s stringset) minus(toMinus stringset) stringset {
 	var final stringset
 	for _, element := range s {
-		if toMinus.contains(element) {
+		if slices.Contains(toMinus, element) {
 			continue
 		}
 		final = append(final, element)

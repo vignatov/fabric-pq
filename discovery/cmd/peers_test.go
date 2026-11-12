@@ -34,7 +34,7 @@ func TestPeerCmd(t *testing.T) {
 	t.Run("no server supplied", func(t *testing.T) {
 		cmd.SetServer(nil)
 		err := cmd.Execute(common.Config{})
-		require.Equal(t, err.Error(), "no server specified")
+		require.EqualError(t, err, "no server specified")
 	})
 
 	t.Run("Server return error", func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestParsePeers(t *testing.T) {
 		buff.Reset()
 		err := parser.ParseResponse(channel, res)
 		require.NoError(t, err)
-		require.Equal(t, fmt.Sprintf("%s\n", expected), buff.String())
+		require.Equal(t, expected+"\n", buff.String())
 	}
 }
 

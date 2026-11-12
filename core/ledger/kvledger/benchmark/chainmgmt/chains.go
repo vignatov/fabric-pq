@@ -53,6 +53,7 @@ func newChainsMgr(mgrConf *ChainMgrConf, batchConf *BatchConf, initOp chainInitO
 		ledgermgmtInitializer.Config.StateDBConfig.CouchDB = &ledger.CouchDBConfig{
 			Address:            couchdbAddr,
 			RedoLogPath:        filepath.Join(dataDir, "couchdbRedologs"),
+			RedoLogDBType:      ledger.GoLevelDB,
 			UserCacheSizeMBs:   500,
 			MaxBatchUpdateSize: 500,
 		}
@@ -115,7 +116,7 @@ type Chain struct {
 func newChain(id ChainID, peerLedger ledger.PeerLedger, m *chainsMgr) *Chain {
 	bcInfo, err := peerLedger.GetBlockchainInfo()
 	panicOnError(err)
-	return &Chain{peerLedger, id, newBlkGenerator(m.batchConf, bcInfo.Height, bcInfo.CurrentBlockHash), m}
+	return &Chain{peerLedger, id, newBlkGenerator(m.batchConf, bcInfo.GetHeight(), bcInfo.GetCurrentBlockHash()), m}
 }
 
 func (c *Chain) startBlockPollingAndCommit() {
@@ -127,7 +128,7 @@ func (c *Chain) startBlockPollingAndCommit() {
 			if block == nil {
 				break
 			}
-			panicOnError(c.PeerLedger.CommitLegacy(
+			panicOnError(c.CommitLegacy(
 				&ledger.BlockAndPvtData{Block: block},
 				&ledger.CommitOptions{},
 			))
@@ -152,6 +153,6 @@ func (c *Chain) Commit(block *common.Block) {
 }
 
 func (c *Chain) close() {
-	c.PeerLedger.Close()
+	c.Close()
 	c.m.wg.Done()
 }

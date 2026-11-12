@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 func TestValidatePath(t *testing.T) {
 	platform := java.Platform{}
 
-	err := platform.ValidatePath(spec.ChaincodeId.Path)
+	err := platform.ValidatePath(spec.GetChaincodeId().GetPath())
 	require.NoError(t, err)
 }
 
@@ -100,7 +100,7 @@ func TestGetDeploymentPayload(t *testing.T) {
 
 	payload, err := platform.GetDeploymentPayload(chaincodePathFolderGradle)
 	require.NoError(t, err)
-	require.NotZero(t, len(payload))
+	require.NotEmpty(t, payload)
 
 	is := bytes.NewReader(payload)
 	gr, err := gzip.NewReader(is)
@@ -140,7 +140,7 @@ func TestGenerateDockerfile(t *testing.T) {
 	platform := java.Platform{}
 
 	spec.ChaincodeId.Path = chaincodePathFolderGradle
-	_, err := platform.GetDeploymentPayload(spec.ChaincodeId.Path)
+	_, err := platform.GetDeploymentPayload(spec.GetChaincodeId().GetPath())
 	if err != nil {
 		t.Fatalf("failed to get Java CC payload: %s", err)
 	}
@@ -161,7 +161,7 @@ func TestGenerateDockerfile(t *testing.T) {
 func TestDockerBuildOptions(t *testing.T) {
 	platform := java.Platform{}
 
-	opts, err := platform.DockerBuildOptions("path")
+	opts, err := platform.DockerBuildOptions("path", "", "", "")
 	require.NoError(t, err, "unexpected error from DockerBuildOptions")
 
 	expectedOpts := util.DockerBuildOptions{

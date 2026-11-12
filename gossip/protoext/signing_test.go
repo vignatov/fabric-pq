@@ -20,7 +20,7 @@ import (
 
 func TestToGossipMessageNilEnvelope(t *testing.T) {
 	memReq := &gossip.MembershipRequest{}
-	_, err := protoext.EnvelopeToGossipMessage(memReq.SelfInformation)
+	_, err := protoext.EnvelopeToGossipMessage(memReq.GetSelfInformation())
 	require.EqualError(t, err, "nil envelope")
 }
 
@@ -286,7 +286,7 @@ func TestSignedGossipMessageSign(t *testing.T) {
 	signedMsg, _ := msg.Sign(idSigner)
 
 	// Since checking the identity signer, signature will be same as the payload
-	require.Equal(t, signedMsg.Payload, signedMsg.Signature)
+	require.Equal(t, signedMsg.GetPayload(), signedMsg.GetSignature())
 
 	env, err := msg.Sign(errSigner)
 	require.Error(t, err)
@@ -329,7 +329,7 @@ func TestSignedGossipMessage_Verify(t *testing.T) {
 		return nil
 	}
 	res := msg.Verify(peerID, verifier)
-	require.Nil(t, res)
+	require.NoError(t, res)
 
 	msg = &protoext.SignedGossipMessage{
 		GossipMessage: &gossip.GossipMessage{
@@ -348,12 +348,12 @@ func TestSignedGossipMessage_Verify(t *testing.T) {
 	require.Error(t, res)
 
 	msg.Envelope = env
-	payload := msg.Envelope.Payload
-	msg.Envelope.Payload = nil
+	payload := msg.GetPayload()
+	msg.Payload = nil
 	res = msg.Verify(peerID, verifier)
 	require.Error(t, res)
 
-	msg.Envelope.Payload = payload
+	msg.Payload = payload
 	sig := msg.Signature
 	msg.Signature = nil
 	res = msg.Verify(peerID, verifier)
@@ -404,8 +404,8 @@ func TestEnvelope_SignSecret(t *testing.T) {
 		},
 	})
 
-	require.NotNil(t, env.SecretEnvelope)
-	require.Equal(t, protoext.InternalEndpoint(env.SecretEnvelope), "localhost:5050")
+	require.NotNil(t, env.GetSecretEnvelope())
+	require.Equal(t, "localhost:5050", protoext.InternalEndpoint(env.GetSecretEnvelope()))
 }
 
 func TestInternalEndpoint(t *testing.T) {
@@ -419,7 +419,8 @@ func TestInternalEndpoint(t *testing.T) {
 				Content: &gossip.Secret_InternalEndpoint{
 					InternalEndpoint: "foo",
 				},
-			}),
+			},
+		),
 	}))
 }
 

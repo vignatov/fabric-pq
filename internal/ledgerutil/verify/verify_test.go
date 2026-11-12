@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/hyperledger/fabric/common/ledger/testutil"
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/internal/ledgerutil/jsonrw"
 	"github.com/stretchr/testify/require"
 )
@@ -81,7 +82,7 @@ func TestVerify(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			anyError, err := VerifyLedger(fsDir, outputDir)
+			anyError, err := VerifyLedger(fsDir, ledger.GoLevelDB, outputDir)
 
 			if testCase.errorExpected {
 				require.Error(t, err)
@@ -93,14 +94,14 @@ func TestVerify(t *testing.T) {
 				}
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, anyError, testCase.expectedReturnValue)
+				require.Equal(t, testCase.expectedReturnValue, anyError)
 
 				actualResult, err := jsonrw.OutputFileToString(VerificationResultFile, outputDir)
 				require.NoError(t, err)
 				expectedResult, err := jsonrw.OutputFileToString(testCase.expectedResultFile, SampleResultDir)
 				require.NoError(t, err)
 
-				require.Equal(t, actualResult, expectedResult)
+				require.JSONEq(t, expectedResult, actualResult)
 			}
 		})
 	}

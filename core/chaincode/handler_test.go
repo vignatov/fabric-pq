@@ -12,6 +12,7 @@ import (
 
 	"github.com/hyperledger/fabric-lib-go/common/metrics/metricsfakes"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	"github.com/hyperledger/fabric/common/policydsl"
 	"github.com/hyperledger/fabric/common/util"
 	ar "github.com/hyperledger/fabric/core/aclmgmt/resources"
 	"github.com/hyperledger/fabric/core/chaincode"
@@ -469,9 +470,9 @@ var _ = Describe("Handler", func() {
 
 						Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
 						msg := fakeChatStream.SendArgsForCall(0)
-						Expect(msg.Type).To(Equal(pb.ChaincodeMessage_ERROR))
-						Expect(msg.Txid).To(Equal("tx-id"))
-						Expect(string(msg.Payload)).To(HavePrefix("INVOKE_CHAINCODE failed: transaction ID: tx-id"))
+						Expect(msg.GetType()).To(Equal(pb.ChaincodeMessage_ERROR))
+						Expect(msg.GetTxid()).To(Equal("tx-id"))
+						Expect(string(msg.GetPayload())).To(HavePrefix("INVOKE_CHAINCODE failed: transaction ID: tx-id"))
 					})
 				})
 			})
@@ -493,6 +494,43 @@ var _ = Describe("Handler", func() {
 					Txid:      "tx-id",
 					ChannelId: "channel-id",
 				}))
+			})
+		})
+
+		// Regression test for https://github.com/hyperledger/fabric/issues/5048
+		// When a transaction times out during a range query, the timeout path closes
+		// the LevelDB iterator while the handler goroutine is still using it, causing
+		// a nil pointer dereference panic. The recover() in HandleTransaction prevents
+		// this from crashing the peer.
+		Context("when the delegate panics", func() {
+			It("recovers and sends an error response", func() {
+				panickingDelegate := func(msg *pb.ChaincodeMessage, txContext *chaincode.TransactionContext) (*pb.ChaincodeMessage, error) {
+					panic("simulated nil pointer dereference from closed iterator")
+				}
+
+				Expect(func() {
+					handler.HandleTransaction(incomingMessage, panickingDelegate)
+				}).NotTo(Panic())
+
+				Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
+				msg := fakeChatStream.SendArgsForCall(0)
+				Expect(msg.GetType()).To(Equal(pb.ChaincodeMessage_ERROR))
+				Expect(msg.GetTxid()).To(Equal("tx-id"))
+				Expect(msg.GetChannelId()).To(Equal("channel-id"))
+				Expect(string(msg.GetPayload())).To(ContainSubstring("panic during execution"))
+			})
+
+			It("deregisters the transaction ID", func() {
+				panickingDelegate := func(msg *pb.ChaincodeMessage, txContext *chaincode.TransactionContext) (*pb.ChaincodeMessage, error) {
+					panic("simulated panic")
+				}
+
+				handler.HandleTransaction(incomingMessage, panickingDelegate)
+
+				Expect(fakeTransactionRegistry.RemoveCallCount()).To(Equal(1))
+				channelID, transactionID := fakeTransactionRegistry.RemoveArgsForCall(0)
+				Expect(channelID).To(Equal("channel-id"))
+				Expect(transactionID).To(Equal("tx-id"))
 			})
 		})
 	})
@@ -706,6 +744,49 @@ var _ = Describe("Handler", func() {
 				_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
 				Expect(err).To(Not(BeNil()))
 				Expect(err.Error()).To(HavePrefix("unmarshal failed:"))
+			})
+		})
+
+		Context("when the metadata is a validation parameter", func() {
+			var policyBytes []byte
+
+			BeforeEach(func() {
+				policyBytes = []byte("not-a-signature-policy-envelope")
+			})
+
+			JustBeforeEach(func() {
+				request.Metadata = &pb.StateMetadata{
+					Metakey: pb.MetaDataKeys_VALIDATION_PARAMETER.String(),
+					Value:   policyBytes,
+				}
+				payload, err := proto.Marshal(request)
+				Expect(err).NotTo(HaveOccurred())
+				incomingMessage.Payload = payload
+			})
+
+			It("returns an error when the value is not a signature policy envelope", func() {
+				_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
+				Expect(err).To(MatchError(ContainSubstring("invalid validation parameter for key [put-state-key]: error unmarshalling SignaturePolicyEnvelope")))
+				Expect(fakeTxSimulator.SetStateMetadataCallCount()).To(Equal(0))
+			})
+
+			Context("when the value is a signature policy envelope", func() {
+				BeforeEach(func() {
+					var err error
+					policyBytes, err = proto.Marshal(policydsl.SignedByMspMember("Org1MSP"))
+					Expect(err).NotTo(HaveOccurred())
+				})
+
+				It("calls SetStateMetadata on the transaction simulator", func() {
+					_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
+					Expect(err).NotTo(HaveOccurred())
+
+					Expect(fakeTxSimulator.SetStateMetadataCallCount()).To(Equal(1))
+					_, _, value := fakeTxSimulator.SetStateMetadataArgsForCall(0)
+					Expect(value).To(Equal(map[string][]byte{
+						pb.MetaDataKeys_VALIDATION_PARAMETER.String(): policyBytes,
+					}))
+				})
 			})
 		})
 
@@ -2912,7 +2993,7 @@ var _ = Describe("Handler", func() {
 			Consistently(fakeChatStream.SendCallCount).Should(Equal(1))
 			msg := fakeChatStream.SendArgsForCall(0)
 			Expect(msg).To(ProtoEqual(expectedMessage))
-			Expect(msg.Proposal).To(ProtoEqual(expectedSignedProp))
+			Expect(msg.GetProposal()).To(ProtoEqual(expectedSignedProp))
 		})
 
 		It("waits for the chaincode to respond", func() {
@@ -2984,7 +3065,7 @@ var _ = Describe("Handler", func() {
 				Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
 				msg := fakeChatStream.SendArgsForCall(0)
 				Expect(msg).NotTo(BeNil())
-				Expect(msg.Proposal).To(BeNil())
+				Expect(msg.GetProposal()).To(BeNil())
 			})
 		})
 
@@ -3193,7 +3274,7 @@ var _ = Describe("Handler", func() {
 				Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
 				Consistently(fakeChatStream.SendCallCount).Should(Equal(1))
 				msg := fakeChatStream.SendArgsForCall(0)
-				Expect(msg.Type).To(Equal(pb.ChaincodeMessage_REGISTERED))
+				Expect(msg.GetType()).To(Equal(pb.ChaincodeMessage_REGISTERED))
 			})
 
 			It("remains in created state", func() {
@@ -3304,7 +3385,7 @@ var _ = Describe("Handler", func() {
 
 				for i := range 5 {
 					m := fakeChatStream.SendArgsForCall(i)
-					Expect(m.Type).To(Equal(pb.ChaincodeMessage_KEEPALIVE))
+					Expect(m.GetType()).To(Equal(pb.ChaincodeMessage_KEEPALIVE))
 				}
 			})
 
@@ -3458,7 +3539,8 @@ var _ = Describe("Handler", func() {
 		})
 	})
 
-	DescribeTable("Handler State",
+	DescribeTable(
+		"Handler State",
 		func(state chaincode.State, strval string) {
 			Expect(state.String()).To(Equal(strval))
 		},

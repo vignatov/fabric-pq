@@ -107,8 +107,11 @@ func getStepStream(t *testing.T) (*comm_utils.GRPCServer, orderer.ClusterNodeSer
 }
 
 func TestClusterServiceStep(t *testing.T) {
+	t.Parallel()
 	server, stepStream := getStepStream(t)
-	defer server.Stop()
+	t.Cleanup(func() {
+		server.Stop()
+	})
 
 	t.Run("Create authenticated stream successfully", func(t *testing.T) {
 		t.Parallel()
@@ -140,12 +143,12 @@ func TestClusterServiceStep(t *testing.T) {
 		clientKeyPair, _ := ca.NewClientCertKeyPair()
 		signer := signingIdentity{clientKeyPair.Signer}
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
 			SessionBinding: sessionBinding,
-			Channel:        authRequest.Channel,
+			Channel:        authRequest.GetChannel(),
 		})
 
 		sig1, err := signer.Sign(asnSignFields)
@@ -165,9 +168,9 @@ func TestClusterServiceStep(t *testing.T) {
 		stream.On("Recv").Return(nodeConsensusRequest, nil).Once()
 		stream.On("Recv").Return(nil, io.EOF).Once()
 
-		handler.On("OnConsensus", authRequest.Channel, authRequest.FromId, mock.Anything).Return(nil).Once()
+		handler.On("OnConsensus", authRequest.GetChannel(), authRequest.GetFromId(), mock.Anything).Return(nil).Once()
 
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair.Cert}, {Id: uint32(authRequest.ToId), Identity: svc.NodeIdentity}})
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair.Cert}, {Id: uint32(authRequest.GetToId()), Identity: svc.NodeIdentity}})
 		err = svc.Step(stream)
 		require.NoError(t, err)
 	})
@@ -261,12 +264,12 @@ func TestClusterServiceStep(t *testing.T) {
 		require.NoError(t, err)
 
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
 			SessionBinding: sessionBinding,
-			Channel:        authRequest.Channel,
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair, _ := ca.NewClientCertKeyPair()
@@ -291,7 +294,7 @@ func TestClusterServiceStep(t *testing.T) {
 		stream.On("Recv").Return(nodeInvalidRequest, nil).Once()
 		stream.On("Recv").Return(nil, io.EOF).Once()
 
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair.Cert}, {Id: uint32(authRequest.ToId), Identity: svc.NodeIdentity}})
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair.Cert}, {Id: uint32(authRequest.GetToId()), Identity: svc.NodeIdentity}})
 		err = svc.Step(stream)
 		require.EqualError(t, err, "Message is neither a Submit nor Consensus request")
 	})
@@ -300,7 +303,9 @@ func TestClusterServiceStep(t *testing.T) {
 func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 	t.Parallel()
 	server, stepStream := getStepStream(t)
-	defer server.Stop()
+	t.Cleanup(func() {
+		server.Stop()
+	})
 
 	t.Run("Verify auth request completes successfully", func(t *testing.T) {
 		t.Parallel()
@@ -329,12 +334,12 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		authRequest.SessionBinding, _ = cluster.GetTLSSessionBinding(stepStream.Context(), bindingHash)
 
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
-			SessionBinding: authRequest.SessionBinding,
-			Channel:        authRequest.Channel,
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+			SessionBinding: authRequest.GetSessionBinding(),
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair1, _ := ca.NewClientCertKeyPair()
@@ -349,7 +354,7 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 				NodeAuthrequest: authRequest,
 			},
 		}
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair1.Cert}, {Id: uint32(authRequest.ToId), Identity: svc.NodeIdentity}})
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair1.Cert}, {Id: uint32(authRequest.GetToId()), Identity: svc.NodeIdentity}})
 		_, err = svc.VerifyAuthRequest(stream, stepRequest)
 		require.NoError(t, err)
 	})
@@ -371,7 +376,7 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		stream := &mocks.ClusterStepStream{}
 		stream.On("Context").Return(context.Background())
 		clientKeyPair1, _ := ca.NewClientCertKeyPair()
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair1.Cert}})
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair1.Cert}})
 		stepRequest := &orderer.ClusterNodeServiceStepRequest{
 			Payload: &orderer.ClusterNodeServiceStepRequest_NodeAuthrequest{
 				NodeAuthrequest: authRequest,
@@ -406,12 +411,12 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		stream.On("Context").Return(stepStream.Context())
 		authRequest.SessionBinding = []byte{}
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
-			SessionBinding: authRequest.SessionBinding,
-			Channel:        authRequest.Channel,
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+			SessionBinding: authRequest.GetSessionBinding(),
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair1, _ := ca.NewClientCertKeyPair()
@@ -420,7 +425,7 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		require.NoError(t, err)
 
 		authRequest.Signature = sig
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair1.Cert}})
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair1.Cert}})
 
 		_, err = svc.VerifyAuthRequest(stream, stepRequest)
 		require.EqualError(t, err, "session binding mismatch")
@@ -446,12 +451,12 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		bindingHash := cluster.GetSessionBindingHash(authRequest)
 		authRequest.SessionBinding, _ = cluster.GetTLSSessionBinding(stepStream.Context(), bindingHash)
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
-			SessionBinding: authRequest.SessionBinding,
-			Channel:        authRequest.Channel,
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+			SessionBinding: authRequest.GetSessionBinding(),
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair1, _ := ca.NewClientCertKeyPair()
@@ -466,7 +471,7 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 			},
 		}
 
-		delete(svc.MembershipByChannel, authRequest.Channel)
+		delete(svc.MembershipByChannel, authRequest.GetChannel())
 
 		_, err = svc.VerifyAuthRequest(stream, stepRequest)
 		require.EqualError(t, err, "channel mychannel not found in config")
@@ -497,12 +502,12 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		bindingHash := cluster.GetSessionBindingHash(authRequest)
 		authRequest.SessionBinding, _ = cluster.GetTLSSessionBinding(stepStream.Context(), bindingHash)
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
-			SessionBinding: authRequest.SessionBinding,
-			Channel:        authRequest.Channel,
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+			SessionBinding: authRequest.GetSessionBinding(),
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair1, _ := ca.NewClientCertKeyPair()
@@ -512,8 +517,8 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 
 		authRequest.Signature = sig
 
-		delete(svc.MembershipByChannel, authRequest.Channel)
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.ToId), Identity: clientKeyPair1.Cert}})
+		delete(svc.MembershipByChannel, authRequest.GetChannel())
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetToId()), Identity: clientKeyPair1.Cert}})
 
 		_, err = svc.VerifyAuthRequest(stream, stepRequest)
 		require.EqualError(t, err, "node 1 is not member of channel mychannel")
@@ -542,12 +547,12 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		authRequest.SessionBinding, _ = cluster.GetTLSSessionBinding(stepStream.Context(), bindingHash)
 
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
-			SessionBinding: authRequest.SessionBinding,
-			Channel:        authRequest.Channel,
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+			SessionBinding: authRequest.GetSessionBinding(),
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair1, _ := ca.NewClientCertKeyPair()
@@ -563,7 +568,7 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		}
 
 		clientKeyPair2, _ := ca.NewClientCertKeyPair()
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair2.Cert}, {Id: uint32(authRequest.ToId), Identity: clientKeyPair2.Cert}})
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair2.Cert}, {Id: uint32(authRequest.GetToId()), Identity: clientKeyPair2.Cert}})
 		_, err = svc.VerifyAuthRequest(stream, stepRequest)
 		require.EqualError(t, err, "node id mismatch")
 	})
@@ -595,12 +600,12 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		authRequest.SessionBinding, _ = cluster.GetTLSSessionBinding(stepStream.Context(), bindingHash)
 
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
-			SessionBinding: authRequest.SessionBinding,
-			Channel:        authRequest.Channel,
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+			SessionBinding: authRequest.GetSessionBinding(),
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair1, _ := ca.NewClientCertKeyPair()
@@ -619,7 +624,7 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		}
 
 		clientKeyPair2, _ := ca.NewClientCertKeyPair()
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair2.Cert}, {Id: uint32(authRequest.ToId), Identity: svc.NodeIdentity}})
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair2.Cert}, {Id: uint32(authRequest.GetToId()), Identity: svc.NodeIdentity}})
 		_, err = svc.VerifyAuthRequest(stream, stepRequest)
 		require.EqualError(t, err, "signature mismatch: signature invalid")
 	})
@@ -667,12 +672,12 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		authRequest.SessionBinding, _ = cluster.GetTLSSessionBinding(stepStream.Context(), bindingHash)
 
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
-			SessionBinding: authRequest.SessionBinding,
-			Channel:        authRequest.Channel,
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+			SessionBinding: authRequest.GetSessionBinding(),
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair, _ := ca.NewClientCertKeyPair()
@@ -693,9 +698,9 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		// Configure the service with a certificate that has different public key than NodeIdentity
 		// The key test is that toIdentity (differentCert) has different public key from NodeIdentity (serverKeyPair.Cert)
 		// Both bytes.Equal and compareCertPublicKeys should fail
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{
-			{Id: uint32(authRequest.FromId), Identity: clientKeyPair.Cert},
-			{Id: uint32(authRequest.ToId), Identity: differentCert}, // Different bytes, different public key
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{
+			{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair.Cert},
+			{Id: uint32(authRequest.GetToId()), Identity: differentCert}, // Different bytes, different public key
 		})
 
 		// This should fail because compareCertPublicKeys will return false for different public keys
@@ -730,12 +735,12 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		authRequest.SessionBinding, _ = cluster.GetTLSSessionBinding(stepStream.Context(), bindingHash)
 
 		asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-			Version:        int64(authRequest.Version),
-			Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-			FromId:         strconv.FormatUint(authRequest.FromId, 10),
-			ToId:           strconv.FormatUint(authRequest.ToId, 10),
-			SessionBinding: authRequest.SessionBinding,
-			Channel:        authRequest.Channel,
+			Version:        int64(authRequest.GetVersion()),
+			Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+			FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+			ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+			SessionBinding: authRequest.GetSessionBinding(),
+			Channel:        authRequest.GetChannel(),
 		})
 
 		clientKeyPair, _ := ca.NewClientCertKeyPair()
@@ -754,9 +759,9 @@ func TestClusterServiceVerifyAuthRequest(t *testing.T) {
 		}
 
 		// Configure the service with valid certificate for toIdentity
-		svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{
-			{Id: uint32(authRequest.FromId), Identity: clientKeyPair.Cert},
-			{Id: uint32(authRequest.ToId), Identity: clientKeyPair.Cert}, // Valid certificate
+		svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{
+			{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair.Cert},
+			{Id: uint32(authRequest.GetToId()), Identity: clientKeyPair.Cert}, // Valid certificate
 		})
 
 		// This should fail due to certificate parsing error when comparing with NodeIdentity (invalid cert)
@@ -781,9 +786,9 @@ func TestConfigureNodeCerts(t *testing.T) {
 		clientKeyPair1.Cert, err = crypto.SanitizeX509Cert(clientKeyPair1.Cert)
 		require.NoError(t, err)
 
-		err = svc.ConfigureNodeCerts("mychannel", []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair1.Cert}})
+		err = svc.ConfigureNodeCerts("mychannel", []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair1.Cert}})
 		require.NoError(t, err)
-		require.Equal(t, clientKeyPair1.Cert, svc.MembershipByChannel["mychannel"].MemberMapping[authRequest.FromId])
+		require.Equal(t, clientKeyPair1.Cert, svc.MembershipByChannel["mychannel"].MemberMapping[authRequest.GetFromId()])
 	})
 
 	t.Run("Updates entries when existing channel members provided", func(t *testing.T) {
@@ -796,17 +801,17 @@ func TestConfigureNodeCerts(t *testing.T) {
 		clientKeyPair1.Cert, err = crypto.SanitizeX509Cert(clientKeyPair1.Cert)
 		require.NoError(t, err)
 
-		err = svc.ConfigureNodeCerts("mychannel", []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair1.Cert}})
+		err = svc.ConfigureNodeCerts("mychannel", []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair1.Cert}})
 		require.NoError(t, err)
-		require.Equal(t, clientKeyPair1.Cert, svc.MembershipByChannel["mychannel"].MemberMapping[authRequest.FromId])
+		require.Equal(t, clientKeyPair1.Cert, svc.MembershipByChannel["mychannel"].MemberMapping[authRequest.GetFromId()])
 
 		clientKeyPair2, _ := ca.NewClientCertKeyPair()
 		clientKeyPair2.Cert, err = crypto.SanitizeX509Cert(clientKeyPair2.Cert)
 		require.NoError(t, err)
 
-		err = svc.ConfigureNodeCerts("mychannel", []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair2.Cert}})
+		err = svc.ConfigureNodeCerts("mychannel", []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair2.Cert}})
 		require.NoError(t, err)
-		require.Equal(t, clientKeyPair2.Cert, svc.MembershipByChannel["mychannel"].MemberMapping[authRequest.FromId])
+		require.Equal(t, clientKeyPair2.Cert, svc.MembershipByChannel["mychannel"].MemberMapping[authRequest.GetFromId()])
 	})
 }
 
@@ -844,12 +849,12 @@ func TestExpirationWarning(t *testing.T) {
 	authRequest.SessionBinding, _ = cluster.GetTLSSessionBinding(stepStream.Context(), bindingHash)
 
 	asnSignFields, _ := asn1.Marshal(cluster.AuthRequestSignature{
-		Version:        int64(authRequest.Version),
-		Timestamp:      cluster.EncodeTimestamp(authRequest.Timestamp),
-		FromId:         strconv.FormatUint(authRequest.FromId, 10),
-		ToId:           strconv.FormatUint(authRequest.ToId, 10),
-		SessionBinding: authRequest.SessionBinding,
-		Channel:        authRequest.Channel,
+		Version:        int64(authRequest.GetVersion()),
+		Timestamp:      cluster.EncodeTimestamp(authRequest.GetTimestamp()),
+		FromId:         strconv.FormatUint(authRequest.GetFromId(), 10),
+		ToId:           strconv.FormatUint(authRequest.GetToId(), 10),
+		SessionBinding: authRequest.GetSessionBinding(),
+		Channel:        authRequest.GetChannel(),
 	})
 
 	clientKeyPair1, _ := ca.NewClientCertKeyPair()
@@ -872,9 +877,9 @@ func TestExpirationWarning(t *testing.T) {
 	stream.On("Recv").Return(nodeConsensusRequest, nil).Once()
 	stream.On("Recv").Return(nil, io.EOF).Once()
 
-	handler.On("OnConsensus", authRequest.Channel, authRequest.FromId, mock.Anything).Return(nil).Once()
+	handler.On("OnConsensus", authRequest.GetChannel(), authRequest.GetFromId(), mock.Anything).Return(nil).Once()
 
-	svc.ConfigureNodeCerts(authRequest.Channel, []*common.Consenter{{Id: uint32(authRequest.FromId), Identity: clientKeyPair1.Cert}, {Id: uint32(authRequest.ToId), Identity: svc.NodeIdentity}})
+	svc.ConfigureNodeCerts(authRequest.GetChannel(), []*common.Consenter{{Id: uint32(authRequest.GetFromId()), Identity: clientKeyPair1.Cert}, {Id: uint32(authRequest.GetToId()), Identity: svc.NodeIdentity}})
 
 	alerts := make(chan struct{}, 10)
 	svc.Logger = svc.Logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWorker(t *testing.T) {
@@ -44,7 +44,7 @@ func TestWorker(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(7)
 
-	for i := 0; i < len(workers); i++ {
+	for i := range workers {
 		go func(i int, w worker) {
 			defer wg.Done()
 			w.doWork()
@@ -53,5 +53,5 @@ func TestWorker(t *testing.T) {
 
 	wg.Wait()
 
-	assert.Len(t, workDone, 13)
+	require.Len(t, workDone, 13)
 }

@@ -159,9 +159,9 @@ func (ac *AuthCommMgr) updateStubInMapping(channel string, mapping MemberMapping
 
 func (ac *AuthCommMgr) createRemoteContext(stub *Stub, channel string) func() (*RemoteContext, error) {
 	return func() (*RemoteContext, error) {
-		ac.Logger.Debugf("Connecting to node: %v for channel: %v", stub.RemoteNode.NodeAddress, channel)
+		ac.Logger.Debugf("Connecting to node: %v for channel: %v", stub.NodeAddress, channel)
 
-		conn, err := ac.Connections.Connect(stub.Endpoint, stub.RemoteNode.ServerRootCA)
+		conn, err := ac.Connections.Connect(stub.Endpoint, stub.ServerRootCA)
 		if err != nil {
 			ac.Logger.Warningf("Unable to obtain connection to %d(%s) (channel %s): %v", stub.ID, stub.Endpoint, channel, err)
 			return nil, err
@@ -202,21 +202,16 @@ func (ac *AuthCommMgr) createRemoteContext(stub *Stub, channel string) func() (*
 			return stepClientStream, nil
 		}
 
-		workerCountReporter := workerCountReporter{
-			channel: channel,
-		}
-
 		rc := &RemoteContext{
-			Metrics:             ac.Metrics,
-			workerCountReporter: workerCountReporter,
-			Channel:             channel,
-			SendBuffSize:        ac.SendBufferSize,
-			endpoint:            stub.Endpoint,
-			Logger:              ac.Logger,
-			ProbeConn:           probeConnection,
-			conn:                conn,
-			GetStreamFunc:       getStepClientStream,
-			shutdownSignal:      ac.shutdownSignal,
+			Metrics:        ac.Metrics,
+			Channel:        channel,
+			SendBuffSize:   ac.SendBufferSize,
+			endpoint:       stub.Endpoint,
+			Logger:         ac.Logger,
+			ProbeConn:      probeConnection,
+			conn:           conn,
+			GetStreamFunc:  getStepClientStream,
+			shutdownSignal: ac.shutdownSignal,
 		}
 		return rc, nil
 	}
@@ -269,12 +264,12 @@ func (cs *NodeClientStream) Auth() error {
 	payload.SessionBinding = tlsBinding
 
 	asnSignFields, _ := asn1.Marshal(AuthRequestSignature{
-		Version:        int64(payload.Version),
-		Timestamp:      EncodeTimestamp(payload.Timestamp),
-		FromId:         strconv.FormatUint(payload.FromId, 10),
-		ToId:           strconv.FormatUint(payload.ToId, 10),
-		SessionBinding: payload.SessionBinding,
-		Channel:        payload.Channel,
+		Version:        int64(payload.GetVersion()),
+		Timestamp:      EncodeTimestamp(payload.GetTimestamp()),
+		FromId:         strconv.FormatUint(payload.GetFromId(), 10),
+		ToId:           strconv.FormatUint(payload.GetToId(), 10),
+		SessionBinding: payload.GetSessionBinding(),
+		Channel:        payload.GetChannel(),
 	})
 	sig, err := cs.Signer.Sign(asnSignFields)
 	if err != nil {
@@ -304,8 +299,8 @@ func BuildStepRequest(request *orderer.StepRequest) (*orderer.ClusterNodeService
 		stepRequest = &orderer.ClusterNodeServiceStepRequest{
 			Payload: &orderer.ClusterNodeServiceStepRequest_NodeConrequest{
 				NodeConrequest: &orderer.NodeConsensusRequest{
-					Payload:  consReq.Payload,
-					Metadata: consReq.Metadata,
+					Payload:  consReq.GetPayload(),
+					Metadata: consReq.GetMetadata(),
 				},
 			},
 		}
@@ -314,8 +309,8 @@ func BuildStepRequest(request *orderer.StepRequest) (*orderer.ClusterNodeService
 		stepRequest = &orderer.ClusterNodeServiceStepRequest{
 			Payload: &orderer.ClusterNodeServiceStepRequest_NodeTranrequest{
 				NodeTranrequest: &orderer.NodeTransactionOrderRequest{
-					Payload:           subReq.Payload,
-					LastValidationSeq: subReq.LastValidationSeq,
+					Payload:           subReq.GetPayload(),
+					LastValidationSeq: subReq.GetLastValidationSeq(),
 				},
 			},
 		}
@@ -332,8 +327,8 @@ func BuildStepRespone(stepResponse *orderer.ClusterNodeServiceStepResponse) (*or
 		stepResponse := &orderer.StepResponse{
 			Payload: &orderer.StepResponse_SubmitRes{
 				SubmitRes: &orderer.SubmitResponse{
-					Channel: respPayload.Channel,
-					Status:  respPayload.Status,
+					Channel: respPayload.GetChannel(),
+					Status:  respPayload.GetStatus(),
 				},
 			},
 		}

@@ -8,10 +8,9 @@ package statecouchdb
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -503,7 +502,6 @@ func testDBCreateDatabaseAndPersist(t *testing.T, config *ledger.CouchDBConfig) 
 	require.NoError(t, geterr, "Error when trying to retrieve a document")
 
 	for _, attach4 := range dbGetResp.attachments {
-
 		currentName := attach4.Name
 		if currentName == "data1" {
 			require.Equal(t, testBytes4a, attach4.AttachmentBytes)
@@ -511,7 +509,6 @@ func testDBCreateDatabaseAndPersist(t *testing.T, config *ledger.CouchDBConfig) 
 		if currentName == "data2" {
 			require.Equal(t, testBytes4b, attach4.AttachmentBytes)
 		}
-
 	}
 
 	testBytes5a := []byte(`test attachment 5a`)
@@ -539,7 +536,6 @@ func testDBCreateDatabaseAndPersist(t *testing.T, config *ledger.CouchDBConfig) 
 	require.NoError(t, geterr, "Error when trying to retrieve a document")
 
 	for _, attach5 := range dbGetResp.attachments {
-
 		currentName := attach5.Name
 		if currentName == "data1" {
 			require.Equal(t, testBytes5a, attach5.AttachmentBytes)
@@ -547,7 +543,6 @@ func testDBCreateDatabaseAndPersist(t *testing.T, config *ledger.CouchDBConfig) 
 		if currentName == "data2" {
 			require.Equal(t, testBytes5b, attach5.AttachmentBytes)
 		}
-
 	}
 
 	// Attempt to save the document with an invalid id
@@ -712,8 +707,8 @@ func TestPrefixScan(t *testing.T) {
 		require.NoError(t, saveerr, "Error when trying to save a document")
 		_, saveerr = db.saveDoc(id3, "", &couchDoc{jsonValue: assetJSON, attachments: nil})
 		require.NoError(t, saveerr, "Error when trying to save a document")
-
 	}
+
 	startKey := string([]rune{0, 10})
 	endKey := startKey + string(utf8.MaxRune)
 	_, _, geterr := db.readDoc(endKey)
@@ -723,7 +718,7 @@ func TestPrefixScan(t *testing.T) {
 	require.NoError(t, geterr, "Error when trying to perform a range scan")
 	require.NotNil(t, resultsPtr)
 	results := resultsPtr
-	require.Equal(t, 3, len(results))
+	require.Len(t, results, 3)
 	require.Equal(t, string([]rune{0, 10, 0}), results[0].id)
 	require.Equal(t, string([]rune{0, 10, 1}), results[1].id)
 	require.Equal(t, string([]rune{0, 10, utf8.MaxRune - 1}), results[2].id)
@@ -909,14 +904,14 @@ func TestIndexOperations(t *testing.T) {
 	require.NoError(t, err, "Error thrown while retrieving indexes")
 
 	// There should only be one item returned
-	require.Equal(t, 1, len(listResult))
+	require.Len(t, listResult, 1)
 
 	// Verify the returned definition
 	for _, elem := range listResult {
 		require.Equal(t, "indexSizeSortDoc", elem.DesignDocument)
 		require.Equal(t, "indexSizeSortName", elem.Name)
 		// ensure the index definition is correct,  CouchDB 2.1.1 will also return "partial_filter_selector":{}
-		require.Equal(t, true, strings.Contains(elem.Definition, `"fields":[{"size":"desc"}]`))
+		require.Contains(t, elem.Definition, `"fields":[{"size":"desc"}]`)
 	}
 
 	// Create an index definition with no DesignDocument or name
@@ -933,7 +928,7 @@ func TestIndexOperations(t *testing.T) {
 	require.NoError(t, err, "Error thrown while retrieving indexes")
 
 	// There should be two indexes returned
-	require.Equal(t, 2, len(listResult))
+	require.Len(t, listResult, 2)
 
 	// Delete the named index
 	err = db.deleteIndex("indexSizeSortDoc", "indexSizeSortName")
@@ -946,7 +941,7 @@ func TestIndexOperations(t *testing.T) {
 	require.NoError(t, err, "Error thrown while retrieving indexes")
 
 	// There should be one index returned
-	require.Equal(t, 1, len(listResult))
+	require.Len(t, listResult, 1)
 
 	// Delete the unnamed index
 	for _, elem := range listResult {
@@ -959,7 +954,7 @@ func TestIndexOperations(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	listResult, err = db.listIndex()
 	require.NoError(t, err, "Error thrown while retrieving indexes")
-	require.Equal(t, 0, len(listResult))
+	require.Empty(t, listResult)
 
 	// Create a query string with a descending sort, this will require an index
 	queryString := `{"selector":{"size": {"$gt": 0}},"fields": ["_id", "_rev", "owner", "asset_name", "color", "size"], "sort":[{"size":"desc"}], "limit": 10,"skip": 0}`
@@ -1006,7 +1001,7 @@ func TestIndexOperations(t *testing.T) {
 	require.NoError(t, err, "Error thrown while retrieving indexes")
 
 	// There should only be two definitions
-	require.Equal(t, 2, len(listResult))
+	require.Len(t, listResult, 2)
 
 	// Create an invalid index definition with an invalid JSON
 	indexDefSize = `{"index"{"fields":[{"data.size":"desc"},{"data.owner":"desc"}]},"ddoc":"indexSizeOwnerSortDoc", "name":"indexSizeOwnerSortName","type":"json"}`
@@ -1197,7 +1192,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 3 results for owner="jerry"
-	require.Equal(t, 3, len(queryResult))
+	require.Len(t, queryResult, 3)
 
 	// Test query with implicit operator   --------------------------------------------------------------
 	queryString = `{"selector":{"owner":"jerry"}}`
@@ -1206,7 +1201,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 3 results for owner="jerry"
-	require.Equal(t, 3, len(queryResult))
+	require.Len(t, queryResult, 3)
 
 	// Test query with specified fields   -------------------------------------------------------------------
 	queryString = `{"selector":{"owner":{"$eq":"jerry"}},"fields": ["owner","asset_name","color","size"]}`
@@ -1215,7 +1210,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 3 results for owner="jerry"
-	require.Equal(t, 3, len(queryResult))
+	require.Len(t, queryResult, 3)
 
 	// Test query with a leading operator   -------------------------------------------------------------------
 	queryString = `{"selector":{"$or":[{"owner":{"$eq":"jerry"}},{"owner": {"$eq": "frank"}}]}}`
@@ -1224,7 +1219,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 4 results for owner="jerry" or owner="frank"
-	require.Equal(t, 4, len(queryResult))
+	require.Len(t, queryResult, 4)
 
 	// Test query implicit and explicit operator   ------------------------------------------------------------------
 	queryString = `{"selector":{"color":"green","$or":[{"owner":"tom"},{"owner":"frank"}]}}`
@@ -1233,7 +1228,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 2 results for color="green" and (owner="jerry" or owner="frank")
-	require.Equal(t, 2, len(queryResult))
+	require.Len(t, queryResult, 2)
 
 	// Test query with a leading operator  -------------------------------------------------------------------------
 	queryString = `{"selector":{"$and":[{"size":{"$gte":2}},{"size":{"$lte":5}}]}}`
@@ -1242,7 +1237,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 4 results for size >= 2 and size <= 5
-	require.Equal(t, 4, len(queryResult))
+	require.Len(t, queryResult, 4)
 
 	// Test query with leading and embedded operator  -------------------------------------------------------------
 	queryString = `{"selector":{"$and":[{"size":{"$gte":3}},{"size":{"$lte":10}},{"$not":{"size":7}}]}}`
@@ -1251,7 +1246,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 7 results for size >= 3 and size <= 10 and not 7
-	require.Equal(t, 7, len(queryResult))
+	require.Len(t, queryResult, 7)
 
 	// Test query with leading operator and array of objects ----------------------------------------------------------
 	queryString = `{"selector":{"$and":[{"size":{"$gte":2}},{"size":{"$lte":10}},{"$nor":[{"size":3},{"size":5},{"size":7}]}]}}`
@@ -1260,14 +1255,14 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 6 results for size >= 2 and size <= 10 and not 3,5 or 7
-	require.Equal(t, 6, len(queryResult))
+	require.Len(t, queryResult, 6)
 
 	// Test a range query ---------------------------------------------------------------------------------------------
 	queryResult, _, err = db.readDocRange("marble02", "marble06", 10000)
 	require.NoError(t, err, "Error when attempting to execute a range query")
 
 	// There should be 4 results
-	require.Equal(t, 4, len(queryResult))
+	require.Len(t, queryResult, 4)
 
 	// Attachments retrieved should be correct
 	require.Equal(t, attachment2.AttachmentBytes, queryResult[0].attachments[0].AttachmentBytes)
@@ -1282,7 +1277,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 8 results for owner="tom"
-	require.Equal(t, 8, len(queryResult))
+	require.Len(t, queryResult, 8)
 
 	// Test query with for tom with limit  -------------------------------------------------------------------
 	queryString = `{"selector":{"owner":{"$eq":"tom"}},"limit":2}`
@@ -1291,7 +1286,7 @@ func TestRichQuery(t *testing.T) {
 	require.NoError(t, err, "Error when attempting to execute a query")
 
 	// There should be 2 results for owner="tom" with a limit of 2
-	require.Equal(t, 2, len(queryResult))
+	require.Len(t, queryResult, 2)
 
 	// Create an index definition
 	indexDefSize := `{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortDoc", "name":"indexSizeSortName","type":"json"}`
@@ -1392,11 +1387,11 @@ func testBatchBatchOperations(t *testing.T, config *ledger.CouchDBConfig) {
 
 	// check to make sure each batch update response was successful
 	for _, updateDoc := range batchUpdateResp {
-		require.Equal(t, true, updateDoc.Ok)
+		require.True(t, updateDoc.Ok)
 	}
 
-	//----------------------------------------------
-	//Test Retrieve JSON
+	// ----------------------------------------------
+	// Test Retrieve JSON
 	dbGetResp, _, geterr := db.readDoc("marble01")
 	require.NoError(t, geterr, "Error when attempting read a document")
 
@@ -1406,7 +1401,7 @@ func testBatchBatchOperations(t *testing.T, config *ledger.CouchDBConfig) {
 	// Verify the owner retrieved matches
 	require.Equal(t, "jerry", assetResp.Owner)
 
-	//----------------------------------------------
+	// ----------------------------------------------
 	// Test Retrieve JSON using ID with URL special characters,
 	// this will confirm that batch document IDs and URL IDs are consistent, even if they include special characters
 	dbGetResp, _, geterr = db.readDoc("marble06#$&'()*+,/:;=?@[]")
@@ -1418,8 +1413,8 @@ func testBatchBatchOperations(t *testing.T, config *ledger.CouchDBConfig) {
 	// Verify the owner retrieved matches
 	require.Equal(t, "jerry", assetResp.Owner)
 
-	//----------------------------------------------
-	//Test retrieve binary
+	// ----------------------------------------------
+	// Test retrieve binary
 	dbGetResp, _, geterr = db.readDoc("marble03")
 	require.NoError(t, geterr, "Error when attempting read a document")
 	// Retrieve the attachments
@@ -1428,8 +1423,8 @@ func testBatchBatchOperations(t *testing.T, config *ledger.CouchDBConfig) {
 	retrievedAttachment := attachments[0]
 	// Verify the text matches
 	require.Equal(t, retrievedAttachment.AttachmentBytes, attachment3.AttachmentBytes)
-	//----------------------------------------------
-	//Test Bad Updates
+	// ----------------------------------------------
+	// Test Bad Updates
 	batchUpdateDocs = []*couchDoc{}
 	batchUpdateDocs = append(batchUpdateDocs, value1)
 	batchUpdateDocs = append(batchUpdateDocs, value2)
@@ -1438,13 +1433,13 @@ func testBatchBatchOperations(t *testing.T, config *ledger.CouchDBConfig) {
 	// No revision was provided, so these two updates should fail
 	// Verify that the "Ok" field is returned as false
 	for _, updateDoc := range batchUpdateResp {
-		require.Equal(t, false, updateDoc.Ok)
+		require.False(t, updateDoc.Ok)
 		require.Equal(t, updateDocumentConflictError, updateDoc.Error)
 		require.Equal(t, updateDocumentConflictReason, updateDoc.Reason)
 	}
 
-	//----------------------------------------------
-	//Test Batch Retrieve Keys and Update
+	// ----------------------------------------------
+	// Test Batch Retrieve Keys and Update
 
 	var keys []string
 
@@ -1476,11 +1471,11 @@ func testBatchBatchOperations(t *testing.T, config *ledger.CouchDBConfig) {
 	require.NoError(t, err, "Error when attempting to update a batch of documents")
 	// check to make sure each batch update response was successful
 	for _, updateDoc := range batchUpdateResp {
-		require.Equal(t, true, updateDoc.Ok)
+		require.True(t, updateDoc.Ok)
 	}
 
-	//----------------------------------------------
-	//Test Batch Delete
+	// ----------------------------------------------
+	// Test Batch Delete
 
 	keys = []string{}
 
@@ -1512,7 +1507,7 @@ func testBatchBatchOperations(t *testing.T, config *ledger.CouchDBConfig) {
 
 	// check to make sure each batch update response was successful
 	for _, updateDoc := range batchUpdateResp {
-		require.Equal(t, true, updateDoc.Ok)
+		require.True(t, updateDoc.Ok)
 	}
 
 	// Retrieve the test document
@@ -1599,10 +1594,10 @@ func TestDatabaseSecuritySettings(t *testing.T) {
 	require.NoError(t, err, "Error when retrieving database security")
 
 	// Verify retrieval of admins, should be an empty array
-	require.Equal(t, 0, len(dbSecurity.Admins.Names))
+	require.Empty(t, dbSecurity.Admins.Names)
 
 	// Verify retrieval of members, should be an empty array
-	require.Equal(t, 0, len(dbSecurity.Members.Names))
+	require.Empty(t, dbSecurity.Members.Names)
 }
 
 func TestURLWithSpecialCharacters(t *testing.T) {

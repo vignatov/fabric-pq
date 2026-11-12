@@ -17,6 +17,7 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric-protos-go-apiv2/transientstore"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/policydsl"
 	commonutil "github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/ledger"
@@ -48,7 +49,7 @@ func initTestEnv(t *testing.T) *testEnv {
 	tempdir := t.TempDir()
 
 	storedir := filepath.Join(tempdir, "transientstore")
-	storeProvider, err := NewStoreProvider(storedir)
+	storeProvider, err := NewStoreProvider(storedir, db.GoLevelDB)
 	require.NoError(t, err)
 	require.NotNil(t, storeProvider)
 
@@ -135,7 +136,7 @@ func TestTransientStorePersistAndRetrieve(t *testing.T) {
 
 	// Persist simulation results into  store
 	var err error
-	for i := 0; i < len(endorsersResults); i++ {
+	for i := range endorsersResults {
 		err = testStore.Persist(txid, endorsersResults[i].ReceivedAtBlockHeight,
 			endorsersResults[i].PvtSimulationResultsWithConfig)
 		require.NoError(err)
@@ -272,7 +273,7 @@ func TestTransientStorePurgeByTxids(t *testing.T) {
 	endorsersResults = append(endorsersResults, endorser5SimulationResults)
 
 	var err error
-	for i := 0; i < len(txids); i++ {
+	for i := range txids {
 		err = testStore.Persist(txids[i], endorsersResults[i].ReceivedAtBlockHeight,
 			endorsersResults[i].PvtSimulationResultsWithConfig)
 		require.NoError(err)
@@ -303,7 +304,7 @@ func TestTransientStorePurgeByTxids(t *testing.T) {
 	sortResults(expectedEndorsersResults)
 	sortResults(actualEndorsersResults)
 
-	require.Equal(len(expectedEndorsersResults), len(actualEndorsersResults))
+	require.Len(actualEndorsersResults, len(expectedEndorsersResults))
 	for i, expected := range expectedEndorsersResults {
 		require.Equal(expected.ReceivedAtBlockHeight, actualEndorsersResults[i].ReceivedAtBlockHeight)
 		require.True(proto.Equal(expected.PvtSimulationResultsWithConfig, actualEndorsersResults[i].PvtSimulationResultsWithConfig))
@@ -315,7 +316,6 @@ func TestTransientStorePurgeByTxids(t *testing.T) {
 	require.NoError(err)
 
 	for _, txid := range toRemoveTxids {
-
 		// Check whether private write sets of txid-2 are removed
 		var expectedEndorsersResults *EndorserPvtSimulationResults = nil
 		iter, err = testStore.GetTxPvtRWSetByTxid(txid, nil)
@@ -352,7 +352,7 @@ func TestTransientStorePurgeByTxids(t *testing.T) {
 	sortResults(expectedEndorsersResults)
 	sortResults(actualEndorsersResults)
 
-	require.Equal(len(expectedEndorsersResults), len(actualEndorsersResults))
+	require.Len(actualEndorsersResults, len(expectedEndorsersResults))
 	for i, expected := range expectedEndorsersResults {
 		require.Equal(expected.ReceivedAtBlockHeight, actualEndorsersResults[i].ReceivedAtBlockHeight)
 		require.True(proto.Equal(expected.PvtSimulationResultsWithConfig, actualEndorsersResults[i].PvtSimulationResultsWithConfig))
@@ -363,7 +363,6 @@ func TestTransientStorePurgeByTxids(t *testing.T) {
 	require.NoError(err)
 
 	for _, txid := range toRemoveTxids {
-
 		// Check whether private write sets of txid-1 are removed
 		var expectedEndorsersResults *EndorserPvtSimulationResults = nil
 		iter, err = testStore.GetTxPvtRWSetByTxid(txid, nil)
@@ -465,7 +464,7 @@ func TestTransientStorePurgeBelowHeight(t *testing.T) {
 	sortResults(expectedEndorsersResults)
 	sortResults(actualEndorsersResults)
 
-	require.Equal(len(expectedEndorsersResults), len(actualEndorsersResults))
+	require.Len(actualEndorsersResults, len(expectedEndorsersResults))
 	for i, expected := range expectedEndorsersResults {
 		require.Equal(expected.ReceivedAtBlockHeight, actualEndorsersResults[i].ReceivedAtBlockHeight)
 		require.True(proto.Equal(expected.PvtSimulationResultsWithConfig, actualEndorsersResults[i].PvtSimulationResultsWithConfig))
@@ -525,17 +524,17 @@ func TestTransientStoreRetrievalWithFilter(t *testing.T) {
 
 	// prepare the trimmed pvtrwset manually - retain only "ns-1/coll-1" and "ns-2/coll-2"
 	expectedSimulationRes := samplePvtSimResWithConfig
-	expectedSimulationRes.GetPvtRwset().NsPvtRwset[0].CollectionPvtRwset = expectedSimulationRes.GetPvtRwset().NsPvtRwset[0].CollectionPvtRwset[0:1]
-	expectedSimulationRes.GetPvtRwset().NsPvtRwset[1].CollectionPvtRwset = expectedSimulationRes.GetPvtRwset().NsPvtRwset[1].CollectionPvtRwset[1:]
-	expectedSimulationRes.CollectionConfigs, err = trimPvtCollectionConfigs(expectedSimulationRes.CollectionConfigs, filter)
+	expectedSimulationRes.GetPvtRwset().NsPvtRwset[0].CollectionPvtRwset = expectedSimulationRes.GetPvtRwset().GetNsPvtRwset()[0].GetCollectionPvtRwset()[0:1]
+	expectedSimulationRes.GetPvtRwset().NsPvtRwset[1].CollectionPvtRwset = expectedSimulationRes.GetPvtRwset().GetNsPvtRwset()[1].GetCollectionPvtRwset()[1:]
+	expectedSimulationRes.CollectionConfigs, err = trimPvtCollectionConfigs(expectedSimulationRes.GetCollectionConfigs(), filter)
 	require.NoError(t, err)
 	for ns, colName := range map[string]string{"ns-1": "coll-1", "ns-2": "coll-2"} {
-		config := expectedSimulationRes.CollectionConfigs[ns]
+		config := expectedSimulationRes.GetCollectionConfigs()[ns]
 		require.NotNil(t, config)
-		ns1Config := config.Config
-		require.Equal(t, len(ns1Config), 1)
+		ns1Config := config.GetConfig()
+		require.Len(t, ns1Config, 1)
 		ns1ColConfig := ns1Config[0].GetStaticCollectionConfig()
-		require.NotNil(t, ns1ColConfig.Name, colName)
+		require.NotNil(t, ns1ColConfig.GetName(), colName)
 	}
 
 	var expectedRes []*EndorserPvtSimulationResults
@@ -547,7 +546,7 @@ func TestTransientStoreRetrievalWithFilter(t *testing.T) {
 	// expectedRes and actualRes.
 	sortResults(expectedRes)
 	sortResults(actualRes)
-	require.Equal(t, len(expectedRes), len(actualRes))
+	require.Len(t, actualRes, len(expectedRes))
 	for i, expected := range expectedRes {
 		require.Equal(t, expected.ReceivedAtBlockHeight, actualRes[i].ReceivedAtBlockHeight)
 		require.True(t, proto.Equal(expected.PvtSimulationResultsWithConfig, actualRes[i].PvtSimulationResultsWithConfig))
@@ -661,7 +660,8 @@ func sampleCollectionConfigPackage(colName string) *peer.CollectionConfig {
 // persistOldProto is the code from 1.1 to populate stores with old proto message
 // this is used only for testing
 func (s *Store) persistOldProto(txid string, blockHeight uint64,
-	privateSimulationResults *rwset.TxPvtReadWriteSet) error {
+	privateSimulationResults *rwset.TxPvtReadWriteSet,
+) error {
 	logger.Debugf("Persisting private data to transient store for txid [%s] at block height [%d]", txid, blockHeight)
 
 	dbBatch := s.db.NewUpdateBatch()

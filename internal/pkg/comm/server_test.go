@@ -89,16 +89,15 @@ func (ess *emptyServiceServer) EmptyCall(context.Context, *testpb.Empty) (*testp
 func (esss *emptyServiceServer) EmptyStream(stream testpb.EmptyService_EmptyStreamServer) error {
 	for {
 		_, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if err := stream.Send(&testpb.Empty{}); err != nil {
+		if err = stream.Send(&testpb.Empty{}); err != nil {
 			return err
 		}
-
 	}
 }
 
@@ -148,7 +147,7 @@ func invokeEmptyStream(address string, dialOptions ...grpc.DialOption) (*testpb.
 	go func() {
 		for {
 			in, err := stream.Recv()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				close(waitc)
 				return
 			}
@@ -166,8 +165,8 @@ func invokeEmptyStream(address string, dialOptions ...grpc.DialOption) (*testpb.
 	// the server side has already terminated. Whether or not we get an error
 	// depends on timing.
 	err = stream.Send(&testpb.Empty{})
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("stream send failed: %s", err)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("stream send failed: %w", err)
 	}
 
 	stream.CloseSend()
@@ -409,7 +408,7 @@ func TestNewGRPCServerInvalidParameters(t *testing.T) {
 		"listen tcp: lookup tcp/1BBB: Servname not supported for ai_socktype",
 		"listen tcp: lookup tcp/1BBB: unknown port",
 	}
-	require.Error(t, err, fmt.Sprintf("[%s], [%s] [%s] or [%s] expected", msgs[0], msgs[1], msgs[2], msgs[3]))
+	require.Errorf(t, err, "[%s], [%s] [%s] or [%s] expected", msgs[0], msgs[1], msgs[2], msgs[3])
 	require.Contains(t, msgs, err.Error())
 
 	// bad hostname
@@ -522,8 +521,8 @@ func TestNewGRPCServer(t *testing.T) {
 	// make sure our properties are as expected
 	require.Equal(t, srv.Address(), addr.String())
 	require.Equal(t, srv.Listener().Addr().String(), addr.String())
-	require.Equal(t, srv.TLSEnabled(), false)
-	require.Equal(t, srv.MutualTLSRequired(), false)
+	require.False(t, srv.TLSEnabled())
+	require.False(t, srv.MutualTLSRequired())
 
 	// register the GRPC test server
 	testpb.RegisterEmptyServiceServer(srv.Server(), &emptyServiceServer{})
@@ -556,8 +555,8 @@ func TestNewGRPCServerFromListener(t *testing.T) {
 
 	require.Equal(t, srv.Address(), testAddress)
 	require.Equal(t, srv.Listener().Addr().String(), testAddress)
-	require.Equal(t, srv.TLSEnabled(), false)
-	require.Equal(t, srv.MutualTLSRequired(), false)
+	require.False(t, srv.TLSEnabled())
+	require.False(t, srv.MutualTLSRequired())
 
 	// register the GRPC test server
 	testpb.RegisterEmptyServiceServer(srv.Server(), &emptyServiceServer{})
@@ -582,14 +581,15 @@ func TestNewSecureGRPCServer(t *testing.T) {
 	require.NoError(t, err, "failed to create listener")
 	testAddress := lis.Addr().String()
 
-	srv, err := comm.NewGRPCServerFromListener(lis, comm.ServerConfig{
-		ConnectionTimeout: 250 * time.Millisecond,
-		SecOpts: comm.SecureOptions{
-			UseTLS:      true,
-			Certificate: []byte(selfSignedCertPEM),
-			Key:         []byte(selfSignedKeyPEM),
+	srv, err := comm.NewGRPCServerFromListener(
+		lis, comm.ServerConfig{
+			ConnectionTimeout: 250 * time.Millisecond,
+			SecOpts: comm.SecureOptions{
+				UseTLS:      true,
+				Certificate: []byte(selfSignedCertPEM),
+				Key:         []byte(selfSignedKeyPEM),
+			},
 		},
-	},
 	)
 	require.NoError(t, err, "failed to create new grpc server")
 
@@ -601,15 +601,17 @@ func TestNewSecureGRPCServer(t *testing.T) {
 	cert, _ := tls.X509KeyPair([]byte(selfSignedCertPEM), []byte(selfSignedKeyPEM))
 	require.Equal(t, srv.ServerCertificate(), cert)
 
-	require.Equal(t, srv.TLSEnabled(), true)
-	require.Equal(t, srv.MutualTLSRequired(), false)
+	require.True(t, srv.TLSEnabled())
+	require.False(t, srv.MutualTLSRequired())
 
 	// register the GRPC test server
 	testpb.RegisterEmptyServiceServer(srv.Server(), &emptyServiceServer{})
 
 	// start the server
 	go srv.Start()
-	defer srv.Stop()
+	t.Cleanup(func() {
+		srv.Stop()
+	})
 
 	// should not be needed
 	time.Sleep(10 * time.Millisecond)
@@ -632,6 +634,7 @@ func TestNewSecureGRPCServer(t *testing.T) {
 	}
 	for name, tlsVersion := range tlsVersions {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			creds := credentials.NewTLS(&tls.Config{RootCAs: certPool, MinVersion: tlsVersion, MaxVersion: tlsVersion})
 			_, err := invokeEmptyCall(testAddress, grpc.WithTransportCredentials(creds), grpc.WithBlock())
 			require.NoError(t, err)
@@ -708,17 +711,21 @@ func TestVerifyCertificateCallback(t *testing.T) {
 			VerifyCertificate: verifyFunc,
 		},
 	})
+	require.NoError(t, err, "failed to create gRPC server")
+
 	go gRPCServer.Start()
-	defer gRPCServer.Stop()
+	t.Cleanup(func() {
+		gRPCServer.Stop()
+	})
 
 	t.Run("Success path", func(t *testing.T) {
-		err = probeTLS(gRPCServer.Address(), authorizedClientKeyPair)
-		require.NoError(t, err)
+		t.Parallel()
+		require.NoError(t, probeTLS(gRPCServer.Address(), authorizedClientKeyPair))
 	})
 
 	t.Run("Failure path", func(t *testing.T) {
-		err = probeTLS(gRPCServer.Address(), notAuthorizedClientKeyPair)
-		require.EqualError(t, err, "remote error: tls: bad certificate")
+		t.Parallel()
+		require.EqualError(t, probeTLS(gRPCServer.Address(), notAuthorizedClientKeyPair), "remote error: tls: bad certificate")
 	})
 }
 
@@ -872,7 +879,7 @@ func runMutualAuth(t *testing.T, servers []testServer, trustedClients, unTrusted
 		}
 
 		// MutualTLSRequired should be true
-		require.Equal(t, srv.MutualTLSRequired(), true)
+		require.True(t, srv.MutualTLSRequired())
 
 		// register the GRPC test server and start the GRPCServer
 		testpb.RegisterEmptyServiceServer(srv.Server(), &emptyServiceServer{})
@@ -936,7 +943,8 @@ func TestMutualAuth(t *testing.T) {
 		},
 		{
 			name: "ClientAuthRequiredWithMultipleChildClientOrgs",
-			servers: testOrgs[0].testServers(append([][]byte{},
+			servers: testOrgs[0].testServers(append(
+				[][]byte{},
 				testOrgs[0].childOrgs[0].rootCA,
 				testOrgs[0].childOrgs[1].rootCA,
 			)),
@@ -1048,7 +1056,7 @@ func TestUpdateTLSCert(t *testing.T) {
 		fName := filepath.Join("testdata", "dynamic_cert_update", path)
 		data, err := os.ReadFile(fName)
 		if err != nil {
-			panic(fmt.Errorf("Failed reading %s: %v", fName, err))
+			panic(fmt.Errorf("Failed reading %s: %w", fName, err))
 		}
 		return data
 	}

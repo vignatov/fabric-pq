@@ -83,8 +83,8 @@ var cases = []testCase{
 
 func mspId(principal *msp.MSPPrincipal) string {
 	role := &msp.MSPRole{}
-	proto.Unmarshal(principal.Principal, role)
-	return role.MspIdentifier
+	proto.Unmarshal(principal.GetPrincipal(), role)
+	return role.GetMspIdentifier()
 }
 
 func TestSatisfiedBy(t *testing.T) {
@@ -159,5 +159,5 @@ func TestSatisfiedByTooManyCombinations(t *testing.T) {
 		actual[fmt.Sprintf("%v", principals)] = struct{}{}
 	}
 	// Total combinations are capped by the combinationsUpperBound.
-	require.True(t, len(actual) < combinationsUpperBound)
+	require.Less(t, len(actual), combinationsUpperBound)
 }

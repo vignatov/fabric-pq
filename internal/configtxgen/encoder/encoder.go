@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package encoder
 
 import (
+	"encoding/pem"
 	"fmt"
 	"os"
 
@@ -260,7 +261,10 @@ func consenterProtosFromConfig(consenterMapping []*genesisconfig.Consenter) ([]*
 		if consenter.ClientTLSCert != "" {
 			clientCert, err := os.ReadFile(consenter.ClientTLSCert)
 			if err != nil {
-				return nil, fmt.Errorf("cannot load client cert for consenter %s:%d: %s", c.GetHost(), c.GetPort(), err)
+				return nil, fmt.Errorf("cannot load client cert for consenter %s:%d: %w", c.GetHost(), c.GetPort(), err)
+			}
+			if block, _ := pem.Decode(clientCert); block == nil {
+				return nil, fmt.Errorf("cannot load client cert for consenter %s:%d: no PEM content in %s", c.GetHost(), c.GetPort(), consenter.ClientTLSCert)
 			}
 			c.ClientTlsCert = clientCert
 		}
@@ -268,7 +272,10 @@ func consenterProtosFromConfig(consenterMapping []*genesisconfig.Consenter) ([]*
 		if consenter.ServerTLSCert != "" {
 			serverCert, err := os.ReadFile(consenter.ServerTLSCert)
 			if err != nil {
-				return nil, fmt.Errorf("cannot load server cert for consenter %s:%d: %s", c.GetHost(), c.GetPort(), err)
+				return nil, fmt.Errorf("cannot load server cert for consenter %s:%d: %w", c.GetHost(), c.GetPort(), err)
+			}
+			if block, _ := pem.Decode(serverCert); block == nil {
+				return nil, fmt.Errorf("cannot load server cert for consenter %s:%d: no PEM content in %s", c.GetHost(), c.GetPort(), consenter.ServerTLSCert)
 			}
 			c.ServerTlsCert = serverCert
 		}
@@ -276,7 +283,10 @@ func consenterProtosFromConfig(consenterMapping []*genesisconfig.Consenter) ([]*
 		if consenter.Identity != "" {
 			identity, err := os.ReadFile(consenter.Identity)
 			if err != nil {
-				return nil, fmt.Errorf("cannot load identity for consenter %s:%d: %s", c.GetHost(), c.GetPort(), err)
+				return nil, fmt.Errorf("cannot load identity for consenter %s:%d: %w", c.GetHost(), c.GetPort(), err)
+			}
+			if block, _ := pem.Decode(identity); block == nil {
+				return nil, fmt.Errorf("cannot load identity for consenter %s:%d: no PEM content in %s", c.GetHost(), c.GetPort(), consenter.Identity)
 			}
 			c.Identity = identity
 		}
@@ -427,8 +437,8 @@ func NewConsortiumsGroup(conf map[string]*genesisconfig.Consortium) (*cb.ConfigG
 	return consortiumsGroup, nil
 }
 
-// NewConsortiums returns a consortiums component of the channel configuration.  Each consortium defines the organizations which may be involved in channel
-// creation, as well as the channel creation policy the orderer checks at channel creation time to authorize the action.  It sets the mod_policy of all
+// NewConsortiumGroup returns a consortium component of the channel configuration. Each consortium defines the organizations which may be involved in channel
+// creation, as well as the channel creation policy the orderer checks at channel creation time to authorize the action. It sets the mod_policy of all
 // elements to "/Channel/Orderer/Admins".
 func NewConsortiumGroup(conf *genesisconfig.Consortium) (*cb.ConfigGroup, error) {
 	consortiumGroup := protoutil.NewConfigGroup()
@@ -490,7 +500,7 @@ func DefaultConfigTemplate(conf *genesisconfig.Profile) (*cb.ConfigGroup, error)
 		return nil, errors.WithMessage(err, "error parsing configuration")
 	}
 
-	if _, ok := channelGroup.Groups[channelconfig.ApplicationGroupKey]; !ok {
+	if _, ok := channelGroup.GetGroups()[channelconfig.ApplicationGroupKey]; !ok {
 		return nil, errors.New("channel template configs must contain an application section")
 	}
 
@@ -513,7 +523,7 @@ func ConfigTemplateFromGroup(conf *genesisconfig.Profile, cg *cb.ConfigGroup) (*
 		},
 	}
 
-	consortiums, ok := template.Groups[channelconfig.ConsortiumsGroupKey]
+	consortiums, ok := template.GetGroups()[channelconfig.ConsortiumsGroupKey]
 	if !ok {
 		return nil, errors.Errorf("supplied system channel group does not appear to be system channel (missing consortiums group)")
 	}
@@ -522,7 +532,7 @@ func ConfigTemplateFromGroup(conf *genesisconfig.Profile, cg *cb.ConfigGroup) (*
 		return nil, errors.Errorf("system channel consortiums group appears to have no consortiums defined")
 	}
 
-	consortium, ok := consortiums.Groups[conf.Consortium]
+	consortium, ok := consortiums.GetGroups()[conf.Consortium]
 	if !ok {
 		return nil, errors.Errorf("supplied system channel group is missing '%s' consortium", conf.Consortium)
 	}
@@ -533,12 +543,12 @@ func ConfigTemplateFromGroup(conf *genesisconfig.Profile, cg *cb.ConfigGroup) (*
 
 	for _, organization := range conf.Application.Organizations {
 		var ok bool
-		template.Groups[channelconfig.ApplicationGroupKey].Groups[organization.Name], ok = consortium.Groups[organization.Name]
+		template.Groups[channelconfig.ApplicationGroupKey].Groups[organization.Name], ok = consortium.GetGroups()[organization.Name]
 		if !ok {
 			return nil, errors.Errorf("consortium %s does not contain member org %s", conf.Consortium, organization.Name)
 		}
 	}
-	delete(template.Groups, channelconfig.ConsortiumsGroupKey)
+	delete(template.GetGroups(), channelconfig.ConsortiumsGroupKey)
 
 	addValue(template, channelconfig.ConsortiumValue(conf.Consortium), channelconfig.AdminsPolicyKey)
 
@@ -611,11 +621,10 @@ func MakeChannelCreationTransactionFromTemplate(
 			SignatureHeader: protoutil.MarshalOrPanic(sigHeader),
 		}}
 
-		newConfigUpdateEnv.Signatures[0].Signature, err = signer.Sign(util.ConcatenateBytes(newConfigUpdateEnv.Signatures[0].SignatureHeader, newConfigUpdateEnv.ConfigUpdate))
+		newConfigUpdateEnv.Signatures[0].Signature, err = signer.Sign(util.ConcatenateBytes(newConfigUpdateEnv.GetSignatures()[0].GetSignatureHeader(), newConfigUpdateEnv.GetConfigUpdate()))
 		if err != nil {
 			return nil, errors.Wrap(err, "signature failure over config update")
 		}
-
 	}
 
 	return protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG_UPDATE, channelID, signer, newConfigUpdateEnv, msgVersion, epoch)

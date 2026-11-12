@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
-	"github.com/hyperledger-labs/SmartBFT/smartbftprotos"
+	"github.com/hyperledger/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/smartbftprotos"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
@@ -394,7 +394,7 @@ func TestBFTSynchronizer(t *testing.T) {
 		resp := bftSynchronizer.Sync()
 		require.NotNil(t, resp)
 		require.Equal(t, *decision, resp)
-		require.Equal(t, 102, len(ledger))
+		require.Len(t, ledger, 102)
 		require.Equal(t, 1, fakeCS.WriteBlockSyncCallCount())
 		require.Equal(t, 1, fakeCS.WriteConfigBlockCallCount())
 		wg.Wait()
@@ -484,20 +484,22 @@ func TestBFTSynchronizer(t *testing.T) {
 				return nil
 			},
 			OnCommit: func(block *cb.Block) types.Reconfig {
-				if block == b101 {
+				switch block {
+				case b101:
 					return types.Reconfig{
 						InLatestDecision: true,
 						CurrentNodes:     []uint64{1, 2, 3, 4},
 						CurrentConfig:    types.Configuration{SelfID: 1},
 					}
-				} else if block == b102 {
+				case b102:
 					return types.Reconfig{
 						InLatestDecision: false,
 						CurrentNodes:     []uint64{1, 2, 3, 4},
 						CurrentConfig:    types.Configuration{SelfID: 1},
 					}
+				default:
+					return types.Reconfig{}
 				}
-				return types.Reconfig{}
 			},
 			Support:             fakeCS,
 			ClusterDialer:       &cluster.PredicateDialer{Config: comm.ClientConfig{}},
@@ -532,7 +534,7 @@ func TestBFTSynchronizer(t *testing.T) {
 		resp := bftSynchronizer.Sync()
 		require.NotNil(t, resp)
 		require.Equal(t, *decision, resp)
-		require.Equal(t, 103, len(ledger))
+		require.Len(t, ledger, 103)
 		require.Equal(t, 2, fakeCS.WriteBlockSyncCallCount())
 		require.Equal(t, 1, fakeCS.WriteConfigBlockCallCount())
 		wg.Wait()

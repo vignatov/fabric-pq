@@ -11,13 +11,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/IBM/idemix"
+	idemix "github.com/IBM/idemix/msp"
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
 	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	"github.com/pkg/errors"
+	"go.yaml.in/yaml/v4"
 	"google.golang.org/protobuf/proto"
-	"gopkg.in/yaml.v3"
 )
 
 // OrganizationalUnitIdentifiersConfiguration is used to represent an OU
@@ -317,19 +317,19 @@ func getMspConfig(dir string, ID string, sigid *msp.SigningIdentityInfo) (*msp.M
 			// Read certificates, if defined
 
 			// ClientOU
-			if nodeOUs.ClientOuIdentifier != nil {
+			if nodeOUs.GetClientOuIdentifier() != nil {
 				nodeOUs.ClientOuIdentifier.Certificate = loadCertificateAt(dir, configuration.NodeOUs.ClientOUIdentifier.Certificate, "ClientOU")
 			}
 			// PeerOU
-			if nodeOUs.PeerOuIdentifier != nil {
+			if nodeOUs.GetPeerOuIdentifier() != nil {
 				nodeOUs.PeerOuIdentifier.Certificate = loadCertificateAt(dir, configuration.NodeOUs.PeerOUIdentifier.Certificate, "PeerOU")
 			}
 			// AdminOU
-			if nodeOUs.AdminOuIdentifier != nil {
+			if nodeOUs.GetAdminOuIdentifier() != nil {
 				nodeOUs.AdminOuIdentifier.Certificate = loadCertificateAt(dir, configuration.NodeOUs.AdminOUIdentifier.Certificate, "AdminOU")
 			}
 			// OrdererOU
-			if nodeOUs.OrdererOuIdentifier != nil {
+			if nodeOUs.GetOrdererOuIdentifier() != nil {
 				nodeOUs.OrdererOuIdentifier.Certificate = loadCertificateAt(dir, configuration.NodeOUs.OrdererOUIdentifier.Certificate, "OrdererOU")
 			}
 		}

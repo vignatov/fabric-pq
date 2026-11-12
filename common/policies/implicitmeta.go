@@ -30,20 +30,20 @@ type ImplicitMetaPolicy struct {
 func NewImplicitMetaPolicy(data []byte, managers map[string]*ManagerImpl) (*ImplicitMetaPolicy, error) {
 	definition := &cb.ImplicitMetaPolicy{}
 	if err := proto.Unmarshal(data, definition); err != nil {
-		return nil, fmt.Errorf("Error unmarshalling to ImplicitMetaPolicy: %s", err)
+		return nil, fmt.Errorf("Error unmarshalling to ImplicitMetaPolicy: %w", err)
 	}
 
 	subPolicies := make([]Policy, len(managers))
 
 	i := 0
 	for _, manager := range managers {
-		subPolicies[i], _ = manager.GetPolicy(definition.SubPolicy)
+		subPolicies[i], _ = manager.GetPolicy(definition.GetSubPolicy())
 		i++
 	}
 
 	var threshold int
 
-	switch definition.Rule {
+	switch definition.GetRule() {
 	case cb.ImplicitMetaPolicy_ANY:
 		threshold = 1
 	case cb.ImplicitMetaPolicy_ALL:
@@ -61,7 +61,7 @@ func NewImplicitMetaPolicy(data []byte, managers map[string]*ManagerImpl) (*Impl
 		SubPolicies:   subPolicies,
 		Threshold:     threshold,
 		managers:      managers,
-		SubPolicyName: definition.SubPolicy,
+		SubPolicyName: definition.GetSubPolicy(),
 	}, nil
 }
 
@@ -75,7 +75,7 @@ func (imp *ImplicitMetaPolicy) EvaluateSignedData(signatureSet []*protoutil.Sign
 			// This log message may be large and expensive to construct, so worth checking the log level
 			if logger.IsEnabledFor(zapcore.DebugLevel) {
 				var b bytes.Buffer
-				b.WriteString(fmt.Sprintf("Evaluation Failed: Only %d policies were satisfied, but needed %d of [ ", imp.Threshold-remaining, imp.Threshold))
+				fmt.Fprintf(&b, "Evaluation Failed: Only %d policies were satisfied, but needed %d of [ ", imp.Threshold-remaining, imp.Threshold)
 				for m := range imp.managers {
 					b.WriteString(m)
 					b.WriteString("/")
@@ -118,7 +118,7 @@ func (imp *ImplicitMetaPolicy) EvaluateIdentities(identities []msp.Identity) err
 		}
 
 		var b bytes.Buffer
-		b.WriteString(fmt.Sprintf("Evaluation Failed: Only %d policies were satisfied, but needed %d of [ ", imp.Threshold-remaining, imp.Threshold))
+		fmt.Fprintf(&b, "Evaluation Failed: Only %d policies were satisfied, but needed %d of [ ", imp.Threshold-remaining, imp.Threshold)
 		for m := range imp.managers {
 			b.WriteString(m)
 			b.WriteString("/")

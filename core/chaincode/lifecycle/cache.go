@@ -20,7 +20,6 @@ import (
 	"github.com/hyperledger/fabric/core/container/externalbuilder"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/protoutil"
-
 	"github.com/pkg/errors"
 )
 
@@ -115,7 +114,7 @@ func (l *LocalChaincode) createMetadataMapFromReferences() map[string][]*chainco
 		for cc, cachedDefinition := range chaincodeMap {
 			metadata = append(metadata, &chaincode.Metadata{
 				Name:    cc,
-				Version: cachedDefinition.Definition.EndorsementInfo.Version,
+				Version: cachedDefinition.Definition.EndorsementInfo.GetVersion(),
 			})
 		}
 		references[channel] = metadata
@@ -148,15 +147,17 @@ func (c *Cache) InitializeLocalChaincodes() error {
 	}
 
 	for _, ccPackage := range ccPackages {
-		ccPackageBytes, err := c.Resources.ChaincodeStore.Load(ccPackage.PackageID)
-		if err != nil {
-			return errors.WithMessagef(err, "could not load chaincode with package ID '%s'", ccPackage.PackageID)
+		// Use metadata from the package filename rather than reading and parsing
+		// the full tar.gz archive. The filename encodes the label and content hash
+		// (e.g., "mycc.abc123...tar.gz" → label="mycc", hash=abc123...).
+		// The PackageID, Label, Type, and Path fields in ChaincodeInstallInfo are
+		// populated here; Type and Path have no downstream consumers but are left
+		// empty for clarity. The full package is read lazily when actually needed
+		// (e.g., for chaincode build or DB artifact extraction).
+		md := &persistence.ChaincodePackageMetadata{
+			Label: ccPackage.Label,
 		}
-		parsedCCPackage, err := c.Resources.PackageParser.Parse(ccPackageBytes)
-		if err != nil {
-			return errors.WithMessagef(err, "could not parse chaincode with package ID '%s'", ccPackage.PackageID)
-		}
-		c.handleChaincodeInstalledWhileLocked(true, parsedCCPackage.Metadata, ccPackage.PackageID)
+		c.handleChaincodeInstalledWhileLocked(true, md, ccPackage.PackageID)
 	}
 
 	logger.Infof("Initialized lifecycle cache with %d already installed chaincodes", len(c.localChaincodes))
@@ -206,7 +207,7 @@ func (c *Cache) Initialize(channelID string, qe ledger.SimpleQueryExecutor) erro
 	dirtyChaincodes := map[string]struct{}{}
 
 	for namespace, metadata := range metadatas {
-		switch metadata.Datatype {
+		switch metadata.GetDatatype() {
 		case ChaincodeDefinitionType:
 			dirtyChaincodes[namespace] = struct{}{}
 		default:
@@ -248,7 +249,7 @@ func (c *Cache) handleChaincodeInstalledWhileLocked(initializing bool, md *persi
 	for channelID, channelCache := range localChaincode.References {
 		for chaincodeName, cachedChaincode := range channelCache {
 			cachedChaincode.InstallInfo = localChaincode.Info
-			logger.Infof("Installed chaincode with package ID '%s' now available on channel %s for chaincode definition %s:%s", packageID, channelID, chaincodeName, cachedChaincode.Definition.EndorsementInfo.Version)
+			logger.Infof("Installed chaincode with package ID '%s' now available on channel %s for chaincode definition %s:%s", packageID, channelID, chaincodeName, cachedChaincode.Definition.EndorsementInfo.GetVersion())
 			c.chaincodeCustodian.NotifyInstalledAndRunnable(packageID)
 		}
 	}
@@ -273,7 +274,7 @@ func (c *Cache) HandleStateUpdates(trigger *ledger.StateUpdateTrigger) error {
 	dirtyChaincodes := map[string]struct{}{}
 
 	for _, publicUpdate := range updates.PublicUpdates {
-		matches := SequenceMatcher.FindStringSubmatch(publicUpdate.Key)
+		matches := SequenceMatcher.FindStringSubmatch(publicUpdate.GetKey())
 		if len(matches) != 2 {
 			continue
 		}
@@ -297,7 +298,7 @@ func (c *Cache) HandleStateUpdates(trigger *ledger.StateUpdateTrigger) error {
 			}
 
 			for _, privateUpdate := range privateUpdates {
-				chaincodeName, ok := channelCache.InterestingHashes[string(privateUpdate.KeyHash)]
+				chaincodeName, ok := channelCache.InterestingHashes[string(privateUpdate.GetKeyHash())]
 				if ok {
 					dirtyChaincodes[chaincodeName] = struct{}{}
 				}
@@ -538,12 +539,11 @@ func (c *Cache) update(initializing bool, channelID string, dirtyChaincodes map[
 		}
 
 		ok, _, err = c.Resources.Serializer.IsSerialized(NamespacesName, privateName, chaincodeDefinition.Parameters(), orgState)
-
 		if err != nil {
 			return errors.WithMessagef(err, "could not check opaque org state for '%s' on channel '%s'", name, channelID)
 		}
 		if !ok {
-			logger.Debugf("Channel %s for chaincode definition %s:%s does not have our org's approval", channelID, name, chaincodeDefinition.EndorsementInfo.Version)
+			logger.Debugf("Channel %s for chaincode definition %s:%s does not have our org's approval", channelID, name, chaincodeDefinition.EndorsementInfo.GetVersion())
 			continue
 		}
 
@@ -555,13 +555,13 @@ func (c *Cache) update(initializing bool, channelID string, dirtyChaincodes map[
 		}
 
 		if !isLocalPackage {
-			logger.Debugf("Channel %s for chaincode definition %s:%s does not have a chaincode source defined", channelID, name, chaincodeDefinition.EndorsementInfo.Version)
+			logger.Debugf("Channel %s for chaincode definition %s:%s does not have a chaincode source defined", channelID, name, chaincodeDefinition.EndorsementInfo.GetVersion())
 			continue
 		}
 
 		cachedChaincode.InstallInfo = localChaincode.Info
 		if localChaincode.Info != nil {
-			logger.Infof("Chaincode with package ID '%s' now available on channel %s for chaincode definition %s:%s", localChaincode.Info.PackageID, channelID, name, cachedChaincode.Definition.EndorsementInfo.Version)
+			logger.Infof("Chaincode with package ID '%s' now available on channel %s for chaincode definition %s:%s", localChaincode.Info.PackageID, channelID, name, cachedChaincode.Definition.EndorsementInfo.GetVersion())
 			c.chaincodeCustodian.NotifyInstalledAndRunnable(localChaincode.Info.PackageID)
 		} else {
 			logger.Debugf("Chaincode definition for chaincode '%s' on channel '%s' is approved, but not installed", name, channelID)
@@ -642,11 +642,12 @@ func (c *Cache) retrieveChaincodesMetadataSetWhileLocked(channelID string) (chai
 		// report the sequence as the version to service discovery since
 		// the version is no longer required to change when updating any
 		// part of the chaincode definition
-		metadataSet = append(metadataSet,
+		metadataSet = append(
+			metadataSet,
 			chaincode.Metadata{
 				Name:              name,
 				Version:           strconv.FormatInt(def.Definition.Sequence, 10),
-				Policy:            def.Definition.ValidationInfo.ValidationParameter,
+				Policy:            def.Definition.ValidationInfo.GetValidationParameter(),
 				CollectionsConfig: def.Definition.Collections,
 				Approved:          def.Approved,
 				Installed:         def.InstallInfo != nil,
@@ -662,11 +663,12 @@ func (c *Cache) retrieveChaincodesMetadataSetWhileLocked(channelID string) (chai
 
 	// add it to the metadataset so _lifecycle can also be queried
 	// via service discovery
-	metadataSet = append(metadataSet,
+	metadataSet = append(
+		metadataSet,
 		chaincode.Metadata{
 			Name:      LifecycleNamespace,
 			Version:   strconv.FormatInt(lc.Definition.Sequence, 10),
-			Policy:    lc.Definition.ValidationInfo.ValidationParameter,
+			Policy:    lc.Definition.ValidationInfo.GetValidationParameter(),
 			Approved:  lc.Approved,
 			Installed: lc.InstallInfo != nil,
 		},

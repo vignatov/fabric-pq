@@ -57,13 +57,13 @@ func TestWriteFileToPackage(t *testing.T) {
 	require.Equal(t, int64(0o100644), header.Mode, "expected regular file mode")
 	require.Equal(t, 500, header.Uid, "expected 500 uid")
 	require.Equal(t, 500, header.Gid, "expected 500 gid")
-	require.Equal(t, "", header.Uname, "expected empty user name")
-	require.Equal(t, "", header.Gname, "expected empty group name")
+	require.Empty(t, header.Uname, "expected empty user name")
+	require.Empty(t, header.Gname, "expected empty group name")
 
 	b := make([]byte, 5)
 	n, err := tr.Read(b)
 	require.Equal(t, 5, n)
-	require.True(t, err == nil || err == io.EOF, "Error reading file from the archive") // go1.10 returns io.EOF
+	require.True(t, err == nil || errors.Is(err, io.EOF), "Error reading file from the archive") // go1.10 returns io.EOF
 	require.Equal(t, filecontent, string(b), "file content from archive does not equal original content")
 
 	t.Run("non existent file", func(t *testing.T) {

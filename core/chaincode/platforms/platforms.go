@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/metadata"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/golang"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/java"
@@ -36,7 +37,7 @@ var SupportedPlatforms = []Platform{
 type Platform interface {
 	Name() string
 	GenerateDockerfile() (string, error)
-	DockerBuildOptions(path string) (util.DockerBuildOptions, error)
+	DockerBuildOptions(path string, goVersion string, osVersion string, archVersion string) (util.DockerBuildOptions, error)
 }
 
 type PackageWriter interface {
@@ -87,7 +88,7 @@ func (r *Registry) GenerateDockerfile(ccType string) (string, error) {
 	// ----------------------------------------------------------------------------------------------------
 	base, err := platform.GenerateDockerfile()
 	if err != nil {
-		return "", fmt.Errorf("Failed to generate platform-specific Dockerfile: %s", err)
+		return "", fmt.Errorf("Failed to generate platform-specific Dockerfile: %w", err)
 	}
 	buf = append(buf, base)
 	buf = append(buf, fmt.Sprintf(`LABEL %s.chaincode.type="%s" \`, metadata.BaseDockerLabel, ccType))
@@ -96,7 +97,7 @@ func (r *Registry) GenerateDockerfile(ccType string) (string, error) {
 	// Then augment it with any general options
 	// ----------------------------------------------------------------------------------------------------
 	// append version so chaincode build version can be compared against peer build version
-	buf = append(buf, fmt.Sprintf("ENV CORE_CHAINCODE_BUILDLEVEL=%s", metadata.Version))
+	buf = append(buf, "ENV CORE_CHAINCODE_BUILDLEVEL="+metadata.Version)
 
 	// ----------------------------------------------------------------------------------------------------
 	// Finalize it
@@ -124,11 +125,23 @@ func (r *Registry) StreamDockerBuild(ccType, path string, codePackage io.Reader,
 	for name, data := range inputFiles {
 		err = r.PackageWriter.Write(name, data, tw)
 		if err != nil {
-			return fmt.Errorf(`Failed to inject "%s": %s`, name, err)
+			return fmt.Errorf(`Failed to inject "%s": %w`, name, err)
 		}
 	}
 
-	buildOptions, err := platform.DockerBuildOptions(path)
+	var (
+		goVersion   string
+		osVersion   string
+		archVersion string
+	)
+	if ccType == pb.ChaincodeSpec_GOLANG.String() {
+		goVersion, osVersion, archVersion, err = util.ParamsImage(client)
+		if err != nil {
+			return errors.Wrap(err, "get params docker image failed")
+		}
+	}
+
+	buildOptions, err := platform.DockerBuildOptions(path, goVersion, osVersion, archVersion)
 	if err != nil {
 		return errors.Wrap(err, "platform failed to create docker build options")
 	}
@@ -171,7 +184,7 @@ func (r *Registry) GenerateDockerBuild(ccType, path string, codePackage io.Reade
 	// ----------------------------------------------------------------------------------------------------
 	dockerFile, err := r.GenerateDockerfile(ccType)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to generate a Dockerfile: %s", err)
+		return nil, fmt.Errorf("Failed to generate a Dockerfile: %w", err)
 	}
 
 	inputFiles["Dockerfile"] = []byte(dockerFile)

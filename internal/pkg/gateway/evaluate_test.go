@@ -8,7 +8,7 @@ package gateway
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 	"time"
 
@@ -246,7 +246,7 @@ func TestEvaluate(t *testing.T) {
 				"g3": {{endorser: peer4Mock, height: 5}},                                       // msp3
 			},
 			postSetup: func(t *testing.T, def *preparedTest) {
-				def.localEndorser.ProcessProposalReturns(createErrorResponse(t, 500, "invalid signature", nil), fmt.Errorf("invalid signature"))
+				def.localEndorser.ProcessProposalReturns(createErrorResponse(t, 500, "invalid signature", nil), errors.New("invalid signature"))
 			},
 			endorsingOrgs: []string{"msp1"},
 			errCode:       codes.FailedPrecondition, // Code path could fail for reasons other than authentication
@@ -302,7 +302,7 @@ func TestEvaluate(t *testing.T) {
 			postSetup: func(t *testing.T, def *preparedTest) {
 				def.dialer.Calls(func(_ context.Context, target string, _ ...grpc.DialOption) (*grpc.ClientConn, error) {
 					if target == "peer2:9051" {
-						return nil, fmt.Errorf("endorser not answering")
+						return nil, errors.New("endorser not answering")
 					}
 					return nil, nil
 				})
@@ -366,7 +366,7 @@ func TestEvaluate(t *testing.T) {
 
 			require.NoError(t, err)
 			// assert the result is the payload from the proposal response returned by the local endorser
-			require.Equal(t, []byte("mock_response"), response.Result.Payload, "Incorrect result")
+			require.Equal(t, []byte("mock_response"), response.GetResult().GetPayload(), "Incorrect result")
 
 			// check the correct endorsers (mock) were called with the right parameters
 			checkEndorsers(t, tt.expectedEndorsers, test)
@@ -382,4 +382,31 @@ func TestEvaluate(t *testing.T) {
 			require.Equal(t, 1, test.discovery.IdentityInfoCallCount())
 		})
 	}
+}
+
+// When the evaluate deadline expires while the last candidate endorser is being called, the worker
+// goroutine must not block forever trying to report its failure.
+func TestEvaluateDoesNotLeakGoroutineOnTimeout(t *testing.T) {
+	const fn = "gateway.(*Server).Evaluate.func"
+	before := goroutinesInFunction(fn)
+
+	tt := &testDef{
+		members:           []networkMember{{"id1", "localhost:7051", "msp1", 3}},
+		localLedgerHeight: 3,
+	}
+	test := prepareTest(t, tt)
+	test.server.options.EndorsementTimeout = time.Minute
+	ctx, cancel := context.WithTimeout(test.ctx, 50*time.Millisecond)
+	defer cancel()
+	test.localEndorser.ProcessProposalStub = func(ctx context.Context, _ *peer.SignedProposal, _ ...grpc.CallOption) (*peer.ProposalResponse, error) {
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond) // the gRPC error surfaces just after the caller has given up
+		return nil, ctx.Err()
+	}
+
+	_, err := test.server.Evaluate(ctx, &pb.EvaluateRequest{ProposedTransaction: test.signedProposal})
+	require.Equal(t, codes.DeadlineExceeded, toRpcStatus(err).Code())
+
+	require.Eventually(t, func() bool { return goroutinesInFunction(fn) == before }, 2*time.Second, 20*time.Millisecond,
+		"Evaluate worker goroutine is still blocked after the call returned")
 }

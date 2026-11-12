@@ -33,7 +33,7 @@ func TestEndorserCmd(t *testing.T) {
 		cmd.SetChannel(&channel)
 
 		err := cmd.Execute(common.Config{})
-		require.Equal(t, err.Error(), "no server specified")
+		require.EqualError(t, err, "no server specified")
 	})
 
 	t.Run("no channel supplied", func(t *testing.T) {
@@ -41,7 +41,7 @@ func TestEndorserCmd(t *testing.T) {
 		cmd.SetServer(&server)
 
 		err := cmd.Execute(common.Config{})
-		require.Equal(t, err.Error(), "no channel specified")
+		require.EqualError(t, err, "no channel specified")
 	})
 
 	t.Run("Endorsement query with no chaincodes", func(t *testing.T) {
@@ -95,9 +95,9 @@ func TestEndorserCmd(t *testing.T) {
 			// Ensure the stub got the request that corresponds to what the CLI passed in
 			req := arg.Get(2).(*Request)
 			// Ensure chaincode names in the invocation chain match
-			require.Equal(t, "mycc", req.Queries[0].GetCcQuery().Interests[0].Chaincodes[0].Name)
+			require.Equal(t, "mycc", req.Queries[0].GetCcQuery().GetInterests()[0].GetChaincodes()[0].GetName())
 			// Ensure collection names in the invocation chain match
-			require.Equal(t, []string{"col1", "col2"}, req.Queries[0].GetCcQuery().Interests[0].Chaincodes[0].CollectionNames)
+			require.Equal(t, []string{"col1", "col2"}, req.Queries[0].GetCcQuery().GetInterests()[0].GetChaincodes()[0].GetCollectionNames())
 		})
 
 		err := cmd.Execute(common.Config{})
@@ -217,7 +217,7 @@ func TestParseEndorsementResponse(t *testing.T) {
 		}).Once()
 		err := parser.ParseResponse("mychannel", res)
 		require.NoError(t, err)
-		require.Equal(t, expectedEndorsersOutput, buff.String())
+		require.JSONEq(t, expectedEndorsersOutput, buff.String())
 	})
 }
 

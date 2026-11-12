@@ -87,7 +87,7 @@ func (e *LedgerQuerier) Invoke(stub shim.ChaincodeStubInterface) *pb.Response {
 		return shim.Error(fmt.Sprintf("Failed getting signed proposal from stub, %s: %s", cid, err))
 	}
 
-	name, err := protoutil.InvokedChaincodeName(sp.ProposalBytes)
+	name, err := protoutil.InvokedChaincodeName(sp.GetProposalBytes())
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Failed to identify the called chaincode: %s", err))
 	}
@@ -97,12 +97,12 @@ func (e *LedgerQuerier) Invoke(stub shim.ChaincodeStubInterface) *pb.Response {
 	}
 
 	if fname != GetChainInfo && len(args) < 3 {
-		return shim.Error(fmt.Sprintf("missing 3rd argument for %s", fname))
+		return shim.Error("missing 3rd argument for " + fname)
 	}
 
 	targetLedger := e.ledgers.GetLedger(cid)
 	if targetLedger == nil {
-		return shim.Error(fmt.Sprintf("Invalid chain ID, %s", cid))
+		return shim.Error("Invalid chain ID, " + cid)
 	}
 
 	qscclogger.Debugf("Invoke function: %s on chain: %s", fname, cid)

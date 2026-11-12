@@ -7,8 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package keylevelep
 
 import (
-	"encoding/json"
-	"fmt"
+	"encoding/json/v2"
 
 	"github.com/hyperledger/fabric-chaincode-go/v2/pkg/statebased"
 	"github.com/hyperledger/fabric-chaincode-go/v2/shim"
@@ -49,7 +48,7 @@ func (cc *EndorsementCC) Invoke(stub shim.ChaincodeStubInterface) *pb.Response {
 	if function, ok := functions[funcName]; ok {
 		return function(stub)
 	}
-	return shim.Error(fmt.Sprintf("Unknown function %s", funcName))
+	return shim.Error("Unknown function " + funcName)
 }
 
 // function dispatch map used by Invoke()
@@ -74,11 +73,12 @@ func addOrgs(stub shim.ChaincodeStubInterface) *pb.Response {
 	// get the endorsement policy for the key
 	var epBytes []byte
 	var err error
-	if parameters[0] == "pub" {
+	switch parameters[0] {
+	case "pub":
 		epBytes, err = stub.GetStateValidationParameter("pub")
-	} else if parameters[0] == "priv" {
+	case "priv":
 		epBytes, err = stub.GetPrivateDataValidationParameter("col", "priv")
-	} else {
+	default:
 		return shim.Error("Unknown key specified")
 	}
 	if err != nil {
@@ -100,9 +100,10 @@ func addOrgs(stub shim.ChaincodeStubInterface) *pb.Response {
 	}
 
 	// set the modified endorsement policy for the key
-	if parameters[0] == "pub" {
+	switch parameters[0] {
+	case "pub":
 		err = stub.SetStateValidationParameter("pub", epBytes)
-	} else if parameters[0] == "priv" {
+	case "priv":
 		err = stub.SetPrivateDataValidationParameter("col", "priv", epBytes)
 	}
 	if err != nil {
@@ -148,9 +149,10 @@ func delOrgs(stub shim.ChaincodeStubInterface) *pb.Response {
 	}
 
 	// set the modified endorsement policy for the key
-	if parameters[0] == "pub" {
+	switch parameters[0] {
+	case "pub":
 		err = stub.SetStateValidationParameter("pub", epBytes)
-	} else if parameters[0] == "priv" {
+	case "priv":
 		err = stub.SetPrivateDataValidationParameter("col", "priv", epBytes)
 	}
 	if err != nil {
@@ -207,11 +209,12 @@ func delEP(stub shim.ChaincodeStubInterface) *pb.Response {
 
 	// set the modified endorsement policy for the key to nil
 	var err error
-	if parameters[0] == "pub" {
+	switch parameters[0] {
+	case "pub":
 		err = stub.SetStateValidationParameter("pub", nil)
-	} else if parameters[0] == "priv" {
+	case "priv":
 		err = stub.SetPrivateDataValidationParameter("col", "priv", nil)
-	} else {
+	default:
 		return shim.Error("Unknown key specified")
 	}
 	if err != nil {

@@ -7,9 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 package statecouchdb
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"net/http"
 	"sort"
 	"sync"
@@ -61,7 +61,7 @@ func NewVersionedDBProvider(config *ledger.CouchDBConfig, metricsProvider metric
 	if err := checkExpectedDataformatVersion(couchInstance); err != nil {
 		return nil, err
 	}
-	p, err := newRedoLoggerProvider(config.RedoLogPath)
+	p, err := newRedoLoggerProvider(config.RedoLogPath, config.RedoLogDBType)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +238,7 @@ func (provider *VersionedDBProvider) Drop(dbName string) error {
 
 	delete(provider.databases, dbName)
 
-	return provider.redoLoggerProvider.leveldbProvider.Drop(dbName)
+	return provider.redoLoggerProvider.dbProvider.Drop(dbName)
 }
 
 // HealthCheck checks to see if the couch instance of the peer is healthy
@@ -420,7 +420,7 @@ func (vdb *VersionedDB) LoadCommittedVersions(keys []*statedb.CompositeKey) erro
 		if err != nil {
 			return err
 		}
-		rev := string(cv.AdditionalInfo)
+		rev := string(cv.GetAdditionalInfo())
 		committedDataCache.setVerAndRev(ns, key, vv.Version, rev)
 	}
 
@@ -932,7 +932,7 @@ func (vdb *VersionedDB) GetFullScanIterator(skipNamespace func(string) bool) (st
 
 	// if namespacesToScan is empty, we can return early with a nil FullScanIterator. However,
 	// the implementation of this method needs be consistent with the same method implemented in
-	// the stateleveldb pkg. Hence, we don't return a nil FullScanIterator by checking the length
+	// the statekvdb pkg. Hence, we don't return a nil FullScanIterator by checking the length
 	// of the namespacesToScan.
 
 	dbsToScan := []*namespaceDB{}
@@ -959,33 +959,46 @@ func applyAdditionalQueryOptions(queryString string, queryLimit int32, queryBook
 	const jsonQueryLimit = "limit"
 	const jsonQueryBookmark = "bookmark"
 	// create a generic map for the query json
-	jsonQueryMap := make(map[string]any)
+	jsonQueryMap := make(map[string]jsontext.Value)
 	// unmarshal the selector json into the generic map
-	decoder := json.NewDecoder(bytes.NewBuffer([]byte(queryString)))
-	decoder.UseNumber()
-	err := decoder.Decode(&jsonQueryMap)
-	if err != nil {
+	if err := json.Unmarshal([]byte(queryString), &jsonQueryMap); err != nil {
 		return "", err
 	}
-	if fieldsJSONArray, ok := jsonQueryMap[jsonQueryFields]; ok {
-		switch fieldsJSONArray := fieldsJSONArray.(type) {
-		case []any:
-			// Add the "_id", and "version" fields,  these are needed by default
-			jsonQueryMap[jsonQueryFields] = append(fieldsJSONArray, idField, versionField)
-		default:
+	if fieldsRaw, ok := jsonQueryMap[jsonQueryFields]; ok {
+		var fieldsJSONArray any
+		if err := json.Unmarshal(fieldsRaw, &fieldsJSONArray); err != nil {
 			return "", errors.New("fields definition must be an array")
 		}
+		fields, ok := fieldsJSONArray.([]any)
+		if !ok {
+			return "", errors.New("fields definition must be an array")
+		}
+		// Add the "_id", and "version" fields,  these are needed by default
+		fields = append(fields, idField, versionField)
+		encodedFields, err := marshalJSON(fields)
+		if err != nil {
+			return "", err
+		}
+		jsonQueryMap[jsonQueryFields] = encodedFields
 	}
 	// Add limit
 	// This will override any limit passed in the query.
 	// Explicit paging not yet supported.
-	jsonQueryMap[jsonQueryLimit] = queryLimit
+	encodedLimit, err := marshalJSON(queryLimit)
+	if err != nil {
+		return "", err
+	}
+	jsonQueryMap[jsonQueryLimit] = encodedLimit
 	// Add the bookmark if provided
 	if queryBookmark != "" {
-		jsonQueryMap[jsonQueryBookmark] = queryBookmark
+		encodedBookmark, err := marshalJSON(queryBookmark)
+		if err != nil {
+			return "", err
+		}
+		jsonQueryMap[jsonQueryBookmark] = encodedBookmark
 	}
 	// Marshal the updated json query
-	editedQuery, err := json.Marshal(jsonQueryMap)
+	editedQuery, err := marshalJSON(jsonQueryMap)
 	if err != nil {
 		return "", err
 	}
@@ -1021,7 +1034,8 @@ type resultsInfo struct {
 }
 
 func newQueryScanner(namespace string, db *couchDatabase, query string, internalQueryLimit,
-	limit int32, bookmark, startKey, endKey string) (*queryScanner, error) {
+	limit int32, bookmark, startKey, endKey string,
+) (*queryScanner, error) {
 	scanner := &queryScanner{namespace, db, &queryDefinition{startKey, endKey, query, internalQueryLimit}, &paginationInfo{-1, limit, bookmark}, &resultsInfo{0, nil}, false}
 	var err error
 	// query is defined, then execute the query and return the records and bookmark
@@ -1114,15 +1128,15 @@ func constructCacheValue(v *statedb.VersionedValue, rev string) *CacheValue {
 }
 
 func constructVersionedValue(cv *CacheValue) (*statedb.VersionedValue, error) {
-	height, _, err := version.NewHeightFromBytes(cv.Version)
+	height, _, err := version.NewHeightFromBytes(cv.GetVersion())
 	if err != nil {
 		return nil, err
 	}
 
 	return &statedb.VersionedValue{
-		Value:    cv.Value,
+		Value:    cv.GetValue(),
 		Version:  height,
-		Metadata: cv.Metadata,
+		Metadata: cv.GetMetadata(),
 	}, nil
 }
 

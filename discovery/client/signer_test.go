@@ -40,45 +40,52 @@ func TestSameMessage(t *testing.T) {
 
 func TestDifferentMessages(t *testing.T) {
 	var n uint = 50
-	var signedInvokedCount uint32
+	var signedInvokedCount atomic.Uint32
 	sign := func(msg []byte) ([]byte, error) {
-		atomic.AddUint32(&signedInvokedCount, 1)
+		signedInvokedCount.Add(1)
 		return msg, nil
 	}
 
 	ms := NewMemoizeSigner(sign, n)
+	type result struct {
+		err error
+		i   uint
+		sig []byte
+	}
 	parallelSignRange := func(start, end uint) {
+		res := make(chan result, end-start)
 		var wg sync.WaitGroup
-		wg.Add((int)(end - start))
 		for i := start; i < end; i++ {
-			i := i
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				sig, err := ms.Sign([]byte{byte(i)})
-				require.NoError(t, err)
-				require.Equal(t, []byte{byte(i)}, sig)
-			}()
+				res <- result{err, i, sig}
+			})
 		}
 		wg.Wait()
+		close(res)
+		for r := range res {
+			require.NoError(t, r.err)
+			require.Equal(t, []byte{byte(r.i)}, r.sig)
+		}
 	}
 
 	// Query once
 	parallelSignRange(0, n)
-	require.Equal(t, uint32(n), atomic.LoadUint32(&signedInvokedCount))
+	require.Equal(t, uint32(n), signedInvokedCount.Load())
 
 	// Query twice
 	parallelSignRange(0, n)
-	require.Equal(t, uint32(n), atomic.LoadUint32(&signedInvokedCount))
+	require.Equal(t, uint32(n), signedInvokedCount.Load())
 
 	// Query thrice on a disjoint range
 	for i := n + 1; i < 2*n; i++ {
 		parallelSignRange(i, i+1)
 	}
-	oldSignedInvokedCount := atomic.LoadUint32(&signedInvokedCount)
+	oldSignedInvokedCount := signedInvokedCount.Load()
 
 	// Ensure that some of the early messages 0-n were purged from memory
 	parallelSignRange(0, n)
-	require.True(t, oldSignedInvokedCount < atomic.LoadUint32(&signedInvokedCount))
+	require.Less(t, oldSignedInvokedCount, signedInvokedCount.Load())
 }
 
 func TestFailure(t *testing.T) {

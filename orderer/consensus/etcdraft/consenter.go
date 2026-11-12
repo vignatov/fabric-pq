@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package etcdraft
 
 import (
+	"os"
 	"path"
 	"reflect"
 	"time"
@@ -28,7 +29,7 @@ import (
 	"github.com/hyperledger/fabric/orderer/consensus"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
-	"go.etcd.io/etcd/raft/v3"
+	"go.etcd.io/raft/v3"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -69,9 +70,9 @@ type Consenter struct {
 func (c *Consenter) TargetChannel(message proto.Message) string {
 	switch req := message.(type) {
 	case *orderer.ConsensusRequest:
-		return req.Channel
+		return req.GetChannel()
 	case *orderer.SubmitRequest:
-		return req.Channel
+		return req.GetChannel()
 	default:
 		return ""
 	}
@@ -99,9 +100,9 @@ func (c *Consenter) detectSelfID(consenters map[uint64]*etcdraft.Consenter) (uin
 
 	var serverCertificates []string
 	for nodeID, cst := range consenters {
-		serverCertificates = append(serverCertificates, string(cst.ServerTlsCert))
+		serverCertificates = append(serverCertificates, string(cst.GetServerTlsCert()))
 
-		certAsDER, err := pemToDER(cst.ServerTlsCert, nodeID, "server", c.Logger)
+		certAsDER, err := pemToDER(cst.GetServerTlsCert(), nodeID, "server", c.Logger)
 		if err != nil {
 			return 0, err
 		}
@@ -122,11 +123,11 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *co
 		return nil, errors.Wrap(err, "failed to unmarshal consensus metadata")
 	}
 
-	if m.Options == nil {
+	if m.GetOptions() == nil {
 		return nil, errors.New("etcdraft options have not been provided")
 	}
 
-	isMigration := (metadata == nil || len(metadata.Value) == 0) && (support.Height() > 1)
+	isMigration := (metadata == nil || len(metadata.GetValue()) == 0) && (support.Height() > 1)
 	if isMigration {
 		c.Logger.Debugf("Block metadata is nil at block height=%d, it is consensus-type migration", support.Height())
 	}
@@ -162,9 +163,9 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *co
 
 	var tickInterval time.Duration
 	if c.EtcdRaftConfig.TickIntervalOverride == "" {
-		tickInterval, err = time.ParseDuration(m.Options.TickInterval)
+		tickInterval, err = time.ParseDuration(m.GetOptions().GetTickInterval())
 		if err != nil {
-			return nil, errors.Errorf("failed to parse TickInterval (%s) to time duration", m.Options.TickInterval)
+			return nil, errors.Errorf("failed to parse TickInterval (%s) to time duration", m.GetOptions().GetTickInterval())
 		}
 	} else {
 		tickInterval, err = time.ParseDuration(c.EtcdRaftConfig.TickIntervalOverride)
@@ -182,11 +183,11 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *co
 		Logger:        c.Logger,
 
 		TickInterval:         tickInterval,
-		ElectionTick:         int(m.Options.ElectionTick),
-		HeartbeatTick:        int(m.Options.HeartbeatTick),
-		MaxInflightBlocks:    int(m.Options.MaxInflightBlocks),
-		MaxSizePerMsg:        uint64(support.SharedConfig().BatchSize().PreferredMaxBytes),
-		SnapshotIntervalSize: m.Options.SnapshotIntervalSize,
+		ElectionTick:         int(m.GetOptions().GetElectionTick()),
+		HeartbeatTick:        int(m.GetOptions().GetHeartbeatTick()),
+		MaxInflightBlocks:    int(m.GetOptions().GetMaxInflightBlocks()),
+		MaxSizePerMsg:        uint64(support.SharedConfig().BatchSize().GetPreferredMaxBytes()),
+		SnapshotIntervalSize: m.GetOptions().GetSnapshotIntervalSize(),
 
 		BlockMetadata: blockMetadata,
 		Consenters:    consenters,
@@ -244,7 +245,7 @@ func (c *Consenter) IsChannelMember(joinBlock *common.Block) (bool, error) {
 		return false, errors.New("no orderer config in bundle")
 	}
 	configMetadata := &etcdraft.ConfigMetadata{}
-	if err := proto.Unmarshal(oc.ConsensusMetadata(), configMetadata); err != nil {
+	if err = proto.Unmarshal(oc.ConsensusMetadata(), configMetadata); err != nil {
 		return false, err
 	}
 
@@ -253,17 +254,17 @@ func (c *Consenter) IsChannelMember(joinBlock *common.Block) (bool, error) {
 		return false, errors.Wrapf(err, "failed to create x509 verify options from orderer config")
 	}
 
-	if err := VerifyConfigMetadata(configMetadata, verifyOpts); err != nil {
+	if err = VerifyConfigMetadata(configMetadata, verifyOpts); err != nil {
 		return false, errors.Wrapf(err, "failed to validate config metadata of ordering config")
 	}
 
 	consenters := make(map[uint64]*etcdraft.Consenter)
-	for i, c := range configMetadata.Consenters {
+	for i, c := range configMetadata.GetConsenters() {
 		consenters[uint64(i+1)] = c // the IDs don't matter
 	}
 
-	if _, err := c.detectSelfID(consenters); err != nil {
-		if err != cluster.ErrNotInChannel {
+	if _, err = c.detectSelfID(consenters); err != nil {
+		if !errors.Is(err, cluster.ErrNotInChannel) {
 			return false, errors.Wrapf(err, "failed to detect self ID by comparing public keys")
 		}
 		return false, nil
@@ -272,12 +273,29 @@ func (c *Consenter) IsChannelMember(joinBlock *common.Block) (bool, error) {
 	return true, nil
 }
 
+// RemoveChannelData removes the WAL and snapshot directories of the channel.
+func (c *Consenter) RemoveChannelData(channelID string) error {
+	if channelID == "" {
+		return errors.New("empty channel ID")
+	}
+	for _, baseDir := range []string{c.EtcdRaftConfig.WALDir, c.EtcdRaftConfig.SnapDir} {
+		if baseDir == "" {
+			continue
+		}
+		dir := path.Join(baseDir, channelID)
+		if err := os.RemoveAll(dir); err != nil {
+			return errors.Wrapf(err, "failed to remove %s", dir)
+		}
+	}
+	return nil
+}
+
 // ReadBlockMetadata attempts to read raft metadata from block metadata, if available.
 // otherwise, it reads raft metadata from config metadata supplied.
 func ReadBlockMetadata(blockMetadata *common.Metadata, configMetadata *etcdraft.ConfigMetadata) (*etcdraft.BlockMetadata, error) {
-	if blockMetadata != nil && len(blockMetadata.Value) != 0 { // we have consenters mapping from block
+	if blockMetadata != nil && len(blockMetadata.GetValue()) != 0 { // we have consenters mapping from block
 		m := &etcdraft.BlockMetadata{}
-		if err := proto.Unmarshal(blockMetadata.Value, m); err != nil {
+		if err := proto.Unmarshal(blockMetadata.GetValue(), m); err != nil {
 			return nil, errors.Wrap(err, "failed to unmarshal block's metadata")
 		}
 		return m, nil
@@ -285,11 +303,11 @@ func ReadBlockMetadata(blockMetadata *common.Metadata, configMetadata *etcdraft.
 
 	m := &etcdraft.BlockMetadata{
 		NextConsenterId: 1,
-		ConsenterIds:    make([]uint64, len(configMetadata.Consenters)),
+		ConsenterIds:    make([]uint64, len(configMetadata.GetConsenters())),
 	}
 	// need to read consenters from the configuration
-	for i := range m.ConsenterIds {
-		m.ConsenterIds[i] = m.NextConsenterId
+	for i := range m.GetConsenterIds() {
+		m.ConsenterIds[i] = m.GetNextConsenterId()
 		m.NextConsenterId++
 	}
 
@@ -352,7 +370,7 @@ func createComm(clusterDialer *cluster.PredicateDialer, c *Consenter, config loc
 
 	compareCert := cluster.CachePublicKeyComparisons(func(a, b []byte) bool {
 		err := crypto.CertificatesWithSamePublicKey(a, b)
-		if err != nil && err != crypto.ErrPubKeyMismatch {
+		if err != nil && !errors.Is(err, crypto.ErrPubKeyMismatch) {
 			crypto.LogNonPubKeyMismatchErr(logger.Errorf, err, a, b)
 		}
 		return err == nil

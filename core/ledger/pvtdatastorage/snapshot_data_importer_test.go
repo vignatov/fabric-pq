@@ -16,7 +16,8 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
+	dbpkg "github.com/hyperledger/fabric/common/ledger"
+	"github.com/hyperledger/fabric/common/ledger/util/dbfactory"
 	"github.com/hyperledger/fabric/core/chaincode/implicitcollection"
 	"github.com/hyperledger/fabric/core/ledger/confighistory/confighistorytest"
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
@@ -42,11 +43,11 @@ func TestSnapshotImporter(t *testing.T) {
 
 	setup := func() (*SnapshotDataImporter, *confighistorytest.Mgr, *dbEntriesVerifier) {
 		testDir := t.TempDir()
-		dbProvider, err := leveldbhelper.NewProvider(&leveldbhelper.Conf{DBPath: testDir})
+		dbProvider, err := dbfactory.NewProvider(dbpkg.GoLevelDB, testDir, "")
 		require.NoError(t, err)
 		t.Cleanup(func() { dbProvider.Close() })
 
-		configHistoryMgr, err := confighistorytest.NewMgr(path.Join(testDir, "config-history"))
+		configHistoryMgr, err := confighistorytest.NewMgr(path.Join(testDir, "config-history"), dbpkg.GoLevelDB)
 		require.NoError(t, err)
 		t.Cleanup(func() { configHistoryMgr.Close() })
 
@@ -58,6 +59,7 @@ func TestSnapshotImporter(t *testing.T) {
 			newMockMembershipProvider(myMSPID),
 			configHistoryMgr.GetRetriever(ledgerID),
 			testDir,
+			dbpkg.GoLevelDB,
 		)
 		require.NoError(t, err)
 
@@ -80,7 +82,8 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -97,7 +100,7 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 
 		dbVerifier.verifyElgMissingDataEntry(
-			&missingDataKey{nsCollBlk: nsCollBlk{ns: "ns", coll: "coll", blkNum: 20}},
+			&missingDataKey{ns: "ns", coll: "coll", blkNum: 20},
 			(&bitset.BitSet{}).Set(300),
 		)
 
@@ -120,7 +123,8 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -137,7 +141,7 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 
 		dbVerifier.verifyInelgMissingDataEntry(
-			&missingDataKey{nsCollBlk: nsCollBlk{ns: "ns", coll: "coll", blkNum: 20}},
+			&missingDataKey{ns: "ns", coll: "coll", blkNum: 20},
 			(&bitset.BitSet{}).Set(300),
 		)
 
@@ -160,7 +164,8 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -177,7 +182,7 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 
 		dbVerifier.verifyElgMissingDataEntry(
-			&missingDataKey{nsCollBlk: nsCollBlk{ns: "ns", coll: "coll", blkNum: 20}},
+			&missingDataKey{ns: "ns", coll: "coll", blkNum: 20},
 			(&bitset.BitSet{}).Set(300),
 		)
 
@@ -214,7 +219,8 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -231,7 +237,7 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 
 		dbVerifier.verifyInelgMissingDataEntry(
-			&missingDataKey{nsCollBlk: nsCollBlk{ns: "ns", coll: "coll", blkNum: 20}},
+			&missingDataKey{ns: "ns", coll: "coll", blkNum: 20},
 			(&bitset.BitSet{}).Set(300),
 		)
 
@@ -261,7 +267,8 @@ func TestSnapshotImporter(t *testing.T) {
 		require.NoError(t, err)
 
 		myImplicitColl := implicitcollection.NameForOrg(myMSPID)
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", myImplicitColl,
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", myImplicitColl,
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -278,7 +285,7 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 
 		dbVerifier.verifyElgMissingDataEntry(
-			&missingDataKey{nsCollBlk: nsCollBlk{ns: "ns", coll: myImplicitColl, blkNum: 20}},
+			&missingDataKey{ns: "ns", coll: myImplicitColl, blkNum: 20},
 			(&bitset.BitSet{}).Set(300),
 		)
 
@@ -294,7 +301,8 @@ func TestSnapshotImporter(t *testing.T) {
 		require.NoError(t, err)
 
 		otherOrgImplicitColl := implicitcollection.NameForOrg("SomeOtherOrg")
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", otherOrgImplicitColl,
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", otherOrgImplicitColl,
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -311,7 +319,7 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 
 		dbVerifier.verifyInelgMissingDataEntry(
-			&missingDataKey{nsCollBlk: nsCollBlk{ns: "ns", coll: otherOrgImplicitColl, blkNum: 20}},
+			&missingDataKey{ns: "ns", coll: otherOrgImplicitColl, blkNum: 20},
 			(&bitset.BitSet{}).Set(300),
 		)
 
@@ -334,24 +342,26 @@ func TestSnapshotImporter(t *testing.T) {
 
 		myImplicitColl := implicitcollection.NameForOrg(myMSPID)
 		for i := 10; i < 20; i++ {
-			err = snapshotDataImporter.ConsumeSnapshotData("ns", myImplicitColl,
+			err = snapshotDataImporter.ConsumeSnapshotData(
+				"ns", myImplicitColl,
 				[]byte("key-hash"), []byte("value-hash"),
 				version.NewHeight(uint64(i), 300),
 			)
 			require.NoError(t, err)
 
-			err = snapshotDataImporter.ConsumeSnapshotData("ns", myImplicitColl,
+			err = snapshotDataImporter.ConsumeSnapshotData(
+				"ns", myImplicitColl,
 				[]byte("another-key-hash"), []byte("another-value-hash"),
 				version.NewHeight(uint64(i), 301),
 			)
 			require.NoError(t, err)
 
-			err = snapshotDataImporter.ConsumeSnapshotData("ns", myImplicitColl,
+			err = snapshotDataImporter.ConsumeSnapshotData(
+				"ns", myImplicitColl,
 				[]byte("another-key-hash"), []byte("another-value-hash"),
 				version.NewHeight(uint64(i), 302),
 			)
 			require.NoError(t, err)
-
 		}
 		require.NoError(t, snapshotDataImporter.Done())
 
@@ -381,7 +391,7 @@ func TestSnapshotImporter(t *testing.T) {
 				},
 			)
 			dbVerifier.verifyElgMissingDataEntry(
-				&missingDataKey{nsCollBlk: nsCollBlk{ns: "ns", coll: myImplicitColl, blkNum: uint64(i)}},
+				&missingDataKey{ns: "ns", coll: myImplicitColl, blkNum: uint64(i)},
 				(&bitset.BitSet{}).Set(300).Set(301).Set(302),
 			)
 		}
@@ -404,7 +414,8 @@ func TestSnapshotImporter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -421,11 +432,11 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 
 	setup := func() (*SnapshotDataImporter, *confighistorytest.Mgr) {
 		testDir := t.TempDir()
-		dbProvider, err := leveldbhelper.NewProvider(&leveldbhelper.Conf{DBPath: testDir})
+		dbProvider, err := dbfactory.NewProvider(dbpkg.GoLevelDB, testDir, "")
 		require.NoError(t, err)
 		t.Cleanup(func() { dbProvider.Close() })
 
-		configHistoryMgr, err := confighistorytest.NewMgr(path.Join(testDir, "config-history"))
+		configHistoryMgr, err := confighistorytest.NewMgr(path.Join(testDir, "config-history"), dbpkg.GoLevelDB)
 		require.NoError(t, err)
 		t.Cleanup(func() { configHistoryMgr.Close() })
 
@@ -437,6 +448,7 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 			newMockMembershipProvider(myMSPID),
 			configHistoryMgr.GetRetriever(ledgerID),
 			testDir,
+			dbpkg.GoLevelDB,
 		)
 		require.NoError(t, err)
 		return snapshotDataImporter, configHistoryMgr
@@ -450,7 +462,8 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -475,7 +488,8 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(10, 300),
 		)
@@ -483,33 +497,6 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 
 		err = snapshotDataImporter.Done()
 		require.EqualError(t, err, "unexpected error - no collection config found below block number [10] for <namespace=ns, collection=coll>")
-	})
-
-	t.Run("error-when-membershipProvider-returns-error", func(t *testing.T) {
-		snapshotDataImporter, configHistoryMgr := setup()
-		err := configHistoryMgr.Setup(
-			ledgerID, "ns",
-			map[uint64][]*peer.StaticCollectionConfig{
-				15: {
-					{
-						Name:             "coll",
-						MemberOrgsPolicy: iamIn.toMemberOrgPolicy(),
-						BlockToLive:      30,
-					},
-				},
-			},
-		)
-		require.NoError(t, err)
-
-		snapshotDataImporter.eligibilityAndBTLCache.membershipProvider.(*mock.MembershipInfoProvider).AmMemberOfReturns(false, fmt.Errorf("membership-error"))
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
-			[]byte("key-hash"), []byte("value-hash"),
-			version.NewHeight(20, 300),
-		)
-		require.NoError(t, err)
-
-		err = snapshotDataImporter.Done()
-		require.EqualError(t, err, "membership-error")
 	})
 
 	t.Run("error-when-writing-pending-data-during-done", func(t *testing.T) {
@@ -527,7 +514,8 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 			},
 		)
 		require.NoError(t, err)
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -535,7 +523,7 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 
 		snapshotDataImporter.rowsSorter.dbProvider.Close()
 		err = snapshotDataImporter.Done()
-		require.EqualError(t, err, "error writing batch to leveldb: leveldb: closed")
+		require.EqualError(t, err, "error writing batch to leveldb: leveldb: closed") //nolint:dupword
 	})
 
 	t.Run("error-when-retrieving-iterator-during-done", func(t *testing.T) {
@@ -564,7 +552,8 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 			maxBatchLenForSnapshotImport = originalBatchLenForSnapshotImport
 		}()
 
-		err = snapshotDataImporter.ConsumeSnapshotData("ns", "coll",
+		err = snapshotDataImporter.ConsumeSnapshotData(
+			"ns", "coll",
 			[]byte("key-hash"), []byte("value-hash"),
 			version.NewHeight(20, 300),
 		)
@@ -579,12 +568,13 @@ func TestSnapshotImporterErrorPropagation(t *testing.T) {
 func TestEligibilityAndBTLCacheLoadData(t *testing.T) {
 	testDir := t.TempDir()
 
-	configHistoryMgr, err := confighistorytest.NewMgr(testDir)
+	configHistoryMgr, err := confighistorytest.NewMgr(testDir, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 	defer configHistoryMgr.Close()
 
 	// setup a sample config history for namespace1
-	err = configHistoryMgr.Setup("test-ledger", "namespace1",
+	err = configHistoryMgr.Setup(
+		"test-ledger", "namespace1",
 		map[uint64][]*peer.StaticCollectionConfig{
 			15: {
 				{
@@ -626,7 +616,8 @@ func TestEligibilityAndBTLCacheLoadData(t *testing.T) {
 	require.NoError(t, err)
 
 	// setup a sample config history for namespace2
-	err = configHistoryMgr.Setup("test-ledger", "namespace2",
+	err = configHistoryMgr.Setup(
+		"test-ledger", "namespace2",
 		map[uint64][]*peer.StaticCollectionConfig{
 			50: {
 				{
@@ -775,8 +766,8 @@ func TestEligibilityAndBTLCacheDataExpiry(t *testing.T) {
 func newMockMembershipProvider(myMspID string) *mock.MembershipInfoProvider {
 	p := &mock.MembershipInfoProvider{}
 	p.MyImplicitCollectionNameReturns(implicitcollection.NameForOrg("myOrg"))
-	p.AmMemberOfStub = func(namespace string, config *peer.CollectionPolicyConfig) (bool, error) {
-		return iamIn.sameAs(config), nil
+	p.AmMemberOfStub = func(namespace string, config *peer.CollectionPolicyConfig) bool {
+		return iamIn.sameAs(config)
 	}
 	return p
 }
@@ -803,14 +794,14 @@ func (e eligibilityVal) toMemberOrgPolicy() *peer.CollectionPolicyConfig {
 }
 
 func (e eligibilityVal) sameAs(p *peer.CollectionPolicyConfig) bool {
-	return e == eligibilityVal(p.GetSignaturePolicy().Identities[0].Principal[0])
+	return e == eligibilityVal(p.GetSignaturePolicy().GetIdentities()[0].GetPrincipal()[0])
 }
 
 func TestDBUpdates(t *testing.T) {
-	setup := func() *leveldbhelper.Provider {
+	setup := func() dbpkg.Provider {
 		testDir := t.TempDir()
 
-		p, err := leveldbhelper.NewProvider(&leveldbhelper.Conf{DBPath: testDir})
+		p, err := dbfactory.NewProvider(dbpkg.GoLevelDB, testDir, "")
 		require.NoError(t, err)
 		t.Cleanup(func() { p.Close() })
 		return p
@@ -927,7 +918,7 @@ func TestDBUpdates(t *testing.T) {
 
 type dbEntriesVerifier struct {
 	t  *testing.T
-	db *leveldbhelper.DBHandle
+	db dbpkg.DBHandle
 }
 
 func (v *dbEntriesVerifier) verifyElgMissingDataEntry(key *missingDataKey, expectedVal *bitset.BitSet) {
@@ -1086,7 +1077,7 @@ func TestSnapshotRowsSorter(t *testing.T) {
 		t.Run(fmt.Sprintf("testcase-%d", i), func(t *testing.T) {
 			dir := t.TempDir()
 
-			sorter, err := newSnapshotRowsSorter(dir)
+			sorter, err := newSnapshotRowsSorter(dir, dbpkg.GoLevelDB)
 			require.NoError(t, err)
 
 			for _, row := range testCase.inputRows {
@@ -1109,7 +1100,7 @@ func TestSnapshotRowsSorter(t *testing.T) {
 			}
 			require.Len(t, results, len(testCase.inputRows))
 
-			for i := 0; i < len(results); i++ {
+			for i := range results {
 				require.Equal(
 					t,
 					testCase.inputRows[testCase.expectedSortOrder[i]],
@@ -1123,7 +1114,7 @@ func TestSnapshotRowsSorter(t *testing.T) {
 func TestSnapshotRowsSorterCleanup(t *testing.T) {
 	dir := t.TempDir()
 
-	sorter, err := newSnapshotRowsSorter(dir)
+	sorter, err := newSnapshotRowsSorter(dir, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 	empty, err := fileutil.DirEmpty(dir)
 	require.NoError(t, err)

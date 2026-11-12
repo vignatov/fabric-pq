@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/bookkeeping"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -30,7 +31,7 @@ func TestExpiryKVEncoding(t *testing.T) {
 }
 
 func TestExpiryKeeper(t *testing.T) {
-	testenv := bookkeeping.NewTestEnv(t)
+	testenv := bookkeeping.NewTestEnv(t, ledger.GoLevelDB)
 	defer testenv.Cleanup()
 	expiryKeeper := newExpiryKeeper("testledger", testenv.TestProvider)
 
@@ -63,7 +64,8 @@ func TestExpiryKeeper(t *testing.T) {
 	require.True(t, proto.Equal(expinfo4.pvtdataKeys, listExpinfo3[0].pvtdataKeys))
 
 	// Clear entries for keys expiring at block 13 and 15 and again retrieve by expiring block 13, 15, and 17
-	require.NoError(t,
+	require.NoError(
+		t,
 		expiryKeeper.update(nil, []*expiryInfoKey{expinfo1.expiryInfoKey, expinfo2.expiryInfoKey, expinfo3.expiryInfoKey}),
 	)
 	listExpinfo4, _ := expiryKeeper.retrieve(13)

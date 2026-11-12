@@ -7,6 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 package deliverservice
 
 import (
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -36,7 +38,7 @@ func TestStartDeliverForChannel(t *testing.T) {
 	fakeLedgerInfoCreator := func() *fake.LedgerInfo {
 		fakeLedgerInfo := &fake.LedgerInfo{}
 		fakeLedgerInfo.LedgerHeightReturns(7, nil)                                      // first call creates the verifier
-		fakeLedgerInfo.LedgerHeightReturnsOnCall(1, 0, fmt.Errorf("fake-ledger-error")) // second call inside the deliverer
+		fakeLedgerInfo.LedgerHeightReturnsOnCall(1, 0, errors.New("fake-ledger-error")) // second call inside the deliverer
 		fakeLedgerInfo.GetCurrentBlockHashReturns([]byte{1, 2, 3, 4, 5, 6, 7, 8}, nil)
 		return fakeLedgerInfo
 	}
@@ -68,7 +70,7 @@ func TestStartDeliverForChannel(t *testing.T) {
 		require.NotNil(t, ds.blockDeliverer)
 		bpd := ds.blockDeliverer.(*blocksprovider.Deliverer)
 
-		require.Equal(t, "76f7a03f8dfdb0ef7c4b28b3901fe163c730e906c70e4cdf887054ad5f608bed", fmt.Sprintf("%x", bpd.TLSCertHash))
+		require.Equal(t, "76f7a03f8dfdb0ef7c4b28b3901fe163c730e906c70e4cdf887054ad5f608bed", hex.EncodeToString(bpd.TLSCertHash))
 	})
 
 	t.Run("Green Path without mutual TLS", func(t *testing.T) {
@@ -93,6 +95,36 @@ func TestStartDeliverForChannel(t *testing.T) {
 		require.NotNil(t, ds.blockDeliverer)
 		bpd := ds.blockDeliverer.(*blocksprovider.Deliverer)
 		require.Nil(t, bpd.TLSCertHash)
+	})
+
+	t.Run("Message size limits", func(t *testing.T) {
+		ds := NewDeliverService(&Config{
+			DeliverServiceConfig: &DeliverServiceConfig{
+				MaxRecvMsgSize: 200 * 1024 * 1024,
+				MaxSendMsgSize: 150 * 1024 * 1024,
+			},
+			ChannelConfig:  channelConfigProto,
+			CryptoProvider: cryptoProvider,
+		}).(*deliverServiceImpl)
+
+		finalized := make(chan struct{})
+		err := ds.StartDeliverForChannel("channel-id", fakeLedgerInfoCreator(), func() {
+			close(finalized)
+		})
+		require.NoError(t, err)
+
+		select {
+		case <-finalized:
+		case <-time.After(time.Second):
+			require.FailNow(t, "finalizer should have executed")
+		}
+
+		require.NotNil(t, ds.blockDeliverer)
+		bpd := ds.blockDeliverer.(*blocksprovider.Deliverer)
+		dialer, ok := bpd.Dialer.(blocksprovider.DialerAdapter)
+		require.True(t, ok)
+		require.Equal(t, 200*1024*1024, dialer.ClientConfig.MaxRecvMsgSize)
+		require.Equal(t, 150*1024*1024, dialer.ClientConfig.MaxSendMsgSize)
 	})
 
 	t.Run("Leader yields and re-elected: Start->Stop->Start", func(t *testing.T) {
@@ -134,6 +166,29 @@ func TestStartDeliverForChannel(t *testing.T) {
 		}
 	})
 
+	t.Run("Stop right after start", func(t *testing.T) {
+		ds := NewDeliverService(&Config{
+			DeliverServiceConfig: &DeliverServiceConfig{},
+			ChannelConfig:        channelConfigProto,
+			CryptoProvider:       cryptoProvider,
+		}).(*deliverServiceImpl)
+
+		finalized := make(chan struct{})
+		err := ds.StartDeliverForChannel("channel-id", fakeLedgerInfoCreator(), func() {
+			close(finalized)
+		})
+		require.NoError(t, err)
+
+		err = ds.StopDeliverForChannel()
+		require.NoError(t, err)
+
+		select {
+		case <-finalized:
+		case <-time.After(time.Second):
+			require.FailNow(t, "finalizer should have executed")
+		}
+	})
+
 	t.Run("Exists", func(t *testing.T) {
 		ds := NewDeliverService(&Config{
 			DeliverServiceConfig: &DeliverServiceConfig{},
@@ -168,7 +223,7 @@ func TestStartDeliverForChannel_BFT(t *testing.T) {
 	fakeLedgerInfoCreator := func() *fake.LedgerInfo {
 		fakeLedgerInfo := &fake.LedgerInfo{}
 		fakeLedgerInfo.LedgerHeightReturns(7, nil)                                      // first call creates the verifier
-		fakeLedgerInfo.LedgerHeightReturnsOnCall(1, 0, fmt.Errorf("fake-ledger-error")) // second call inside the deliverer
+		fakeLedgerInfo.LedgerHeightReturnsOnCall(1, 0, errors.New("fake-ledger-error")) // second call inside the deliverer
 		fakeLedgerInfo.GetCurrentBlockHashReturns([]byte{1, 2, 3, 4, 5, 6, 7, 8}, nil)
 		return fakeLedgerInfo
 	}
@@ -198,7 +253,7 @@ func TestStartDeliverForChannel_BFT(t *testing.T) {
 		require.NotNil(t, ds.blockDeliverer)
 		bpd := ds.blockDeliverer.(*blocksprovider.BFTDeliverer)
 
-		require.Equal(t, "76f7a03f8dfdb0ef7c4b28b3901fe163c730e906c70e4cdf887054ad5f608bed", fmt.Sprintf("%x", bpd.TLSCertHash))
+		require.Equal(t, "76f7a03f8dfdb0ef7c4b28b3901fe163c730e906c70e4cdf887054ad5f608bed", hex.EncodeToString(bpd.TLSCertHash))
 	})
 
 	t.Run("Green Path without mutual TLS", func(t *testing.T) {
@@ -225,6 +280,37 @@ func TestStartDeliverForChannel_BFT(t *testing.T) {
 		require.NotNil(t, ds.blockDeliverer)
 		bpd := ds.blockDeliverer.(*blocksprovider.BFTDeliverer)
 		require.Nil(t, bpd.TLSCertHash)
+	})
+
+	t.Run("Message size limits", func(t *testing.T) {
+		ds := NewDeliverService(&Config{
+			DeliverServiceConfig: &DeliverServiceConfig{
+				MaxRecvMsgSize: 200 * 1024 * 1024,
+				MaxSendMsgSize: 150 * 1024 * 1024,
+				Policy:         DefaultPolicy,
+			},
+			ChannelConfig:  channelConfigProto,
+			CryptoProvider: cryptoProvider,
+		}).(*deliverServiceImpl)
+
+		finalized := make(chan struct{})
+		err := ds.StartDeliverForChannel("channel-id", fakeLedgerInfoCreator(), func() {
+			close(finalized)
+		})
+		require.NoError(t, err)
+
+		select {
+		case <-finalized:
+		case <-time.After(time.Second):
+			require.FailNow(t, "finalizer should have executed")
+		}
+
+		require.NotNil(t, ds.blockDeliverer)
+		bpd := ds.blockDeliverer.(*blocksprovider.BFTDeliverer)
+		dialer, ok := bpd.Dialer.(blocksprovider.DialerAdapter)
+		require.True(t, ok)
+		require.Equal(t, 200*1024*1024, dialer.ClientConfig.MaxRecvMsgSize)
+		require.Equal(t, 150*1024*1024, dialer.ClientConfig.MaxSendMsgSize)
 	})
 
 	t.Run("Can restart for channel: Start->Stop->Start", func(t *testing.T) {
@@ -263,6 +349,30 @@ func TestStartDeliverForChannel_BFT(t *testing.T) {
 		require.NoError(t, err)
 		select {
 		case <-finalized2:
+		case <-time.After(time.Second):
+			require.FailNow(t, "finalizer should have executed")
+		}
+	})
+
+	t.Run("Stop right after start", func(t *testing.T) {
+		ds := NewDeliverService(&Config{
+			DeliverServiceConfig: &DeliverServiceConfig{
+				Policy: DefaultPolicy,
+			},
+			ChannelConfig:  channelConfigProto,
+			CryptoProvider: cryptoProvider,
+		}).(*deliverServiceImpl)
+
+		finalized := make(chan struct{})
+		err := ds.StartDeliverForChannel("channel-id", fakeLedgerInfoCreator(), func() {
+			close(finalized)
+		})
+		require.NoError(t, err)
+
+		ds.Stop()
+
+		select {
+		case <-finalized:
 		case <-time.After(time.Second):
 			require.FailNow(t, "finalizer should have executed")
 		}
@@ -431,8 +541,8 @@ func TestStop(t *testing.T) {
 // TODO this pattern repeats itself in several places. Make it common in the 'genesisconfig' package to easily create
 // Raft genesis blocks
 func generateCertificates(t *testing.T, confAppRaft *genesisconfig.Profile, tlsCA tlsgen.CA, certDir string) {
-	for i, c := range confAppRaft.Orderer.EtcdRaft.Consenters {
-		srvC, err := tlsCA.NewServerCertKeyPair(c.Host)
+	for i, c := range confAppRaft.Orderer.EtcdRaft.GetConsenters() {
+		srvC, err := tlsCA.NewServerCertKeyPair(c.GetHost())
 		require.NoError(t, err)
 		srvP := path.Join(certDir, fmt.Sprintf("server%d.crt", i))
 		err = os.WriteFile(srvP, srvC.Cert, 0o644)
@@ -493,7 +603,8 @@ cGVlcjCCFnBlZXIwLm9yZzEuZXhhbXBsZS5jb22CBXBlZXIwMAoGCCqGSM49BAMC
 A0cAMEQCIAiAGoYeKPMd3bqtixZji8q2zGzLmIzq83xdTJoZqm50AiAKleso2EVi
 2TwsekWGpMaCOI6JV1+ZONyti6vBChhUYg==
 -----END CERTIFICATE-----`),
-		Key: []byte(`-----BEGIN PRIVATE KEY-----
+		Key: []byte(
+			`-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgxiyAFyD0Eg1NxjbS
 U2EKDLoTQr3WPK8z7WyeOSzr+GGhRANCAATGCWmkvGIBhJqyt0WytkkPFFQsYFvA
 eUCutqn1KYDMYh54i6p723cXbdDkmvL2UCciHyHdSWS9lmkKVdyNGIJ6

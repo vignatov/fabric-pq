@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/containerd/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 )
 
@@ -42,7 +42,7 @@ func (cli *Client) ExecCreate(ctx context.Context, containerID string, options E
 		return ExecCreateResult{}, err
 	}
 
-	req := container.ExecCreateRequest{
+	resp, err := cli.post(ctx, "/containers/"+containerID+"/exec", nil, nil, container.ExecCreateRequest{
 		User:         options.User,
 		Privileged:   options.Privileged,
 		Tty:          options.TTY,
@@ -54,9 +54,7 @@ func (cli *Client) ExecCreate(ctx context.Context, containerID string, options E
 		Env:          options.Env,
 		WorkingDir:   options.WorkingDir,
 		Cmd:          options.Cmd,
-	}
-
-	resp, err := cli.post(ctx, "/containers/"+containerID+"/exec", nil, req, nil)
+	})
 	defer ensureReaderClosed(resp)
 	if err != nil {
 		return ExecCreateResult{}, err
@@ -82,8 +80,7 @@ type ExecStartOptions struct {
 }
 
 // ExecStartResult holds the result of starting a container exec.
-type ExecStartResult struct {
-}
+type ExecStartResult struct{}
 
 // ExecStart starts an exec process already created in the docker host.
 func (cli *Client) ExecStart(ctx context.Context, execID string, options ExecStartOptions) (ExecStartResult, error) {
@@ -92,12 +89,11 @@ func (cli *Client) ExecStart(ctx context.Context, execID string, options ExecSta
 		return ExecStartResult{}, err
 	}
 
-	req := container.ExecStartRequest{
+	resp, err := cli.post(ctx, "/exec/"+execID+"/start", nil, nil, container.ExecStartRequest{
 		Detach:      options.Detach,
 		Tty:         options.TTY,
 		ConsoleSize: consoleSize,
-	}
-	resp, err := cli.post(ctx, "/exec/"+execID+"/start", nil, req, nil)
+	})
 	defer ensureReaderClosed(resp)
 	return ExecStartResult{}, err
 }
@@ -118,7 +114,7 @@ type ExecAttachResult struct {
 // ExecAttach attaches a connection to an exec process in the server.
 //
 // It returns a [HijackedResponse] with the hijacked connection
-// and a reader to get output. It's up to the called to close
+// and a reader to get output. It's up to the caller to close
 // the hijacked connection by calling [HijackedResponse.Close].
 //
 // The stream format on the response uses one of two formats:
@@ -138,13 +134,11 @@ func (cli *Client) ExecAttach(ctx context.Context, execID string, options ExecAt
 	if err != nil {
 		return ExecAttachResult{}, err
 	}
-	req := container.ExecStartRequest{
+	headers := http.Header{"Content-Type": {"application/json"}}
+	response, err := cli.postHijacked(ctx, "/exec/"+execID+"/start", nil, headers, container.ExecStartRequest{
 		Detach:      false,
 		Tty:         options.TTY,
 		ConsoleSize: consoleSize,
-	}
-	response, err := cli.postHijacked(ctx, "/exec/"+execID+"/start", nil, req, http.Header{
-		"Content-Type": {"application/json"},
 	})
 	return ExecAttachResult{HijackedResponse: response}, err
 }
@@ -152,7 +146,7 @@ func (cli *Client) ExecAttach(ctx context.Context, execID string, options ExecAt
 func getConsoleSize(hasTTY bool, consoleSize ConsoleSize) (*[2]uint, error) {
 	if consoleSize.Height != 0 || consoleSize.Width != 0 {
 		if !hasTTY {
-			return nil, errdefs.ErrInvalidArgument.WithMessage("console size is only supported when TTY is enabled")
+			return nil, cerrdefs.ErrInvalidArgument.WithMessage("console size is only supported when TTY is enabled")
 		}
 		return &[2]uint{consoleSize.Height, consoleSize.Width}, nil
 	}
@@ -160,8 +154,7 @@ func getConsoleSize(hasTTY bool, consoleSize ConsoleSize) (*[2]uint, error) {
 }
 
 // ExecInspectOptions holds options for inspecting a container exec.
-type ExecInspectOptions struct {
-}
+type ExecInspectOptions struct{}
 
 // ExecInspectResult holds the result of inspecting a container exec.
 //

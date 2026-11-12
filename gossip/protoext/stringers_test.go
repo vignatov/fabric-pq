@@ -56,7 +56,7 @@ func TestMembershipRequestToString(t *testing.T) {
 			},
 		},
 		Envelope: &gossip.Envelope{
-			Payload:   nn.Envelope.Payload,
+			Payload:   nn.GetPayload(),
 			Signature: []byte{0, 1, 2},
 			SecretEnvelope: &gossip.SecretEnvelope{
 				Payload:   []byte{0, 1, 2, 3, 4, 5},
@@ -85,14 +85,14 @@ func TestMembershipRequestToString(t *testing.T) {
 		},
 		Known: [][]byte{},
 	}
-	require.Equal(t, "", protoext.MembershipRequestToString(mr1))
+	require.Empty(t, protoext.MembershipRequestToString(mr1))
 
 	mr2 := &gossip.MembershipRequest{
 		SelfInformation: nil,
 		Known:           [][]byte{},
 	}
 
-	require.Equal(t, "", protoext.MembershipRequestToString(mr2))
+	require.Empty(t, protoext.MembershipRequestToString(mr2))
 }
 
 func TestToStringMember(t *testing.T) {

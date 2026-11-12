@@ -36,7 +36,7 @@ func randomPayloadWithSeqNum(seqNum uint64) (*proto.Payload, error) {
 
 func TestNewPayloadsBuffer(t *testing.T) {
 	payloadsBuffer := NewPayloadsBuffer(10)
-	require.Equal(t, payloadsBuffer.Next(), uint64(10))
+	require.Equal(t, uint64(10), payloadsBuffer.Next())
 }
 
 func TestPayloadsBufferImpl_Push(t *testing.T) {
@@ -47,15 +47,15 @@ func TestPayloadsBufferImpl_Push(t *testing.T) {
 		t.Fatal("Wasn't able to generate random payload for test")
 	}
 
-	t.Log("Pushing new payload into buffer")
-	buffer.Push(payload)
+	t.Log("Pushing old payload into buffer (should return false)")
+	require.False(t, buffer.Push(payload))
 
 	// Payloads with sequence number less than buffer top
 	// index should not be accepted
 	t.Log("Getting next block sequence number")
-	require.Equal(t, buffer.Next(), uint64(5))
+	require.Equal(t, uint64(5), buffer.Next())
 	t.Log("Check block buffer size")
-	require.Equal(t, buffer.Size(), 0)
+	require.Equal(t, 0, buffer.Size())
 
 	// Adding new payload with seq. number equal to top
 	// payload should not be added
@@ -64,18 +64,18 @@ func TestPayloadsBufferImpl_Push(t *testing.T) {
 		t.Fatal("Wasn't able to generate random payload for test")
 	}
 
-	t.Log("Pushing new payload into buffer")
-	buffer.Push(payload)
+	t.Log("Pushing valid payload into buffer (should return true)")
+	require.True(t, buffer.Push(payload))
 	t.Log("Getting next block sequence number")
-	require.Equal(t, buffer.Next(), uint64(5))
+	require.Equal(t, uint64(5), buffer.Next())
 	t.Log("Check block buffer size")
-	require.Equal(t, buffer.Size(), 1)
+	require.Equal(t, 1, buffer.Size())
 }
 
 func TestPayloadsBufferImpl_Ready(t *testing.T) {
 	fin := make(chan struct{})
 	buffer := NewPayloadsBuffer(1)
-	require.Equal(t, buffer.Next(), uint64(1))
+	require.Equal(t, uint64(1), buffer.Next())
 
 	go func() {
 		<-buffer.Ready()
@@ -93,7 +93,7 @@ func TestPayloadsBufferImpl_Ready(t *testing.T) {
 	select {
 	case <-fin:
 		payload := buffer.Pop()
-		require.Equal(t, payload.SeqNum, uint64(1))
+		require.Equal(t, uint64(1), payload.GetSeqNum())
 	case <-time.After(500 * time.Millisecond):
 		t.Fail()
 	}
@@ -141,12 +141,15 @@ func TestPayloadsBufferImpl_ConcurrentPush(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&ready))
 	// Buffer size has to be only one
 	require.Equal(t, 1, buffer.Size())
+
+	// Check that we can't push it again
+	require.False(t, buffer.Push(payload))
 }
 
 // Tests the scenario where payload pushes and pops are interleaved after a Ready() signal.
 func TestPayloadsBufferImpl_Interleave(t *testing.T) {
 	buffer := NewPayloadsBuffer(1)
-	require.Equal(t, buffer.Next(), uint64(1))
+	require.Equal(t, uint64(1), buffer.Next())
 
 	//
 	// First two sequences arrives and the buffer is emptied without interleave.

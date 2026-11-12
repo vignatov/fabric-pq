@@ -8,7 +8,6 @@ package statebased
 
 import (
 	crand "crypto/rand"
-	"fmt"
 	"math/rand/v2"
 	"runtime"
 	"strconv"
@@ -22,6 +21,7 @@ import (
 	validation "github.com/hyperledger/fabric/core/handlers/validation/api/state"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -137,7 +137,8 @@ func rwsetUpdatingMetadataFor(cc, key string) []byte {
 					}),
 				},
 			},
-		})
+		},
+	)
 }
 
 func pvtRwsetUpdatingMetadataFor(cc, coll, key string) []byte {
@@ -166,21 +167,20 @@ func pvtRwsetUpdatingMetadataFor(cc, coll, key string) []byte {
 					},
 				},
 			},
-		})
+		},
+	)
 }
 
 func runFunctions(t *testing.T, seed [32]byte, funcs ...func()) {
 	r := rand.New(rand.NewChaCha8(seed))
-	c := make(chan struct{})
+	c := make(chan bool)
 	for _, i := range r.Perm(len(funcs)) {
-		iLcl := i
 		go func() {
-			require.NotPanics(t, funcs[iLcl], "assert failure occurred with seed %d", seed)
-			c <- struct{}{}
+			c <- assert.NotPanics(t, funcs[i], "assert failure occurred with seed %d", seed)
 		}()
 	}
 	for range funcs {
-		<-c
+		require.True(t, <-c)
 	}
 }
 
@@ -351,7 +351,8 @@ func TestDependencyConflict(t *testing.T) {
 	sp := <-resC
 	err := <-errC
 	require.Errorf(t, err, "assert failure occurred with seed %d", seed)
-	require.IsType(t, &ValidationParameterUpdatedError{}, err, "assert failure occurred with seed %d", seed)
+	var target *ValidationParameterUpdatedError
+	require.ErrorAsf(t, err, &target, "assert failure occurred with seed %d", seed)
 	require.Nil(t, sp, "assert failure occurred with seed %d", seed)
 }
 
@@ -452,7 +453,8 @@ func TestMultipleDependencyConflict(t *testing.T) {
 	sp := <-resC
 	err := <-errC
 	require.Errorf(t, err, "assert failure occurred with seed %d", seed)
-	require.IsType(t, &ValidationParameterUpdatedError{}, err, "assert failure occurred with seed %d", seed)
+	var target *ValidationParameterUpdatedError
+	require.ErrorAsf(t, err, &target, "assert failure occurred with seed %d", seed)
 	require.Nil(t, sp, "assert failure occurred with seed %d", seed)
 }
 
@@ -530,8 +532,9 @@ func TestPvtDependencyConflict(t *testing.T) {
 	sp := <-resC
 	err := <-errC
 	require.Errorf(t, err, "assert failure occurred with seed %d", seed)
-	require.IsType(t, &ValidationParameterUpdatedError{}, err, "assert failure occurred with seed %d", seed)
-	require.True(t, len(err.Error()) > 0, "assert failure occurred with seed %d", seed)
+	var target *ValidationParameterUpdatedError
+	require.ErrorAsf(t, err, &target, "assert failure occurred with seed %d", seed)
+	require.NotEmpty(t, err.Error(), "assert failure occurred with seed %d", seed)
 	require.Nil(t, sp, "assert failure occurred with seed %d", seed)
 }
 
@@ -568,10 +571,10 @@ func TestLedgerErrors(t *testing.T) {
 	// GetValidationParameterForKey returns an error
 
 	mr := &mockState{
-		GetStateMetadataErr:             fmt.Errorf("Ledger error"),
-		GetPrivateDataMetadataByHashErr: fmt.Errorf("Ledger error"),
+		GetStateMetadataErr:             errors.New("Ledger error"),
+		GetPrivateDataMetadataByHashErr: errors.New("Ledger error"),
 	}
-	ms := &mockStateFetcher{FetchStateRv: mr, FetchStateErr: fmt.Errorf("Ledger error")}
+	ms := &mockStateFetcher{FetchStateRv: mr, FetchStateErr: errors.New("Ledger error")}
 	pm := &KeyLevelValidationParameterManagerImpl{PolicyTranslator: &mockTranslator{}, StateFetcher: ms}
 
 	cc, coll, key := "cc", "", "key"
@@ -765,7 +768,8 @@ func TestCombinedCalls(t *testing.T) {
 	sp = <-res2C
 	err = <-err2C
 	require.Errorf(t, err, "assert failure occurred with seed %d", seed)
-	require.IsType(t, &ValidationParameterUpdatedError{}, err, "assert failure occurred with seed %d", seed)
+	var target *ValidationParameterUpdatedError
+	require.ErrorAsf(t, err, &target, "assert failure occurred with seed %d", seed)
 	require.Nil(t, sp, "assert failure occurred with seed %d", seed)
 
 	require.True(t, ms.DoneCalled(), "assert failure occurred with seed %d", seed)

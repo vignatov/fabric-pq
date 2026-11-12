@@ -9,7 +9,6 @@ package identity
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +43,7 @@ func init() {
 
 func (cs *naiveCryptoService) OrgByPeerIdentity(id api.PeerIdentityType) api.OrgIdentityType {
 	found := false
-	for _, call := range cs.Mock.ExpectedCalls {
+	for _, call := range cs.ExpectedCalls {
 		if call.Method == "OrgByPeerIdentity" {
 			found = true
 		}
@@ -106,7 +105,7 @@ func (*naiveCryptoService) Sign(msg []byte) ([]byte, error) {
 func (*naiveCryptoService) Verify(peerIdentity api.PeerIdentityType, signature, message []byte) error {
 	equal := bytes.Equal(signature, message)
 	if !equal {
-		return fmt.Errorf("Wrong certificate")
+		return errors.New("Wrong certificate")
 	}
 	return nil
 }
@@ -151,10 +150,10 @@ func TestVerify(t *testing.T) {
 	pkiID := msgCryptoService.GetPKIidOfCert(identity)
 	pkiID2 := msgCryptoService.GetPKIidOfCert(identity2)
 	idStore.Put(pkiID, identity)
-	signed, err := idStore.Sign([]byte("bla bla"))
+	signed, err := idStore.Sign([]byte("bla bla1"))
 	require.NoError(t, err)
-	require.NoError(t, idStore.Verify(pkiID, signed, []byte("bla bla")))
-	require.Error(t, idStore.Verify(pkiID2, signed, []byte("bla bla")))
+	require.NoError(t, idStore.Verify(pkiID, signed, []byte("bla bla1")))
+	require.Error(t, idStore.Verify(pkiID2, signed, []byte("bla bla1")))
 }
 
 func TestListInvalidIdentities(t *testing.T) {
@@ -247,9 +246,13 @@ func TestListInvalidIdentities(t *testing.T) {
 func TestExpiration(t *testing.T) {
 	deletedIdentities := make(chan string, 1)
 	SetIdentityUsageThreshold(time.Second * 500)
-	idStore := NewIdentityMapper(msgCryptoService, dummyID, func(_ common.PKIidType, identity api.PeerIdentityType) {
+	// Use a local crypto service so that repeated runs in the same process
+	// (e.g. -count) don't accumulate stale expectations on the shared mock.
+	mcs := &naiveCryptoService{revokedIdentities: map[string]struct{}{}}
+	mcs.On("Expiration", dummyID).Return(time.Now().Add(time.Hour), nil)
+	idStore := NewIdentityMapper(mcs, dummyID, func(_ common.PKIidType, identity api.PeerIdentityType) {
 		deletedIdentities <- string(identity)
-	}, msgCryptoService)
+	}, mcs)
 	assertDeletedIdentity := func(expected string) {
 		select {
 		case <-time.After(time.Second * 10):
@@ -266,10 +269,13 @@ func TestExpiration(t *testing.T) {
 	expiredX509PkiID := idStore.GetPKIidOfCert(expiredX509Identity)
 	nonX509PkiID := idStore.GetPKIidOfCert(nonX509Identity)
 	notSupportedPkiID := idStore.GetPKIidOfCert(notSupportedIdentity)
-	msgCryptoService.On("Expiration", x509Identity).Return(time.Now().Add(time.Second), nil)
-	msgCryptoService.On("Expiration", expiredX509Identity).Return(time.Now().Add(-time.Second), nil)
-	msgCryptoService.On("Expiration", nonX509Identity).Return(time.Time{}, nil)
-	msgCryptoService.On("Expiration", notSupportedIdentity).Return(time.Time{}, errors.New("no MSP supports given identity"))
+	// The unexpired identity only needs to stay valid for the duration of the
+	// Put calls below, so keep the window short but comfortably larger than
+	// the time those calls take on a loaded machine.
+	mcs.On("Expiration", x509Identity).Return(time.Now().Add(time.Second*10), nil)
+	mcs.On("Expiration", expiredX509Identity).Return(time.Now().Add(-time.Second), nil)
+	mcs.On("Expiration", nonX509Identity).Return(time.Time{}, nil)
+	mcs.On("Expiration", notSupportedIdentity).Return(time.Time{}, errors.New("no MSP supports given identity"))
 	// Add all identities
 	err := idStore.Put(x509PkiID, x509Identity)
 	require.NoError(t, err)
@@ -291,7 +297,10 @@ func TestExpiration(t *testing.T) {
 	require.NotEmpty(t, returnedIdentity)
 
 	// Wait for the x509 identity to expire
-	time.Sleep(time.Second * 3)
+	require.Eventually(t, func() bool {
+		_, err := idStore.Get(x509PkiID)
+		return err != nil
+	}, 40*time.Second, 50*time.Millisecond)
 
 	// Ensure only the non x509 identity exists now
 	returnedIdentity, err = idStore.Get(x509PkiID)
@@ -305,12 +314,11 @@ func TestExpiration(t *testing.T) {
 	require.NotEmpty(t, returnedIdentity)
 
 	// Ensure that when it is revoked, an expiration timer isn't cancelled for it
-	msgCryptoService.revokedIdentities[string(nonX509PkiID)] = struct{}{}
+	mcs.revokedIdentities[string(nonX509PkiID)] = struct{}{}
 	idStore.SuspectPeers(func(_ api.PeerIdentityType) bool {
 		return true
 	})
 	assertDeletedIdentity("nonX509Identity")
-	msgCryptoService.revokedIdentities = map[string]struct{}{}
 }
 
 func TestExpirationPanic(t *testing.T) {

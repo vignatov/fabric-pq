@@ -8,8 +8,8 @@ package chaincode_test
 
 import (
 	"errors"
-	"fmt"
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/queryresult"
@@ -71,7 +71,7 @@ func TestBuildQueryResponse(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		t.Run(fmt.Sprintf("%d", tc.expectedResultCount), func(t *testing.T) {
+		t.Run(strconv.Itoa(tc.expectedResultCount), func(t *testing.T) {
 			txSimulator := &mock.TxSimulator{}
 			transactionContext := &chaincode.TransactionContext{
 				TXSimulator: txSimulator,
@@ -79,7 +79,7 @@ func TestBuildQueryResponse(t *testing.T) {
 
 			resultsIterator := &mock.QueryResultsIterator{}
 			transactionContext.InitializeQueryContext("query-id", resultsIterator)
-			for i := 0; i < tc.recordCount; i++ {
+			for i := range tc.recordCount {
 				resultsIterator.NextReturnsOnCall(i, queryResult, nil)
 			}
 			resultsIterator.NextReturnsOnCall(tc.recordCount, nil, nil)
@@ -100,7 +100,6 @@ func TestBuildQueryResponse(t *testing.T) {
 					// remainder retrieved, no more expected
 					require.Len(t, queryResponse.GetResults(), tc.expectedResultCount-totalResultCount)
 					require.False(t, queryResponse.GetHasMore())
-
 				}
 				totalResultCount += len(queryResponse.GetResults())
 			}
@@ -133,7 +132,7 @@ func TestBuildQueryResponseErrors(t *testing.T) {
 	}
 
 	for i, tc := range tests {
-		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			txSimulator := &mock.TxSimulator{}
 			transactionContext := &chaincode.TransactionContext{TXSimulator: txSimulator}
 			resultsIterator := &mock.QueryResultsIterator{}

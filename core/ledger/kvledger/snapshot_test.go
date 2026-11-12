@@ -8,7 +8,8 @@ package kvledger
 
 import (
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -38,6 +39,52 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ToJSON marshals with json.Deterministic, jsontext.EscapeForHTML and
+// FormatNilSliceAsNull/FormatNilMapAsNull: map keys are sorted, HTML
+// characters are escaped as \uXXXX (v2 does not escape by default), and
+// a nil FilesAndHashes map serializes as null.
+func TestSnapshotSignableMetadataToJSON(t *testing.T) {
+	t.Run("golden bytes with sorted map keys and HTML escaping", func(t *testing.T) {
+		m := &SnapshotSignableMetadata{
+			ChannelName:            "mychannel<b>",
+			LastBlockNumber:        5,
+			LastBlockHashInHex:     "aabb",
+			PreviousBlockHashInHex: "ccdd",
+			FilesAndHashes: map[string]string{
+				"zzz": "111",
+				"aaa": "222",
+			},
+			StateDBType: "CouchDB",
+		}
+
+		b, err := m.ToJSON()
+		require.NoError(t, err)
+		expected := `{
+    "channel_name": "mychannel\u003cb\u003e",
+    "last_block_number": 5,
+    "last_block_hash": "aabb",
+    "previous_block_hash": "ccdd",
+    "snapshot_files_raw_hashes": {
+        "aaa": "222",
+        "zzz": "111"
+    },
+    "state_db_type": "CouchDB"
+}`
+		require.Equal(t, expected, string(b))
+	})
+
+	t.Run("nil map serializes as null", func(t *testing.T) {
+		m := &SnapshotSignableMetadata{
+			ChannelName: "c",
+			StateDBType: "LevelDB",
+		}
+
+		b, err := m.ToJSON()
+		require.NoError(t, err)
+		require.Contains(t, string(b), `"snapshot_files_raw_hashes": null`)
+	})
+}
+
 func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 	conf := testConfig(t)
 	snapshotRootDir := conf.SnapshotsConfig.RootDir
@@ -61,13 +108,14 @@ func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 	defer lgr.Close()
 	kvlgr := lgr.(*kvLedger)
 	require.NoError(t, kvlgr.generateSnapshot())
-	verifySnapshotOutput(t,
+	verifySnapshotOutput(
+		t,
 		&expectedSnapshotOutput{
 			snapshotRootDir:   snapshotRootDir,
 			ledgerID:          kvlgr.ledgerID,
 			lastBlockNumber:   0,
-			lastBlockHash:     protoutil.BlockHeaderHash(genesisBlk.Header),
-			previousBlockHash: genesisBlk.Header.PreviousHash,
+			lastBlockHash:     protoutil.BlockHeaderHash(genesisBlk.GetHeader()),
+			previousBlockHash: genesisBlk.GetHeader().GetPreviousHash(),
 			lastCommitHash:    kvlgr.commitHash,
 			stateDBType:       simpleKeyValueDB,
 			expectedBinaryFiles: []string{
@@ -77,7 +125,8 @@ func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 	)
 
 	// add block-1 only with public state data and generate the snapshot
-	blockAndPvtdata1 := prepareNextBlockForTest(t, kvlgr, blkGenerator, "SimulateForBlk1",
+	blockAndPvtdata1 := prepareNextBlockForTest(
+		t, kvlgr, blkGenerator, "SimulateForBlk1",
 		map[string]string{
 			"key1": "value1.1",
 			"key2": "value2.1",
@@ -87,13 +136,14 @@ func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 	)
 	require.NoError(t, kvlgr.CommitLegacy(blockAndPvtdata1, &ledger.CommitOptions{}))
 	require.NoError(t, kvlgr.generateSnapshot())
-	verifySnapshotOutput(t,
+	verifySnapshotOutput(
+		t,
 		&expectedSnapshotOutput{
 			snapshotRootDir:   snapshotRootDir,
 			ledgerID:          kvlgr.ledgerID,
 			lastBlockNumber:   1,
-			lastBlockHash:     protoutil.BlockHeaderHash(blockAndPvtdata1.Block.Header),
-			previousBlockHash: blockAndPvtdata1.Block.Header.PreviousHash,
+			lastBlockHash:     protoutil.BlockHeaderHash(blockAndPvtdata1.Block.GetHeader()),
+			previousBlockHash: blockAndPvtdata1.Block.GetHeader().GetPreviousHash(),
 			lastCommitHash:    kvlgr.commitHash,
 			stateDBType:       simpleKeyValueDB,
 			expectedBinaryFiles: []string{
@@ -107,7 +157,8 @@ func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 	addDummyEntryInCollectionConfigHistory(t, provider, kvlgr.ledgerID, "ns", 1, []*peer.StaticCollectionConfig{{Name: "coll"}})
 
 	// add block-2 only with public and private data and generate the snapshot
-	blockAndPvtdata2 := prepareNextBlockForTest(t, kvlgr, blkGenerator, "SimulateForBlk2",
+	blockAndPvtdata2 := prepareNextBlockForTest(
+		t, kvlgr, blkGenerator, "SimulateForBlk2",
 		map[string]string{
 			"key1": "value1.2",
 			"key2": "value2.2",
@@ -121,13 +172,14 @@ func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 	)
 	require.NoError(t, kvlgr.CommitLegacy(blockAndPvtdata2, &ledger.CommitOptions{}))
 	require.NoError(t, kvlgr.generateSnapshot())
-	verifySnapshotOutput(t,
+	verifySnapshotOutput(
+		t,
 		&expectedSnapshotOutput{
 			snapshotRootDir:   snapshotRootDir,
 			ledgerID:          kvlgr.ledgerID,
 			lastBlockNumber:   2,
-			lastBlockHash:     protoutil.BlockHeaderHash(blockAndPvtdata2.Block.Header),
-			previousBlockHash: blockAndPvtdata2.Block.Header.PreviousHash,
+			lastBlockHash:     protoutil.BlockHeaderHash(blockAndPvtdata2.Block.GetHeader()),
+			previousBlockHash: blockAndPvtdata2.Block.GetHeader().GetPreviousHash(),
 			lastCommitHash:    kvlgr.commitHash,
 			stateDBType:       simpleKeyValueDB,
 			expectedBinaryFiles: []string{
@@ -139,7 +191,8 @@ func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 		},
 	)
 
-	blockAndPvtdata3 := prepareNextBlockForTest(t, kvlgr, blkGenerator, "SimulateForBlk3",
+	blockAndPvtdata3 := prepareNextBlockForTest(
+		t, kvlgr, blkGenerator, "SimulateForBlk3",
 		map[string]string{
 			"key1": "value1.3",
 			"key2": "value2.3",
@@ -149,13 +202,14 @@ func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 	)
 	require.NoError(t, kvlgr.CommitLegacy(blockAndPvtdata3, &ledger.CommitOptions{}))
 	require.NoError(t, kvlgr.generateSnapshot())
-	verifySnapshotOutput(t,
+	verifySnapshotOutput(
+		t,
 		&expectedSnapshotOutput{
 			snapshotRootDir:   snapshotRootDir,
 			ledgerID:          kvlgr.ledgerID,
 			lastBlockNumber:   3,
-			lastBlockHash:     protoutil.BlockHeaderHash(blockAndPvtdata3.Block.Header),
-			previousBlockHash: blockAndPvtdata3.Block.Header.PreviousHash,
+			lastBlockHash:     protoutil.BlockHeaderHash(blockAndPvtdata3.Block.GetHeader()),
+			previousBlockHash: blockAndPvtdata3.Block.GetHeader().GetPreviousHash(),
 			lastCommitHash:    kvlgr.commitHash,
 			stateDBType:       simpleKeyValueDB,
 			expectedBinaryFiles: []string{
@@ -171,13 +225,14 @@ func TestSnapshotGenerationAndNewLedgerCreation(t *testing.T) {
 
 	t.Run("create-ledger-from-snapshot", func(t *testing.T) {
 		createdLedger := testCreateLedgerFromSnapshot(t, snapshotDir, kvlgr.ledgerID)
-		verifyCreatedLedger(t,
+		verifyCreatedLedger(
+			t,
 			provider,
 			createdLedger,
 			&expectedLegderState{
 				lastBlockNumber:   3,
-				lastBlockHash:     protoutil.BlockHeaderHash(blockAndPvtdata3.Block.Header),
-				previousBlockHash: blockAndPvtdata3.Block.Header.PreviousHash,
+				lastBlockHash:     protoutil.BlockHeaderHash(blockAndPvtdata3.Block.GetHeader()),
+				previousBlockHash: blockAndPvtdata3.Block.GetHeader().GetPreviousHash(),
 				lastCommitHash:    kvlgr.commitHash,
 				namespace:         "ns",
 				publicState: map[string]string{
@@ -222,12 +277,13 @@ func TestSnapshotDBTypeCouchDB(t *testing.T) {
 	// artificially set the db type
 	kvlgr.config.StateDBConfig.StateDatabase = ledger.CouchDB
 	require.NoError(t, kvlgr.generateSnapshot())
-	verifySnapshotOutput(t,
+	verifySnapshotOutput(
+		t,
 		&expectedSnapshotOutput{
 			snapshotRootDir: conf.SnapshotsConfig.RootDir,
 			ledgerID:        kvlgr.ledgerID,
 			stateDBType:     ledger.CouchDB,
-			lastBlockHash:   protoutil.BlockHeaderHash(genesisBlk.Header),
+			lastBlockHash:   protoutil.BlockHeaderHash(genesisBlk.GetHeader()),
 			expectedBinaryFiles: []string{
 				"txids.data", "txids.metadata",
 			},
@@ -250,7 +306,8 @@ func TestSnapshotCouchDBIndexCreation(t *testing.T) {
 		t.Cleanup(lgr.Close)
 		kvlgr := lgr.(*kvLedger)
 
-		blockAndPvtdata := prepareNextBlockForTest(t, kvlgr, blkGenerator, "SimulateForBlk1",
+		blockAndPvtdata := prepareNextBlockForTest(
+			t, kvlgr, blkGenerator, "SimulateForBlk1",
 			map[string]string{
 				"key1": `{"asset_name": "marble1", "color": "blue", "size": 1, "owner": "tom"}`,
 				"key2": `{"asset_name": "marble2", "color": "red", "size": 2, "owner": "jerry"}`,
@@ -274,6 +331,7 @@ func TestSnapshotCouchDBIndexCreation(t *testing.T) {
 			RequestTimeout:      10 * time.Second,
 			InternalQueryLimit:  1000,
 			RedoLogPath:         filepath.Join(conf.RootFSPath, "couchdbRedoLogs"),
+			RedoLogDBType:       ledger.GoLevelDB,
 		}
 
 		destConf := testConfig(t)
@@ -323,23 +381,22 @@ func TestSnapshotCouchDBIndexCreation(t *testing.T) {
 
 		// mimic new lifecycle chaincode "ns" installed and defiend and the package contains an index definition "sort index"
 		ccLifecycleEventProvider := provider.initializer.ChaincodeLifecycleEventProvider.(*mock.ChaincodeLifecycleEventProvider)
-		ccLifecycleEventProvider.RegisterListenerStub =
-			func(
-				channelID string,
-				listener ledger.ChaincodeLifecycleEventListener,
-				callback bool,
-			) error {
-				if callback {
-					err := listener.HandleChaincodeDeploy(
-						&ledger.ChaincodeDefinition{
-							Name: "ns",
-						},
-						dbArtifactsBytes,
-					)
-					require.NoError(t, err)
-				}
-				return nil
+		ccLifecycleEventProvider.RegisterListenerStub = func(
+			channelID string,
+			listener ledger.ChaincodeLifecycleEventListener,
+			callback bool,
+		) error {
+			if callback {
+				err := listener.HandleChaincodeDeploy(
+					&ledger.ChaincodeDefinition{
+						Name: "ns",
+					},
+					dbArtifactsBytes,
+				)
+				require.NoError(t, err)
 			}
+			return nil
+		}
 
 		lgr, _, err := provider.CreateFromSnapshot(snapshotDir)
 		require.NoError(t, err)
@@ -381,7 +438,8 @@ func TestSnapshotCouchDBIndexCreation(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, 1, installedChaincodeInfoProvider.RetrieveChaincodeArtifactsCallCount())
-		require.Equal(t,
+		require.Equal(
+			t,
 			&cceventmgmt.ChaincodeDefinition{
 				Name:    "ns",
 				Version: "version",
@@ -400,7 +458,7 @@ func TestSnapshotCouchDBIndexCreation(t *testing.T) {
 
 		t.Run("deployedChaincodeInfoProvider-returns-error", func(t *testing.T) {
 			deployedCCInfoProvider := provider.initializer.DeployedChaincodeInfoProvider.(*mock.DeployedChaincodeInfoProvider)
-			deployedCCInfoProvider.AllChaincodesInfoReturns(nil, fmt.Errorf("error-retrieving-all-defined-chaincodes"))
+			deployedCCInfoProvider.AllChaincodesInfoReturns(nil, errors.New("error-retrieving-all-defined-chaincodes"))
 
 			installedChaincodeInfoProvider := &kvledgermock.ChaincodeInfoProvider{}
 			installedChaincodeInfoProvider.RetrieveChaincodeArtifactsReturns(
@@ -426,7 +484,7 @@ func TestSnapshotCouchDBIndexCreation(t *testing.T) {
 			)
 
 			installedChaincodeInfoProvider := &kvledgermock.ChaincodeInfoProvider{}
-			installedChaincodeInfoProvider.RetrieveChaincodeArtifactsReturns(false, nil, fmt.Errorf("error-retrieving-db-artifacts"))
+			installedChaincodeInfoProvider.RetrieveChaincodeArtifactsReturns(false, nil, errors.New("error-retrieving-db-artifacts"))
 			cceventmgmt.Initialize(installedChaincodeInfoProvider)
 			_, _, err := provider.CreateFromSnapshot(snapshotDir)
 			require.EqualError(t, err, "error while opening ledger: error while creating statdb indexes after bootstrapping from snapshot: error-retrieving-db-artifacts")
@@ -434,7 +492,7 @@ func TestSnapshotCouchDBIndexCreation(t *testing.T) {
 
 		t.Run("chaincodeLifecycleEventProvider-returns-error", func(t *testing.T) {
 			chaincodeLifecycleEventProvider := provider.initializer.ChaincodeLifecycleEventProvider.(*mock.ChaincodeLifecycleEventProvider)
-			chaincodeLifecycleEventProvider.RegisterListenerReturns(fmt.Errorf("error-calling-back"))
+			chaincodeLifecycleEventProvider.RegisterListenerReturns(errors.New("error-calling-back"))
 			cceventmgmt.Initialize(nil)
 			_, _, err := provider.CreateFromSnapshot(snapshotDir)
 			require.EqualError(t, err, "error while opening ledger: error while creating statdb indexes after bootstrapping from snapshot: error-calling-back")
@@ -463,7 +521,7 @@ func TestSnapshotDirPathsCreation(t *testing.T) {
 	for _, dir := range [2]string{inProgressSnapshotsPath, completedSnapshotsPath} {
 		f, err := os.ReadDir(dir)
 		require.NoError(t, err)
-		require.Len(t, f, 0)
+		require.Empty(t, f)
 	}
 
 	// add a file in each of the above folders
@@ -481,7 +539,7 @@ func TestSnapshotDirPathsCreation(t *testing.T) {
 	provider = testutilNewProvider(conf, t, &mock.DeployedChaincodeInfoProvider{})
 	f, err := os.ReadDir(inProgressSnapshotsPath)
 	require.NoError(t, err)
-	require.Len(t, f, 0)
+	require.Empty(t, f)
 	f, err = os.ReadDir(completedSnapshotsPath)
 	require.NoError(t, err)
 	require.Len(t, f, 1)
@@ -579,7 +637,7 @@ func TestGenerateSnapshotErrors(t *testing.T) {
 		require.Error(t, err)
 		errStackTrace := fmt.Sprintf("%+v", err)
 		require.Contains(t, errStackTrace, "internal leveldb error while obtaining db iterator")
-		require.Contains(t, errStackTrace, "statedb/stateleveldb/stateleveldb.go")
+		require.Contains(t, errStackTrace, "statedb/statekvdb/statekvdb.go")
 	})
 
 	t.Run("renaming to the final snapshot dir returns error", func(t *testing.T) {
@@ -587,9 +645,11 @@ func TestGenerateSnapshotErrors(t *testing.T) {
 		snapshotFinalDir := SnapshotDirForLedgerBlockNum(conf.SnapshotsConfig.RootDir, "testLedgerid", 0)
 		require.NoError(t, os.MkdirAll(snapshotFinalDir, 0o744))
 		defer os.RemoveAll(snapshotFinalDir)
-		require.NoError(t, os.WriteFile( // make a non-empty snapshotFinalDir to trigger failure on rename
-			filepath.Join(snapshotFinalDir, "dummyFile"),
-			[]byte("dummy file"), 0o444),
+		require.NoError(
+			t, os.WriteFile( // make a non-empty snapshotFinalDir to trigger failure on rename
+				filepath.Join(snapshotFinalDir, "dummyFile"),
+				[]byte("dummy file"), 0o444,
+			),
 		)
 		err := kvlgr.generateSnapshot()
 		require.Contains(t, err.Error(), "error while renaming dir")
@@ -649,7 +709,7 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(signableMetadataFile, signaleMetadataJSON, 0o600))
 
-		metadata.snapshotAdditionalMetadata.SnapshotHashInHex = computeHashForTest(t, provider, signaleMetadataJSON)
+		metadata.SnapshotHashInHex = computeHashForTest(t, provider, signaleMetadataJSON)
 		additionalMetadataJSON, err := metadata.snapshotAdditionalMetadata.ToJSON()
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(additionalMetadataFile, additionalMetadataJSON, 0o600))
@@ -658,7 +718,7 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 	overwriteDataFile := func(fileName string, content []byte) {
 		filePath := filepath.Join(snapshotDirForTest, fileName)
 		require.NoError(t, os.WriteFile(filePath, content, 0o600))
-		metadata.SnapshotSignableMetadata.FilesAndHashes[fileName] = computeHashForTest(t, provider, content)
+		metadata.FilesAndHashes[fileName] = computeHashForTest(t, provider, content)
 		overwriteModifiedSignableMetadata()
 	}
 
@@ -668,7 +728,8 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 
 		require.NoError(t, os.Remove(filepath.Join(snapshotDirForTest, SnapshotSignableMetadataFileName)))
 		_, _, err := provider.CreateFromSnapshot(snapshotDirForTest)
-		require.EqualError(t,
+		require.EqualError(
+			t,
 			err,
 			fmt.Sprintf(
 				"error while loading metadata: open %s/_snapshot_signable_metadata.json: no such file or directory",
@@ -684,7 +745,8 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 
 		require.NoError(t, os.Remove(filepath.Join(snapshotDirForTest, snapshotAdditionalMetadataFileName)))
 		_, _, err := provider.CreateFromSnapshot(snapshotDirForTest)
-		require.EqualError(t,
+		require.EqualError(
+			t,
 			err,
 			fmt.Sprintf("error while loading metadata: open %s/_snapshot_additional_metadata.json: no such file or directory", snapshotDirForTest),
 		)
@@ -697,9 +759,10 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 
 		require.NoError(t, os.WriteFile(signableMetadataFile, []byte(""), 0o600))
 		_, _, err := provider.CreateFromSnapshot(snapshotDirForTest)
-		require.EqualError(t,
+		require.EqualError(
+			t,
 			err,
-			"error while unmarshalling metadata: error while unmarshalling signable metadata: unexpected end of JSON input",
+			"error while unmarshalling metadata: error while unmarshalling signable metadata: jsontext: unexpected EOF",
 		)
 		verifyLedgerDoesNotExist(t, provider, metadata.ChannelName)
 	})
@@ -710,9 +773,10 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 
 		require.NoError(t, os.WriteFile(additionalMetadataFile, []byte(""), 0o600))
 		_, _, err := provider.CreateFromSnapshot(snapshotDirForTest)
-		require.EqualError(t,
+		require.EqualError(
+			t,
 			err,
-			"error while unmarshalling metadata: error while unmarshalling additional metadata: unexpected end of JSON input",
+			"error while unmarshalling metadata: error while unmarshalling additional metadata: jsontext: unexpected EOF",
 		)
 		verifyLedgerDoesNotExist(t, provider, metadata.ChannelName)
 	})
@@ -723,7 +787,8 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 
 		require.NoError(t, os.WriteFile(signableMetadataFile, []byte("{}"), 0o600))
 		_, _, err := provider.CreateFromSnapshot(snapshotDirForTest)
-		require.Contains(t,
+		require.Contains(
+			t,
 			err.Error(),
 			"error while verifying snapshot: hash mismatch for file [_snapshot_signable_metadata.json]",
 		)
@@ -738,7 +803,8 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 		require.NoError(t, err)
 
 		_, _, err = provider.CreateFromSnapshot(snapshotDirForTest)
-		require.EqualError(t, err,
+		require.EqualError(
+			t, err,
 			fmt.Sprintf(
 				"error while verifying snapshot: open %s/txids.data: no such file or directory",
 				snapshotDirForTest,
@@ -763,7 +829,7 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 		init(t)
 		defer cleanup()
 
-		metadata.SnapshotSignableMetadata.LastBlockHashInHex = "invalid-hex"
+		metadata.LastBlockHashInHex = "invalid-hex"
 		overwriteModifiedSignableMetadata()
 
 		_, _, err := provider.CreateFromSnapshot(snapshotDirForTest)
@@ -775,7 +841,7 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 		init(t)
 		defer cleanup()
 
-		metadata.SnapshotSignableMetadata.PreviousBlockHashInHex = "invalid-hex"
+		metadata.PreviousBlockHashInHex = "invalid-hex"
 		overwriteModifiedSignableMetadata()
 
 		_, _, err := provider.CreateFromSnapshot(snapshotDirForTest)
@@ -861,7 +927,7 @@ func verifySnapshotOutput(
 	inProgressSnapshotsPath := SnapshotsTempDirPath(o.snapshotRootDir)
 	f, err := os.ReadDir(inProgressSnapshotsPath)
 	require.NoError(t, err)
-	require.Len(t, f, 0)
+	require.Empty(t, f)
 
 	snapshotDir := SnapshotDirForLedgerBlockNum(o.snapshotRootDir, o.ledgerID, o.lastBlockNumber)
 	files, err := os.ReadDir(snapshotDir)
@@ -885,7 +951,8 @@ func verifySnapshotOutput(
 	if o.previousBlockHash != nil {
 		previousBlockHashHex = hex.EncodeToString(o.previousBlockHash)
 	}
-	require.Equal(t,
+	require.Equal(
+		t,
 		&SnapshotSignableMetadata{
 			ChannelName:            o.ledgerID,
 			LastBlockNumber:        o.lastBlockNumber,
@@ -902,7 +969,8 @@ func verifySnapshotOutput(
 	mhJSON, err := os.ReadFile(filepath.Join(snapshotDir, snapshotAdditionalMetadataFileName))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(mhJSON, mh))
-	require.Equal(t,
+	require.Equal(
+		t,
 		&snapshotAdditionalMetadata{
 			SnapshotHashInHex:        hex.EncodeToString(util.ComputeSHA256(mJSON)),
 			LastBlockCommitHashInHex: hex.EncodeToString(o.lastCommitHash),
@@ -939,7 +1007,8 @@ func verifyCreatedLedger(t *testing.T,
 
 	destBCInfo, err := l.GetBlockchainInfo()
 	require.NoError(t, err)
-	require.Equal(t,
+	require.Equal(
+		t,
 		&common.BlockchainInfo{
 			Height:            e.lastBlockNumber + 1,
 			CurrentBlockHash:  e.lastBlockHash,
@@ -987,8 +1056,10 @@ func addDummyEntryInCollectionConfigHistory(
 		Mgr:                provider.configHistoryMgr,
 		MockCCInfoProvider: provider.initializer.DeployedChaincodeInfoProvider.(*mock.DeployedChaincodeInfoProvider),
 	}
-	require.NoError(t,
-		configHistory.Setup(ledgerID, namespace,
+	require.NoError(
+		t,
+		configHistory.Setup(
+			ledgerID, namespace,
 			map[uint64][]*peer.StaticCollectionConfig{
 				committingBlockNumber: collectionConfig,
 			},

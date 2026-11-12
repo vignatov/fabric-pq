@@ -20,10 +20,11 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/queryresult"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
+	dbpkg "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/dataformat"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
+	"github.com/hyperledger/fabric/common/ledger/util/dbfactory"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/msgs"
@@ -59,7 +60,7 @@ func testLedgerProvider(t *testing.T, enableHistoryDB bool) {
 	numLedgers := 10
 	existingLedgerIDs, err := provider.List()
 	require.NoError(t, err)
-	require.Len(t, existingLedgerIDs, 0)
+	require.Empty(t, existingLedgerIDs)
 	genesisBlocks := make([]*common.Block, numLedgers)
 	for i := range numLedgers {
 		genesisBlock, _ := configtxtest.MakeGenesisBlock(constructTestLedgerID(i))
@@ -95,7 +96,7 @@ func testLedgerProvider(t *testing.T, enableHistoryDB bool) {
 		bcInfo, err := ledger.GetBlockchainInfo()
 		ledger.Close()
 		require.NoError(t, err)
-		require.Equal(t, uint64(1), bcInfo.Height)
+		require.Equal(t, uint64(1), bcInfo.GetHeight())
 
 		// check that ledger metadata keys were persisted in idStore with active status
 		s := provider.idStore
@@ -103,7 +104,7 @@ func testLedgerProvider(t *testing.T, enableHistoryDB bool) {
 		require.NoError(t, err)
 		metadata := &msgs.LedgerMetadata{}
 		require.NoError(t, proto.Unmarshal(val, metadata))
-		require.Equal(t, msgs.Status_ACTIVE, metadata.Status)
+		require.Equal(t, msgs.Status_ACTIVE, metadata.GetStatus())
 	}
 	gb, _ := configtxtest.MakeGenesisBlock(constructTestLedgerID(2))
 	_, err = provider.CreateFromGenesisBlock(gb)
@@ -111,7 +112,7 @@ func testLedgerProvider(t *testing.T, enableHistoryDB bool) {
 
 	status, err := provider.Exists(constructTestLedgerID(numLedgers))
 	require.NoError(t, err, "Failed to check for ledger existence")
-	require.Equal(t, status, false)
+	require.False(t, status)
 
 	_, err = provider.Open(constructTestLedgerID(numLedgers))
 	require.EqualError(t, err, "cannot open ledger [ledger_000010], ledger does not exist")
@@ -145,10 +146,10 @@ func TestGetLedger(t *testing.T) {
 	// close provider to trigger db error
 	provider.Close()
 	_, err = provider.idStore.getActiveLedgerIDs()
-	require.EqualError(t, err, "error getting ledger ids from idStore: leveldb: closed")
+	require.EqualError(t, err, "leveldb: closed")
 
 	_, err = provider.idStore.getActiveAndInactiveLedgerIDs()
-	require.EqualError(t, err, "error getting ledger ids from idStore: leveldb: closed")
+	require.EqualError(t, err, "leveldb: closed")
 }
 
 func TestLedgerMetataDataUnmarshalError(t *testing.T) {
@@ -200,7 +201,7 @@ func TestUpgradeIDStoreFormatDBError(t *testing.T) {
 func TestCheckUpgradeEligibilityV1x(t *testing.T) {
 	conf := testConfig(t)
 	dbPath := LedgerProviderPath(conf.RootFSPath)
-	db := leveldbhelper.CreateDB(&leveldbhelper.Conf{DBPath: dbPath})
+	db := dbfactory.CreateDB(dbpkg.GoLevelDB, dbPath, "")
 	idStore := &idStore{db, dbPath}
 	db.Open()
 	defer db.Close()
@@ -217,7 +218,7 @@ func TestCheckUpgradeEligibilityV1x(t *testing.T) {
 func TestCheckUpgradeEligibilityCurrentVersion(t *testing.T) {
 	conf := testConfig(t)
 	dbPath := LedgerProviderPath(conf.RootFSPath)
-	db := leveldbhelper.CreateDB(&leveldbhelper.Conf{DBPath: dbPath})
+	db := dbfactory.CreateDB(dbpkg.GoLevelDB, dbPath, "")
 	idStore := &idStore{db, dbPath}
 	db.Open()
 	defer db.Close()
@@ -233,7 +234,7 @@ func TestCheckUpgradeEligibilityCurrentVersion(t *testing.T) {
 func TestCheckUpgradeEligibilityBadFormat(t *testing.T) {
 	conf := testConfig(t)
 	dbPath := LedgerProviderPath(conf.RootFSPath)
-	db := leveldbhelper.CreateDB(&leveldbhelper.Conf{DBPath: dbPath})
+	db := dbfactory.CreateDB(dbpkg.GoLevelDB, dbPath, "")
 	idStore := &idStore{db, dbPath}
 	db.Open()
 	defer db.Close()
@@ -254,7 +255,7 @@ func TestCheckUpgradeEligibilityBadFormat(t *testing.T) {
 func TestCheckUpgradeEligibilityEmptyDB(t *testing.T) {
 	conf := testConfig(t)
 	dbPath := LedgerProviderPath(conf.RootFSPath)
-	db := leveldbhelper.CreateDB(&leveldbhelper.Conf{DBPath: dbPath})
+	db := dbfactory.CreateDB(dbpkg.GoLevelDB, dbPath, "")
 	idStore := &idStore{db, dbPath}
 	db.Open()
 	defer db.Close()
@@ -306,7 +307,8 @@ func testDeletionOfUnderConstructionLedgersAtStart(t *testing.T, enableHistoryDB
 
 	switch mimicCrashAfterLedgerCreation {
 	case false:
-		require.NoError(t,
+		require.NoError(
+			t,
 			idStore.createLedgerID(ledgerID, &msgs.LedgerMetadata{
 				Status: msgs.Status_UNDER_CONSTRUCTION,
 			}),
@@ -318,10 +320,11 @@ func testDeletionOfUnderConstructionLedgersAtStart(t *testing.T, enableHistoryDB
 		require.NoError(t, err)
 		m, err := provider.idStore.getLedgerMetadata(ledgerID)
 		require.NoError(t, err)
-		require.Equal(t, msgs.Status_ACTIVE, m.Status)
+		require.Equal(t, msgs.Status_ACTIVE, m.GetStatus())
 		// mimic a situation that a crash happens after ledger creation but before changing the UNDER_CONSTRUCTION status
 		// to Status_ACTIVE
-		require.NoError(t,
+		require.NoError(
+			t,
 			provider.idStore.updateLedgerStatus(ledgerID, msgs.Status_UNDER_CONSTRUCTION),
 		)
 	}
@@ -427,8 +430,10 @@ func TestLedgerBackup(t *testing.T) {
 
 	// create and populate a ledger in the original environment
 	origConf := &ledger.Config{
-		RootFSPath:    originalPath,
-		StateDBConfig: &ledger.StateDBConfig{},
+		RootFSPath: originalPath,
+		StateDBConfig: &ledger.StateDBConfig{
+			StateDatabase: ledger.GoLevelDB,
+		},
 		PrivateDataConfig: &ledger.PrivateDataConfig{
 			MaxBatchSize:                        5000,
 			BatchesInterval:                     1000,
@@ -444,7 +449,7 @@ func TestLedgerBackup(t *testing.T) {
 	}
 	provider := testutilNewProvider(origConf, t, &mock.DeployedChaincodeInfoProvider{})
 	bg, gb := testutil.NewBlockGenerator(t, ledgerid, false)
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	lgr, _ := provider.CreateFromGenesisBlock(gb)
 
 	txid := util.GenerateUUID()
@@ -481,8 +486,10 @@ func TestLedgerBackup(t *testing.T) {
 
 	// Instantiate the ledger from restore environment and this should behave exactly as it would have in the original environment
 	restoreConf := &ledger.Config{
-		RootFSPath:    restorePath,
-		StateDBConfig: &ledger.StateDBConfig{},
+		RootFSPath: restorePath,
+		StateDBConfig: &ledger.StateDBConfig{
+			StateDatabase: ledger.GoLevelDB,
+		},
 		PrivateDataConfig: &ledger.PrivateDataConfig{
 			MaxBatchSize:                        5000,
 			BatchesInterval:                     1000,
@@ -506,8 +513,8 @@ func TestLedgerBackup(t *testing.T) {
 	require.NoError(t, err)
 	defer lgr.Close()
 
-	block1Hash := protoutil.BlockHeaderHash(block1.Header)
-	block2Hash := protoutil.BlockHeaderHash(block2.Header)
+	block1Hash := protoutil.BlockHeaderHash(block1.GetHeader())
+	block2Hash := protoutil.BlockHeaderHash(block2.GetHeader())
 	bcInfo, _ := lgr.GetBlockchainInfo()
 	require.Equal(t, &common.BlockchainInfo{
 		Height: 3, CurrentBlockHash: block2Hash, PreviousBlockHash: block1Hash,
@@ -532,18 +539,18 @@ func TestLedgerBackup(t *testing.T) {
 	require.True(t, proto.Equal(b2, block2), "proto messages are not equal")
 
 	// get the tran id from the 2nd block, then use it to test GetTransactionByID()
-	txEnvBytes2 := block1.Data.Data[0]
+	txEnvBytes2 := block1.GetData().GetData()[0]
 	txEnv2, err := protoutil.GetEnvelopeFromBlock(txEnvBytes2)
 	require.NoError(t, err, "Error upon GetEnvelopeFromBlock")
-	payload2, err := protoutil.UnmarshalPayload(txEnv2.Payload)
+	payload2, err := protoutil.UnmarshalPayload(txEnv2.GetPayload())
 	require.NoError(t, err, "Error upon GetPayload")
-	chdr, err := protoutil.UnmarshalChannelHeader(payload2.Header.ChannelHeader)
+	chdr, err := protoutil.UnmarshalChannelHeader(payload2.GetHeader().GetChannelHeader())
 	require.NoError(t, err, "Error upon GetChannelHeaderFromBytes")
-	txID2 := chdr.TxId
+	txID2 := chdr.GetTxId()
 	processedTran2, err := lgr.GetTransactionByID(txID2)
 	require.NoError(t, err, "Error upon GetTransactionByID")
 	// get the tran envelope from the retrieved ProcessedTransaction
-	retrievedTxEnv2 := processedTran2.TransactionEnvelope
+	retrievedTxEnv2 := processedTran2.GetTransactionEnvelope()
 	require.Equal(t, txEnv2, retrievedTxEnv2)
 
 	qe, _ := lgr.NewQueryExecutor()
@@ -558,10 +565,10 @@ func TestLedgerBackup(t *testing.T) {
 
 	result1, err := itr.Next()
 	require.NoError(t, err)
-	require.Equal(t, []byte("value4"), result1.(*queryresult.KeyModification).Value)
+	require.Equal(t, []byte("value4"), result1.(*queryresult.KeyModification).GetValue())
 	result2, err := itr.Next()
 	require.NoError(t, err)
-	require.Equal(t, []byte("value1"), result2.(*queryresult.KeyModification).Value)
+	require.Equal(t, []byte("value1"), result2.(*queryresult.KeyModification).GetValue())
 }
 
 func constructTestLedgerID(i int) string {
@@ -584,8 +591,10 @@ func constructTestLedger(t *testing.T, provider *Provider, sequenceID int) strin
 func testConfig(t *testing.T) (conf *ledger.Config) {
 	path := t.TempDir()
 	conf = &ledger.Config{
-		RootFSPath:    path,
-		StateDBConfig: &ledger.StateDBConfig{},
+		RootFSPath: path,
+		StateDBConfig: &ledger.StateDBConfig{
+			StateDatabase: ledger.GoLevelDB,
+		},
 		PrivateDataConfig: &ledger.PrivateDataConfig{
 			MaxBatchSize:                        5000,
 			BatchesInterval:                     1000,
@@ -723,5 +732,5 @@ func verifyLedgerIDExists(t *testing.T, provider *Provider, ledgerID string, exp
 
 	metadata, err := provider.idStore.getLedgerMetadata(ledgerID)
 	require.NoError(t, err)
-	require.Equal(t, metadata.Status, expectedStatus)
+	require.Equal(t, expectedStatus, metadata.GetStatus())
 }

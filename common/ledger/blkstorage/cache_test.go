@@ -9,8 +9,6 @@ package blkstorage
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +58,7 @@ func TestOutOfOrderInsertionPanics(t *testing.T) {
 	func() {
 		defer func() {
 			err := recover()
-			assert.Contains(t, err.(string), "detected out of order block insertion: attempted to insert block number 102 but highest block is 100")
+			require.Contains(t, err.(string), "detected out of order block insertion: attempted to insert block number 102 but highest block is 100")
 		}()
 
 		c.put(&common.Block{Header: &common.BlockHeader{Number: 102}}, 1)
@@ -78,7 +76,7 @@ func TestDoubleInsertionPanics(t *testing.T) {
 	func() {
 		defer func() {
 			err := recover()
-			assert.Contains(t, err.(string), "detected insertion of the same block (100) twice")
+			require.Contains(t, err.(string), "detected insertion of the same block (100) twice")
 		}()
 
 		c.put(&common.Block{Header: &common.BlockHeader{Number: 100}}, 1)
@@ -167,5 +165,5 @@ func assertWasCached(t *testing.T, exists bool, block *common.Block, expectedSeq
 	}
 	require.True(t, exists)
 	require.NotNil(t, block)
-	require.Equal(t, expectedSeq, block.Header.Number)
+	require.Equal(t, expectedSeq, block.GetHeader().GetNumber())
 }

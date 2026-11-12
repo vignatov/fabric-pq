@@ -10,14 +10,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
+	"encoding/json/v2"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
-
 	"github.com/pkg/errors"
 )
 
@@ -80,9 +79,9 @@ func (fpl *FallbackPackageLocator) GetChaincodePackage(packageID string) (*Chain
 	}
 
 	md := &ChaincodePackageMetadata{
-		Path:  cds.ChaincodeSpec.ChaincodeId.Path,
-		Type:  cds.ChaincodeSpec.Type.String(),
-		Label: cds.ChaincodeSpec.ChaincodeId.Name,
+		Path:  cds.GetChaincodeSpec().GetChaincodeId().GetPath(),
+		Type:  cds.GetChaincodeSpec().GetType().String(),
+		Label: cds.GetChaincodeSpec().GetChaincodeId().GetName(),
 	}
 
 	mdBytes, err := json.Marshal(md)
@@ -92,7 +91,7 @@ func (fpl *FallbackPackageLocator) GetChaincodePackage(packageID string) (*Chain
 
 	return md,
 		mdBytes,
-		io.NopCloser(bytes.NewBuffer(cds.CodePackage)),
+		io.NopCloser(bytes.NewBuffer(cds.GetCodePackage())),
 		nil
 }
 
@@ -124,7 +123,7 @@ func (cps *ChaincodePackageStreamer) Metadata() (*ChaincodePackageMetadata, erro
 	defer tarFileStream.Close()
 
 	metadata := &ChaincodePackageMetadata{}
-	err = json.NewDecoder(tarFileStream).Decode(metadata)
+	err = json.UnmarshalRead(tarFileStream, metadata)
 	if err != nil {
 		return nil, errors.WithMessage(err, "could not parse metadata file")
 	}
@@ -290,7 +289,7 @@ func ParseChaincodePackage(source []byte) (*ChaincodePackageMetadata, []byte, er
 	var ccPackageMetadata *ChaincodePackageMetadata
 	for {
 		header, err := tarReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 
@@ -308,10 +307,9 @@ func ParseChaincodePackage(source []byte) (*ChaincodePackageMetadata, []byte, er
 		}
 
 		switch header.Name {
-
 		case MetadataFile:
 			ccPackageMetadata = &ChaincodePackageMetadata{}
-			err := json.Unmarshal(fileBytes, ccPackageMetadata)
+			err = json.Unmarshal(fileBytes, ccPackageMetadata)
 			if err != nil {
 				return ccPackageMetadata, nil, errors.Wrapf(err, "could not unmarshal %s as json", MetadataFile)
 			}
@@ -331,7 +329,7 @@ func ParseChaincodePackage(source []byte) (*ChaincodePackageMetadata, []byte, er
 		return ccPackageMetadata, nil, errors.Errorf("did not find any package metadata (missing %s)", MetadataFile)
 	}
 
-	if err := ValidateLabel(ccPackageMetadata.Label); err != nil {
+	if err = ValidateLabel(ccPackageMetadata.Label); err != nil {
 		return ccPackageMetadata, nil, err
 	}
 

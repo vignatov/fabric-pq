@@ -47,7 +47,7 @@ func (cs *channelState) isStopping() bool {
 func (cs *channelState) lookupChannelForMsg(msg protoext.ReceivedMessage) channel.GossipChannel {
 	if protoext.IsStateInfoPullRequestMsg(msg.GetGossipMessage().GossipMessage) {
 		sipr := msg.GetGossipMessage().GetStateInfoPullReq()
-		mac := sipr.Channel_MAC
+		mac := sipr.GetChannel_MAC()
 		pkiID := msg.GetConnectionInfo().ID
 		return cs.getGossipChannelByMAC(mac, pkiID)
 	}
@@ -62,12 +62,12 @@ func (cs *channelState) lookupChannelForGossipMsg(msg *proto.GossipMessage) chan
 		// Hence, it was already sent to a peer (us) that has proved it knows the channel name, by
 		// sending StateInfo messages in the past.
 		// Therefore- we use the channel name from the message itself.
-		return cs.getGossipChannelByChainID(msg.Channel)
+		return cs.getGossipChannelByChainID(msg.GetChannel())
 	}
 
 	// Else, it's a StateInfo message.
 	stateInfMsg := msg.GetStateInfo()
-	return cs.getGossipChannelByMAC(stateInfMsg.Channel_MAC, stateInfMsg.PkiId)
+	return cs.getGossipChannelByMAC(stateInfMsg.GetChannel_MAC(), stateInfMsg.GetPkiId())
 }
 
 func (cs *channelState) getGossipChannelByMAC(receivedMAC []byte, pkiID common.PKIidType) channel.GossipChannel {
@@ -96,7 +96,8 @@ func (cs *channelState) getGossipChannelByChainID(channelID common.ChannelID) ch
 }
 
 func (cs *channelState) joinChannel(joinMsg api.JoinChannelMessage, channelID common.ChannelID,
-	metrics *metrics.MembershipMetrics) {
+	metrics *metrics.MembershipMetrics,
+) {
 	if cs.isStopping() {
 		return
 	}
@@ -154,7 +155,7 @@ func (ga *gossipAdapterImpl) Sign(msg *proto.GossipMessage) (*protoext.SignedGos
 
 // Gossip gossips a message
 func (ga *gossipAdapterImpl) Gossip(msg *protoext.SignedGossipMessage) {
-	ga.Node.emitter.Add(&emittedGossipMessage{
+	ga.emitter.Add(&emittedGossipMessage{
 		SignedGossipMessage: msg,
 		filter: func(_ common.PKIidType) bool {
 			return true
@@ -164,25 +165,25 @@ func (ga *gossipAdapterImpl) Gossip(msg *protoext.SignedGossipMessage) {
 
 // Forward sends message to the next hops
 func (ga *gossipAdapterImpl) Forward(msg protoext.ReceivedMessage) {
-	ga.Node.emitter.Add(&emittedGossipMessage{
+	ga.emitter.Add(&emittedGossipMessage{
 		SignedGossipMessage: msg.GetGossipMessage(),
 		filter:              msg.GetConnectionInfo().ID.IsNotSameFilter,
 	})
 }
 
 func (ga *gossipAdapterImpl) Send(msg *protoext.SignedGossipMessage, peers ...*comm.RemotePeer) {
-	ga.Node.comm.Send(msg, peers...)
+	ga.comm.Send(msg, peers...)
 }
 
 // ValidateStateInfoMessage returns error if a message isn't valid
 // nil otherwise
 func (ga *gossipAdapterImpl) ValidateStateInfoMessage(msg *protoext.SignedGossipMessage) error {
-	return ga.Node.validateStateInfoMsg(msg)
+	return ga.validateStateInfoMsg(msg)
 }
 
 // GetOrgOfPeer returns the organization identifier of a certain peer
 func (ga *gossipAdapterImpl) GetOrgOfPeer(PKIID common.PKIidType) api.OrgIdentityType {
-	return ga.Node.getOrgOfPeer(PKIID)
+	return ga.getOrgOfPeer(PKIID)
 }
 
 // GetIdentityByPKIID returns an identity of a peer with a certain

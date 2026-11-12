@@ -8,7 +8,6 @@ package fileledger
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
@@ -40,7 +39,7 @@ type testEnv struct {
 func initialize(t *testing.T) (*testEnv, *FileLedger) {
 	name := t.TempDir()
 
-	p, err := New(name, &disabled.Provider{})
+	p, err := New(name, cl.GoLevelDB, &disabled.Provider{})
 	require.NoError(t, err)
 	flf := p.(*fileLedgerFactory)
 	fl, err := flf.GetOrCreate("testchannelid")
@@ -128,7 +127,7 @@ func TestInitialization(t *testing.T) {
 
 	block := blockledger.GetBlock(fl, 0)
 	require.NotNil(t, block, "Error retrieving genesis block")
-	require.Equal(t, protoutil.BlockHeaderHash(genesisBlock.Header), protoutil.BlockHeaderHash(block.Header), "Block hashes did no match")
+	require.Equal(t, protoutil.BlockHeaderHash(genesisBlock.GetHeader()), protoutil.BlockHeaderHash(block.GetHeader()), "Block hashes did no match")
 }
 
 func TestReinitialization(t *testing.T) {
@@ -145,7 +144,7 @@ func TestReinitialization(t *testing.T) {
 	fl, err := tev.flf.GetOrCreate("testchannelid")
 	ledger1, ok := fl.(*FileLedger)
 	require.NoError(t, err, "Expected to successfully get test channel")
-	require.Equal(t, 1, len(tev.flf.ChannelIDs()), "Expected not new channel to be created")
+	require.Len(t, tev.flf.ChannelIDs(), 1, "Expected not new channel to be created")
 	require.True(t, ok, "Expected type assertion to succeed")
 	require.Equal(t, uint64(2), ledger1.Height(), "Block height should be 2. Got %v", ledger1.Height())
 
@@ -153,12 +152,12 @@ func TestReinitialization(t *testing.T) {
 	tev.shutDown()
 
 	// re-initialize the ledger provider (not the test ledger itself!)
-	provider2, err := New(tev.location, &disabled.Provider{})
+	provider2, err := New(tev.location, cl.GoLevelDB, &disabled.Provider{})
 	require.NoError(t, err)
 
 	// assert expected ledgers exist
 	channels := provider2.ChannelIDs()
-	require.Equal(t, 1, len(channels), "Should have recovered the channel")
+	require.Len(t, channels, 1, "Should have recovered the channel")
 
 	// get the existing test channel ledger
 	ledger2, err := provider2.GetOrCreate(channels[0])
@@ -169,14 +168,14 @@ func TestReinitialization(t *testing.T) {
 
 	block := blockledger.GetBlock(fl, 1)
 	require.NotNil(t, block, "Error retrieving block 1")
-	require.Equal(t, protoutil.BlockHeaderHash(b1.Header), protoutil.BlockHeaderHash(block.Header), "Block hashes did no match")
+	require.Equal(t, protoutil.BlockHeaderHash(b1.GetHeader()), protoutil.BlockHeaderHash(block.GetHeader()), "Block hashes did no match")
 }
 
 func TestAddition(t *testing.T) {
 	tev, fl := initialize(t)
 	defer tev.tearDown()
 	info, _ := fl.blockStore.GetBlockchainInfo()
-	prevHash := info.CurrentBlockHash
+	prevHash := info.GetCurrentBlockHash()
 	envelope := getSampleEnvelopeWithSignatureHeader()
 	b1 := blockledger.CreateNextBlock(fl, []*cb.Envelope{envelope})
 	fl.Append(b1)
@@ -184,7 +183,7 @@ func TestAddition(t *testing.T) {
 
 	block := blockledger.GetBlock(fl, 1)
 	require.NotNil(t, block, "Error retrieving genesis block")
-	require.Equal(t, prevHash, block.Header.PreviousHash, "Block hashes did no match")
+	require.Equal(t, prevHash, block.GetHeader().GetPreviousHash(), "Block hashes did no match")
 }
 
 func TestRetrieval(t *testing.T) {
@@ -199,15 +198,16 @@ func TestRetrieval(t *testing.T) {
 
 	block, status := it.Next()
 	require.Equal(t, cb.Status_SUCCESS, status, "Expected to successfully read the genesis block")
-	require.Zero(t, block.Header.Number, "Expected to successfully retrieve the genesis block")
+	require.Zero(t, block.GetHeader().GetNumber(), "Expected to successfully retrieve the genesis block")
 
 	block, status = it.Next()
 	require.Equal(t, cb.Status_SUCCESS, status, "Expected to successfully read the second block")
 	require.Equal(
 		t,
 		uint64(1),
-		block.Header.Number,
-		"Expected to successfully retrieve the second block but got block number %d", block.Header.Number)
+		block.GetHeader().GetNumber(),
+		"Expected to successfully retrieve the second block but got block number %d", block.GetHeader().GetNumber(),
+	)
 }
 
 func TestBlockedRetrieval(t *testing.T) {
@@ -229,15 +229,16 @@ func TestBlockedRetrieval(t *testing.T) {
 	require.Equal(
 		t,
 		uint64(1),
-		block.Header.Number,
-		"Expected to successfully retrieve the second block but got block number %d", block.Header.Number)
+		block.GetHeader().GetNumber(),
+		"Expected to successfully retrieve the second block but got block number %d", block.GetHeader().GetNumber(),
+	)
 
 	b2 := blockledger.CreateNextBlock(fl, []*cb.Envelope{envelope})
 	fl.Append(b2)
 
 	block, status = it.Next()
 	require.Equal(t, cb.Status_SUCCESS, status, "Expected to successfully read the third block")
-	require.Equal(t, uint64(2), block.Header.Number, "Expected to successfully retrieve the third block")
+	require.Equal(t, uint64(2), block.GetHeader().GetNumber(), "Expected to successfully retrieve the third block")
 
 	// verify NextCommit seek position
 	it2, num2 := fl.Iterator(&ab.SeekPosition{Type: &ab.SeekPosition_NextCommit{NextCommit: &ab.SeekNextCommit{}}})
@@ -249,7 +250,7 @@ func TestBlockedRetrieval(t *testing.T) {
 
 	block, status = it.Next()
 	require.Equal(t, cb.Status_SUCCESS, status)
-	require.Equal(t, uint64(3), block.Header.Number)
+	require.Equal(t, uint64(3), block.GetHeader().GetNumber())
 }
 
 func TestBlockRetrievalWithSnapshot(t *testing.T) {
@@ -265,7 +266,7 @@ func TestBlockRetrievalWithSnapshot(t *testing.T) {
 	// verify lastBlockInSnapshot, which should be numBlocks - 1
 	bcInfo, err := fl.blockStore.GetBlockchainInfo()
 	require.NoError(t, err)
-	require.Equal(t, uint64(numBlocks-1), bcInfo.BootstrappingSnapshotInfo.LastBlockInSnapshot)
+	require.Equal(t, uint64(numBlocks-1), bcInfo.GetBootstrappingSnapshotInfo().GetLastBlockInSnapshot())
 
 	// verify iterator startingNum for Newest, NextCommit, and Specified
 	it, startingNum := fl.Iterator(&ab.SeekPosition{Type: &ab.SeekPosition_Newest{}})
@@ -314,7 +315,7 @@ func TestBlockstoreError(t *testing.T) {
 		fl := &FileLedger{
 			blockStore: &mockBlockStore{
 				blockchainInfo:         nil,
-				getBlockchainInfoError: fmt.Errorf("Error getting blockchain info"),
+				getBlockchainInfoError: errors.New("Error getting blockchain info"),
 			},
 			signal: make(chan struct{}),
 		}
@@ -323,12 +324,14 @@ func TestBlockstoreError(t *testing.T) {
 			func() {
 				fl.Iterator(&ab.SeekPosition{Type: &ab.SeekPosition_Newest{}})
 			},
-			"Expected Iterator() to panic if blockstore operation fails")
+			"Expected Iterator() to panic if blockstore operation fails",
+		)
 
 		require.Panics(
 			t,
 			func() { fl.Height() },
-			"Expected Height() to panic if blockstore operation fails ")
+			"Expected Height() to panic if blockstore operation fails ",
+		)
 	}
 
 	{
@@ -336,7 +339,7 @@ func TestBlockstoreError(t *testing.T) {
 			blockStore: &mockBlockStore{
 				blockchainInfo:             &cb.BlockchainInfo{Height: uint64(1)},
 				getBlockchainInfoError:     nil,
-				retrieveBlockByNumberError: fmt.Errorf("Error retrieving block by number"),
+				retrieveBlockByNumberError: errors.New("Error retrieving block by number"),
 			},
 			signal: make(chan struct{}),
 		}
@@ -346,7 +349,8 @@ func TestBlockstoreError(t *testing.T) {
 			t,
 			&blockledger.NotFoundErrorIterator{},
 			it,
-			"Expected Not Found Error if seek number is greater than ledger height")
+			"Expected Not Found Error if seek number is greater than ledger height",
+		)
 	}
 
 	{
@@ -357,7 +361,7 @@ func TestBlockstoreError(t *testing.T) {
 			blockStore: &mockBlockStore{
 				blockchainInfo:             &cb.BlockchainInfo{Height: uint64(1)},
 				getBlockchainInfoError:     nil,
-				retrieveBlockByNumberError: fmt.Errorf("Error retrieving block by number"),
+				retrieveBlockByNumberError: errors.New("Error retrieving block by number"),
 				resultsIterator:            resultsIterator,
 			},
 			signal: make(chan struct{}),

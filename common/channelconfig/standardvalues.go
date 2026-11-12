@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package channelconfig
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -21,8 +22,8 @@ func DeserializeProtoValuesFromGroup(group *cb.ConfigGroup, protosStructs ...any
 		logger.Panicf("This is a compile time bug only, the proto structures are somehow invalid: %s", err)
 	}
 
-	for key, value := range group.Values {
-		if _, err := sv.Deserialize(key, value.Value); err != nil {
+	for key, value := range group.GetValues() {
+		if _, err := sv.Deserialize(key, value.GetValue()); err != nil {
 			return err
 		}
 	}
@@ -73,10 +74,10 @@ func (sv *StandardValues) Deserialize(key string, value []byte) (proto.Message, 
 func (sv *StandardValues) initializeProtosStruct(objValue reflect.Value) error {
 	objType := objValue.Type()
 	if objType.Kind() != reflect.Pointer {
-		return fmt.Errorf("Non pointer type")
+		return errors.New("Non pointer type")
 	}
 	if objType.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("Non struct type")
+		return errors.New("Non struct type")
 	}
 
 	numFields := objValue.Elem().NumField()
@@ -94,7 +95,7 @@ func (sv *StandardValues) initializeProtosStruct(objValue reflect.Value) error {
 			return fmt.Errorf("Bad type supplied: %s", structField.Type.Kind())
 		}
 
-		proto, ok := objValue.Elem().Field(i).Interface().(proto.Message)
+		proto, ok := reflect.TypeAssert[proto.Message](objValue.Elem().Field(i))
 		if !ok {
 			return fmt.Errorf("Field type %T does not implement proto.Message", objValue.Elem().Field(i))
 		}

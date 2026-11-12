@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package smartbft
 
 import (
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/pkg/types"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/crypto"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
@@ -48,7 +48,7 @@ func (s *Signer) SignProposal(proposal types.Proposal, _ []byte) *types.Signatur
 	nonce := randomNonceOrPanic()
 
 	sig := &Signature{
-		BlockHeader:      protoutil.BlockHeaderBytes(block.Header),
+		BlockHeader:      protoutil.BlockHeaderBytes(block.GetHeader()),
 		IdentifierHeader: protoutil.MarshalOrPanic(s.newIdentifierHeaderOrPanic(nonce)),
 		OrdererBlockMetadata: protoutil.MarshalOrPanic(&cb.OrdererBlockMetadata{
 			LastConfig:        &cb.LastConfig{Index: s.LastConfigBlockNum(block)},

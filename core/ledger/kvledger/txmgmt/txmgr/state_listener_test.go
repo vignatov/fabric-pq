@@ -140,7 +140,8 @@ func TestStateListenerQueryExecutor(t *testing.T) {
 	txMgr := testEnv.getTxMgr()
 
 	namespace := "ns"
-	populateCollConfigForTest(t, txMgr,
+	populateCollConfigForTest(
+		t, txMgr,
 		[]collConfigkey{
 			{"ns", "coll"},
 		},
@@ -206,7 +207,8 @@ func TestStateListenerQueryExecutor(t *testing.T) {
 func checkHandleStateUpdatesCallback(t *testing.T, ml *mock.StateListener, callNumber int,
 	expectedLedgerid string,
 	expectedUpdates ledger.StateUpdates,
-	expectedCommitHt uint64) {
+	expectedCommitHt uint64,
+) {
 	actualTrigger := ml.HandleStateUpdatesArgsForCall(callNumber)
 	require.Equal(t, expectedLedgerid, actualTrigger.LedgerID)
 	checkEqualUpdates(t, expectedUpdates, actualTrigger.StateUpdates)
@@ -214,7 +216,7 @@ func checkHandleStateUpdatesCallback(t *testing.T, ml *mock.StateListener, callN
 }
 
 func checkEqualUpdates(t *testing.T, expected, actual ledger.StateUpdates) {
-	require.Equal(t, len(expected), len(actual))
+	require.Len(t, actual, len(expected))
 	for ns, e := range expected {
 		require.ElementsMatch(t, e.PublicUpdates, actual[ns].PublicUpdates)
 		checkEqualCollsUpdates(t, e.CollHashUpdates, actual[ns].CollHashUpdates)
@@ -222,7 +224,7 @@ func checkEqualUpdates(t *testing.T, expected, actual ledger.StateUpdates) {
 }
 
 func checkEqualCollsUpdates(t *testing.T, expected, actual map[string][]*kvrwset.KVWriteHash) {
-	require.Equal(t, len(expected), len(actual))
+	require.Len(t, actual, len(expected))
 	for coll, e := range expected {
 		require.ElementsMatch(t, e, actual[coll])
 	}
@@ -230,9 +232,9 @@ func checkEqualCollsUpdates(t *testing.T, expected, actual map[string][]*kvrwset
 
 func checkQueryExecutor(t *testing.T, qe ledger.SimpleQueryExecutor, namespace string, expectedResults []*queryresult.KV) {
 	for _, kv := range expectedResults {
-		val, err := qe.GetState(namespace, kv.Key)
+		val, err := qe.GetState(namespace, kv.GetKey())
 		require.NoError(t, err)
-		require.Equal(t, kv.Value, val)
+		require.Equal(t, kv.GetValue(), val)
 	}
 
 	itr, err := qe.GetStateRangeScanIterator(namespace, "", "")

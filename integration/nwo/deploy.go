@@ -7,7 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 package nwo
 
 import (
-	"encoding/json"
+	"encoding/hex"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,7 +51,7 @@ type Chaincode struct {
 func (c *Chaincode) SetPackageIDFromPackageFile() {
 	fileBytes, err := os.ReadFile(c.PackageFile)
 	Expect(err).NotTo(HaveOccurred())
-	hashStr := fmt.Sprintf("%x", util.ComputeSHA256(fileBytes))
+	hashStr := hex.EncodeToString(util.ComputeSHA256(fileBytes))
 	c.PackageID = c.Label + ":" + hashStr
 }
 
@@ -243,7 +244,7 @@ func CommitChaincode(n *Network, channel string, orderer *Orderer, chaincode Cha
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
-	for i := 0; i < len(peerAddresses); i++ {
+	for range peerAddresses {
 		Eventually(sess.Err, n.EventuallyTimeout).Should(gbytes.Say(`\Qcommitted with status (VALID)\E`))
 	}
 	checkOrgs := []*Organization{}
@@ -296,7 +297,7 @@ func InitChaincode(n *Network, channel string, orderer *Orderer, chaincode Chain
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
-	for i := 0; i < len(peerAddresses); i++ {
+	for range peerAddresses {
 		Eventually(sess.Err, n.EventuallyTimeout).Should(gbytes.Say(`\Qcommitted with status (VALID)\E`))
 	}
 	Expect(sess.Err).To(gbytes.Say("Chaincode invoke successful. result: status:200"))
@@ -305,7 +306,8 @@ func InitChaincode(n *Network, channel string, orderer *Orderer, chaincode Chain
 func EnsureInstalled(n *Network, label, packageID string, peers ...*Peer) {
 	for _, p := range peers {
 		Eventually(QueryInstalled(n, p), n.EventuallyTimeout).Should(
-			ContainElement(gstruct.MatchFields(gstruct.IgnoreExtras,
+			ContainElement(gstruct.MatchFields(
+				gstruct.IgnoreExtras,
 				gstruct.Fields{
 					"Label":     Equal(label),
 					"PackageId": Equal(packageID),
@@ -325,11 +327,13 @@ func QueryInstalledReferences(n *Network, channel, label, packageID string, chec
 	}
 
 	Expect(QueryInstalled(n, checkPeer)()).To(
-		ContainElement(gstruct.MatchFields(gstruct.IgnoreExtras,
+		ContainElement(gstruct.MatchFields(
+			gstruct.IgnoreExtras,
 			gstruct.Fields{
 				"Label":     Equal(label),
 				"PackageId": Equal(packageID),
-				"References": HaveKeyWithValue(channel, gstruct.PointTo(gstruct.MatchFields(gstruct.IgnoreExtras,
+				"References": HaveKeyWithValue(channel, gstruct.PointTo(gstruct.MatchFields(
+					gstruct.IgnoreExtras,
 					gstruct.Fields{
 						"Chaincodes": ConsistOf(chaincodes),
 					},
@@ -410,7 +414,7 @@ func InspectChaincodeDiscrepancies(n *Network, channel string, chaincode Chainco
 	Expect(err).NotTo(HaveOccurred())
 
 	for _, org := range checkOrgs {
-		Expect(output.Mismatches).To(HaveKeyWithValue(org.MSPID, gstruct.PointTo(gstruct.MatchFields(gstruct.IgnoreExtras, gstruct.Fields{
+		Expect(output.GetMismatches()).To(HaveKeyWithValue(org.MSPID, gstruct.PointTo(gstruct.MatchFields(gstruct.IgnoreExtras, gstruct.Fields{
 			"Items": ConsistOf(
 				"EndorsementInfo (Check the Version, InitRequired, EndorsementPlugin)",
 				"ValidationInfo (Check the ValidationParameter, ValidationPlugin)",
@@ -552,7 +556,7 @@ func GetLedgerHeight(n *Network, peer *Peer, channel string) int {
 	channelInfoStr := strings.TrimPrefix(string(sess.Buffer().Contents()[:]), "Blockchain info:")
 	channelInfo := common.BlockchainInfo{}
 	json.Unmarshal([]byte(channelInfoStr), &channelInfo)
-	return int(channelInfo.Height)
+	return int(channelInfo.GetHeight())
 }
 
 // GetMaxLedgerHeight returns the maximum ledger height for the

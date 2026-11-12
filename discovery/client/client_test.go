@@ -517,7 +517,7 @@ func TestClient(t *testing.T) {
 		for _, name := range names {
 			used[name] = struct{}{}
 		}
-		require.Equalf(t, len(acceptablePeers), len(used), "expecting each endorser to be returned at least once")
+		require.Len(t, used, len(acceptablePeers), "expecting each endorser to be returned at least once")
 	})
 
 	t.Run("Endorser query with custom filter", func(t *testing.T) {
@@ -541,7 +541,7 @@ func TestClient(t *testing.T) {
 				used[name] = struct{}{}
 			}
 		}
-		require.Equalf(t, len(acceptablePeers), len(used), "expecting each endorser to be returned at least once")
+		require.Len(t, used, len(acceptablePeers), "expecting each endorser to be returned at least once")
 
 		threshold = 0 // only use the peers at the highest ledger height (same as using the PrioritiesByHeight selector)
 		acceptablePeers = []string{"p5", "p9", "p11", "p15"}
@@ -554,7 +554,7 @@ func TestClient(t *testing.T) {
 			used[name] = struct{}{}
 		}
 		t.Logf("Used peers: %#v\n", used)
-		require.Equalf(t, len(acceptablePeers), len(used), "expecting each endorser to be returned at least once")
+		require.Len(t, used, len(acceptablePeers), "expecting each endorser to be returned at least once")
 	})
 }
 
@@ -772,7 +772,7 @@ func TestString(t *testing.T) {
 }
 
 func getMSP(peer *Peer) string {
-	endpoint := peer.AliveMessage.GetAliveMsg().Membership.Endpoint
+	endpoint := peer.AliveMessage.GetAliveMsg().GetMembership().GetEndpoint()
 	id, _ := strconv.ParseInt(endpoint[1:], 10, 64)
 	switch id / 2 {
 	case 0, 4:
@@ -808,11 +808,11 @@ func (pe *principalEvaluator) SatisfiesPrincipal(channel string, identity []byte
 	sID := &msp.SerializedIdentity{}
 	proto.Unmarshal(identity, sID)
 	p := &msp.MSPRole{}
-	proto.Unmarshal(principal.Principal, p)
-	if sID.Mspid == p.MspIdentifier {
+	proto.Unmarshal(principal.GetPrincipal(), p)
+	if sID.GetMspid() == p.GetMspIdentifier() {
 		return nil
 	}
-	return errors.Errorf("peer %s has MSP %s but should have MSP %s", string(sID.IdBytes), sID.Mspid, p.MspIdentifier)
+	return errors.Errorf("peer %s has MSP %s but should have MSP %s", string(sID.GetIdBytes()), sID.GetMspid(), p.GetMspIdentifier())
 }
 
 type policyFetcher struct {
@@ -917,15 +917,13 @@ func stateInfoMessageWithHeight(ledgerHeight uint64, chaincodes ...*gossip.Chain
 func newPeer(i int, env *gossip.Envelope, properties *gossip.Properties) *peerInfo {
 	p := fmt.Sprintf("p%d", i)
 	return &peerInfo{
-		pkiID:    gossipcommon.PKIidType(p),
-		identity: api.PeerIdentityType(p),
-		NetworkMember: gdisc.NetworkMember{
-			PKIid:            gossipcommon.PKIidType(p),
-			Endpoint:         p,
-			InternalEndpoint: p,
-			Envelope:         env,
-			Properties:       properties,
-		},
+		pkiID:            gossipcommon.PKIidType(p),
+		identity:         api.PeerIdentityType(p),
+		PKIid:            gossipcommon.PKIidType(p),
+		Endpoint:         p,
+		InternalEndpoint: p,
+		Envelope:         env,
+		Properties:       properties,
 	}
 }
 
@@ -996,7 +994,7 @@ func newMockDiscoveryService() *mockDiscoveryServer {
 }
 
 func (ds *mockDiscoveryServer) shutdown() {
-	ds.Server.Stop()
+	ds.Stop()
 }
 
 func (ds *mockDiscoveryServer) Discover(context.Context, *discovery.SignedRequest) (*discovery.Response, error) {
@@ -1103,7 +1101,7 @@ func (f *ledgerHeightFilter) Filter(endorsers Endorsers) Endorsers {
 }
 
 func getLedgerHeight(endorser *Peer) uint64 {
-	return endorser.StateInfoMessage.GetStateInfo().GetProperties().LedgerHeight
+	return endorser.StateInfoMessage.GetStateInfo().GetProperties().GetLedgerHeight()
 }
 
 func getMaxLedgerHeight(endorsers Endorsers) uint64 {
@@ -1120,7 +1118,7 @@ func getMaxLedgerHeight(endorsers Endorsers) uint64 {
 func getNames(endorsers Endorsers) []string {
 	var names []string
 	for _, p := range endorsers {
-		names = append(names, p.AliveMessage.GetAliveMsg().Membership.Endpoint)
+		names = append(names, p.AliveMessage.GetAliveMsg().GetMembership().GetEndpoint())
 	}
 	return names
 }
