@@ -157,9 +157,7 @@ func (d *deliverServiceImpl) StartDeliverForChannel(chainID string, ledgerInfo b
 	blockDeliverer := d.blockDeliverer
 
 	go func() {
-		if blockDeliverer != nil {
-			blockDeliverer.DeliverBlocks()
-		}
+		blockDeliverer.DeliverBlocks()
 		finalizer()
 	}()
 	return nil
@@ -178,7 +176,8 @@ func (d *deliverServiceImpl) createBlockDelivererCFT(chainID string, ledgerInfo 
 		return nil, errors.New("cannot create a block deliverer because height=0")
 	}
 	ubv, err := deliverclient.NewBlockVerificationAssistantFromConfig(
-		d.conf.ChannelConfig, height-1, currentBlockHash, chainID, d.conf.CryptoProvider, flogging.MustGetLogger("common.deliverclient.blockverification"))
+		d.conf.ChannelConfig, height-1, currentBlockHash, chainID, d.conf.CryptoProvider, flogging.MustGetLogger("common.deliverclient.blockverification"),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -196,9 +195,11 @@ func (d *deliverServiceImpl) createBlockDelivererCFT(chainID string, ledgerInfo 
 		UpdatableBlockVerifier: ubv,
 		Dialer: blocksprovider.DialerAdapter{
 			ClientConfig: comm.ClientConfig{
-				DialTimeout: d.conf.DeliverServiceConfig.ConnectionTimeout,
-				KaOpts:      d.conf.DeliverServiceConfig.KeepaliveOptions,
-				SecOpts:     d.conf.DeliverServiceConfig.SecOpts,
+				DialTimeout:    d.conf.DeliverServiceConfig.ConnectionTimeout,
+				KaOpts:         d.conf.DeliverServiceConfig.KeepaliveOptions,
+				SecOpts:        d.conf.DeliverServiceConfig.SecOpts,
+				MaxRecvMsgSize: d.conf.DeliverServiceConfig.MaxRecvMsgSize,
+				MaxSendMsgSize: d.conf.DeliverServiceConfig.MaxSendMsgSize,
 			},
 		},
 		OrderersSourceFactory: &orderers.ConnectionSourceFactory{Overrides: d.conf.OrdererEndpointOverrides},
@@ -241,7 +242,8 @@ func (d *deliverServiceImpl) createBlockDelivererBFT(chainID string, ledgerInfo 
 		return nil, errors.New("cannot create a block deliverer because height=0")
 	}
 	ubv, err := deliverclient.NewBlockVerificationAssistantFromConfig(
-		d.conf.ChannelConfig, height-1, currentBlockHash, chainID, d.conf.CryptoProvider, flogging.MustGetLogger("common.deliverclient.blockverification"))
+		d.conf.ChannelConfig, height-1, currentBlockHash, chainID, d.conf.CryptoProvider, flogging.MustGetLogger("common.deliverclient.blockverification"),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -260,9 +262,11 @@ func (d *deliverServiceImpl) createBlockDelivererBFT(chainID string, ledgerInfo 
 		UpdatableBlockVerifier: ubv,
 		Dialer: blocksprovider.DialerAdapter{
 			ClientConfig: comm.ClientConfig{
-				DialTimeout: d.conf.DeliverServiceConfig.ConnectionTimeout,
-				KaOpts:      d.conf.DeliverServiceConfig.KeepaliveOptions,
-				SecOpts:     d.conf.DeliverServiceConfig.SecOpts,
+				DialTimeout:    d.conf.DeliverServiceConfig.ConnectionTimeout,
+				KaOpts:         d.conf.DeliverServiceConfig.KeepaliveOptions,
+				SecOpts:        d.conf.DeliverServiceConfig.SecOpts,
+				MaxRecvMsgSize: d.conf.DeliverServiceConfig.MaxRecvMsgSize,
+				MaxSendMsgSize: d.conf.DeliverServiceConfig.MaxSendMsgSize,
 			},
 		},
 		OrderersSourceFactory:     &orderers.ConnectionSourceFactory{Overrides: d.conf.OrdererEndpointOverrides},

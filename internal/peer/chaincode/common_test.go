@@ -10,7 +10,7 @@ package chaincode
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -40,7 +40,7 @@ func TestCheckChaincodeCmdParamsWithNewCallingSchema(t *testing.T) {
 	require := require.New(t)
 	result := checkChaincodeCmdParams(&cobra.Command{})
 
-	require.Nil(result)
+	require.NoError(result)
 }
 
 func TestCheckChaincodeCmdParamsWithOldCallingSchema(t *testing.T) {
@@ -50,7 +50,7 @@ func TestCheckChaincodeCmdParamsWithOldCallingSchema(t *testing.T) {
 	require := require.New(t)
 	result := checkChaincodeCmdParams(&cobra.Command{})
 
-	require.Nil(result)
+	require.NoError(result)
 }
 
 func TestCheckChaincodeCmdParamsWithoutName(t *testing.T) {
@@ -112,6 +112,36 @@ func TestCheckValidJSON(t *testing.T) {
 		t.Logf("Chaincode argument error: %s", err)
 		return
 	}
+}
+
+func TestChaincodeInputUnmarshalJSONCaseInsensitivity(t *testing.T) {
+	t.Run("lowercase keys are accepted", func(t *testing.T) {
+		input := &chaincodeInput{}
+		err := json.Unmarshal([]byte(`{"function":"f","args":["a","b"]}`), input)
+		require.NoError(t, err)
+		require.Equal(t, [][]byte{[]byte("f"), []byte("a"), []byte("b")}, input.Args)
+	})
+
+	t.Run("canonical case is accepted", func(t *testing.T) {
+		input := &chaincodeInput{}
+		err := json.Unmarshal([]byte(`{"Function":"f","Args":["a","b"]}`), input)
+		require.NoError(t, err)
+		require.Equal(t, [][]byte{[]byte("f"), []byte("a"), []byte("b")}, input.Args)
+	})
+
+	t.Run("case-variant duplicates are rejected", func(t *testing.T) {
+		input := &chaincodeInput{}
+		err := json.Unmarshal([]byte(`{"Args":["a"],"args":["b"]}`), input)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "duplicate object member name")
+	})
+
+	t.Run("duplicate object member names are rejected", func(t *testing.T) {
+		input := &chaincodeInput{}
+		err := json.Unmarshal([]byte(`{"Args":["a"],"Args":["b"]}`), input)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "duplicate object member name")
+	})
 }
 
 func TestCheckInvalidJSON(t *testing.T) {
@@ -229,15 +259,15 @@ func TestCollectionParsing(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ccp)
 	require.NotNil(t, ccpBytes)
-	conf := ccp.Config[0].GetStaticCollectionConfig()
+	conf := ccp.GetConfig()[0].GetStaticCollectionConfig()
 	pol, _ := policydsl.FromString("OR('A.member', 'B.member')")
-	require.Equal(t, 3, int(conf.RequiredPeerCount))
-	require.Equal(t, 483279847, int(conf.MaximumPeerCount))
-	require.Equal(t, "foo", conf.Name)
-	require.True(t, proto.Equal(pol, conf.MemberOrgsPolicy.GetSignaturePolicy()))
-	require.Equal(t, 10, int(conf.BlockToLive))
-	require.Equal(t, true, conf.MemberOnlyRead)
-	require.Nil(t, conf.EndorsementPolicy)
+	require.Equal(t, 3, int(conf.GetRequiredPeerCount()))
+	require.Equal(t, 483279847, int(conf.GetMaximumPeerCount()))
+	require.Equal(t, "foo", conf.GetName())
+	require.True(t, proto.Equal(pol, conf.GetMemberOrgsPolicy().GetSignaturePolicy()))
+	require.Equal(t, 10, int(conf.GetBlockToLive()))
+	require.True(t, conf.GetMemberOnlyRead())
+	require.Nil(t, conf.GetEndorsementPolicy())
 	t.Logf("conf=%s", conf)
 
 	// Test default values for RequiredPeerCount and MaxPeerCount
@@ -245,45 +275,45 @@ func TestCollectionParsing(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ccp)
 	require.NotNil(t, ccpBytes)
-	conf = ccp.Config[0].GetStaticCollectionConfig()
+	conf = ccp.GetConfig()[0].GetStaticCollectionConfig()
 	pol, _ = policydsl.FromString("OR('A.member', 'B.member')")
-	require.Equal(t, 0, int(conf.RequiredPeerCount))
-	require.Equal(t, 1, int(conf.MaximumPeerCount))
-	require.Equal(t, "foo", conf.Name)
-	require.True(t, proto.Equal(pol, conf.MemberOrgsPolicy.GetSignaturePolicy()))
-	require.Equal(t, 10, int(conf.BlockToLive))
-	require.Equal(t, true, conf.MemberOnlyRead)
-	require.Nil(t, conf.EndorsementPolicy)
+	require.Equal(t, 0, int(conf.GetRequiredPeerCount()))
+	require.Equal(t, 1, int(conf.GetMaximumPeerCount()))
+	require.Equal(t, "foo", conf.GetName())
+	require.True(t, proto.Equal(pol, conf.GetMemberOrgsPolicy().GetSignaturePolicy()))
+	require.Equal(t, 10, int(conf.GetBlockToLive()))
+	require.True(t, conf.GetMemberOnlyRead())
+	require.Nil(t, conf.GetEndorsementPolicy())
 	t.Logf("conf=%s", conf)
 
 	ccp, ccpBytes, err = getCollectionConfigFromBytes([]byte(sampleCollectionConfigGoodWithSignaturePolicy))
 	require.NoError(t, err)
 	require.NotNil(t, ccp)
 	require.NotNil(t, ccpBytes)
-	conf = ccp.Config[0].GetStaticCollectionConfig()
+	conf = ccp.GetConfig()[0].GetStaticCollectionConfig()
 	pol, _ = policydsl.FromString("OR('A.member', 'B.member')")
-	require.Equal(t, 3, int(conf.RequiredPeerCount))
-	require.Equal(t, 483279847, int(conf.MaximumPeerCount))
-	require.Equal(t, "foo", conf.Name)
-	require.True(t, proto.Equal(pol, conf.MemberOrgsPolicy.GetSignaturePolicy()))
-	require.Equal(t, 10, int(conf.BlockToLive))
-	require.Equal(t, true, conf.MemberOnlyRead)
-	require.True(t, proto.Equal(pol, conf.EndorsementPolicy.GetSignaturePolicy()))
+	require.Equal(t, 3, int(conf.GetRequiredPeerCount()))
+	require.Equal(t, 483279847, int(conf.GetMaximumPeerCount()))
+	require.Equal(t, "foo", conf.GetName())
+	require.True(t, proto.Equal(pol, conf.GetMemberOrgsPolicy().GetSignaturePolicy()))
+	require.Equal(t, 10, int(conf.GetBlockToLive()))
+	require.True(t, conf.GetMemberOnlyRead())
+	require.True(t, proto.Equal(pol, conf.GetEndorsementPolicy().GetSignaturePolicy()))
 	t.Logf("conf=%s", conf)
 
 	ccp, ccpBytes, err = getCollectionConfigFromBytes([]byte(sampleCollectionConfigGoodWithChannelConfigPolicy))
 	require.NoError(t, err)
 	require.NotNil(t, ccp)
 	require.NotNil(t, ccpBytes)
-	conf = ccp.Config[0].GetStaticCollectionConfig()
+	conf = ccp.GetConfig()[0].GetStaticCollectionConfig()
 	pol, _ = policydsl.FromString("OR('A.member', 'B.member')")
-	require.Equal(t, 3, int(conf.RequiredPeerCount))
-	require.Equal(t, 483279847, int(conf.MaximumPeerCount))
-	require.Equal(t, "foo", conf.Name)
-	require.True(t, proto.Equal(pol, conf.MemberOrgsPolicy.GetSignaturePolicy()))
-	require.Equal(t, 10, int(conf.BlockToLive))
-	require.Equal(t, true, conf.MemberOnlyRead)
-	require.Equal(t, "/Channel/Application/Endorsement", conf.EndorsementPolicy.GetChannelConfigPolicyReference())
+	require.Equal(t, 3, int(conf.GetRequiredPeerCount()))
+	require.Equal(t, 483279847, int(conf.GetMaximumPeerCount()))
+	require.Equal(t, "foo", conf.GetName())
+	require.True(t, proto.Equal(pol, conf.GetMemberOrgsPolicy().GetSignaturePolicy()))
+	require.Equal(t, 10, int(conf.GetBlockToLive()))
+	require.True(t, conf.GetMemberOnlyRead())
+	require.Equal(t, "/Channel/Application/Endorsement", conf.GetEndorsementPolicy().GetChannelConfigPolicyReference())
 	t.Logf("conf=%s", conf)
 
 	failureTests := []struct {
@@ -294,12 +324,12 @@ func TestCollectionParsing(t *testing.T) {
 		{
 			name:             "Invalid member orgs policy",
 			collectionConfig: sampleCollectionConfigBad,
-			expectedErr:      "invalid policy barf: unrecognized token 'barf' in policy string",
+			expectedErr:      "invalid policy barf: unknown name barf (1:1)\n | barf\n | ^",
 		},
 		{
 			name:             "Invalid collection config",
 			collectionConfig: "barf",
-			expectedErr:      "could not parse the collection configuration: invalid character 'b' looking for beginning of value",
+			expectedErr:      "could not parse the collection configuration: jsontext: invalid character 'b' at start of value",
 		},
 		{
 			name:             "Invalid signature policy",
@@ -414,7 +444,7 @@ func TestInitCmdFactoryFailures(t *testing.T) {
 	require := require.New(t)
 
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
-	require.Nil(err)
+	require.NoError(err)
 
 	// failure validating peer connection parameters
 	resetFlags()
@@ -641,7 +671,8 @@ func TestDeliverGroupWait(t *testing.T) {
 	err = dg.Wait(context.Background())
 	g.Expect(err.Error()).To(SatisfyAny(
 		ContainSubstring("barbeque"),
-		ContainSubstring("tofu")))
+		ContainSubstring("tofu"),
+	))
 }
 
 func TestChaincodeInvokeOrQuery_waitForEvent(t *testing.T) {
@@ -729,7 +760,7 @@ func TestChaincodeInvokeOrQuery_waitForEvent(t *testing.T) {
 			mockCF.BroadcastClient,
 		)
 		require.Error(t, err)
-		require.Equal(t, err.Error(), "transaction invalidated with status (ENDORSEMENT_POLICY_FAILURE)")
+		require.EqualError(t, err, "transaction invalidated with status (ENDORSEMENT_POLICY_FAILURE)")
 	})
 
 	t.Run("failure - deliver returns response status instead of block", func(t *testing.T) {
@@ -755,7 +786,7 @@ func TestChaincodeInvokeOrQuery_waitForEvent(t *testing.T) {
 			mockCF.BroadcastClient,
 		)
 		require.Error(t, err)
-		require.Equal(t, err.Error(), "deliver completed with status (FORBIDDEN) before txid received")
+		require.EqualError(t, err, "deliver completed with status (FORBIDDEN) before txid received")
 	})
 
 	t.Run(" failure - timeout occurs - both deliver clients don't return an event with the expected txid before timeout", func(t *testing.T) {
@@ -797,7 +828,7 @@ func TestProcessProposals(t *testing.T) {
 		responses, err := processProposals([]pb.EndorserClient{mockClients[0]}, signedProposal)
 		require.NoError(t, err)
 		require.Len(t, responses, 1)
-		require.Equal(t, responses[0].Response.Status, int32(200))
+		require.Equal(t, int32(200), responses[0].GetResponse().GetStatus())
 	})
 	t.Run("should process a proposal for multiple peers", func(t *testing.T) {
 		responses, err := processProposals(mockClients, signedProposal)
@@ -806,10 +837,10 @@ func TestProcessProposals(t *testing.T) {
 		// Sort the statuses (as they may turn up in different order) before comparing.
 		statuses := []int32{}
 		for _, response := range responses {
-			statuses = append(statuses, response.Response.Status)
+			statuses = append(statuses, response.GetResponse().GetStatus())
 		}
 		slices.Sort(statuses)
-		require.EqualValues(t, []int32{200, 300, 400, 500}, statuses)
+		require.Equal(t, []int32{200, 300, 400, 500}, statuses)
 	})
 	t.Run("should return an error from processing a proposal for a single peer", func(t *testing.T) {
 		responses, err := processProposals([]pb.EndorserClient{mockErrorClient}, signedProposal)

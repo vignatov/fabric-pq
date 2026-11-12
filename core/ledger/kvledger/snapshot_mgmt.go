@@ -12,8 +12,8 @@ import (
 	"os"
 	"sync"
 
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/util"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 	"github.com/pkg/errors"
 )
 
@@ -111,7 +111,8 @@ func (l *kvLedger) processSnapshotMgmtEvents(lastCommittedBlockNumber uint64) {
 
 	for {
 		e := <-events
-		logger.Debugw("Event received",
+		logger.Debugw(
+			"Event received",
 			"channelID", l.ledgerID, "event", e, "snapshotInProgress", snapshotInProgress,
 			"lastCommittedBlockNumber", lastCommittedBlockNumber, "committerStatus", committerStatus,
 		)
@@ -270,11 +271,11 @@ func (m *snapshotMgr) shutdown() {
 // snapshotRequestBookkeeper manages snapshot requests in a leveldb and maintains smallest block number for pending snapshot requests
 type snapshotRequestBookkeeper struct {
 	ledgerID                string
-	dbHandle                *leveldbhelper.DBHandle
+	dbHandle                db.DBHandle
 	smallestRequestBlockNum uint64
 }
 
-func newSnapshotRequestBookkeeper(ledgerID string, dbHandle *leveldbhelper.DBHandle) (*snapshotRequestBookkeeper, error) {
+func newSnapshotRequestBookkeeper(ledgerID string, dbHandle db.DBHandle) (*snapshotRequestBookkeeper, error) {
 	bk := &snapshotRequestBookkeeper{
 		ledgerID: ledgerID,
 		dbHandle: dbHandle,

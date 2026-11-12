@@ -7,20 +7,19 @@ SPDX-License-Identifier: Apache-2.0
 package externalbuilder_test
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/types"
-
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric/core/container/ccintf"
 	"github.com/hyperledger/fabric/core/container/externalbuilder"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -109,6 +108,33 @@ var _ = Describe("Instance", func() {
 				Expect(err).To(MatchError(ContainSubstring("malformed chaincode info")))
 			})
 		})
+
+		When("connection.json contains duplicate keys", func() {
+			BeforeEach(func() {
+				ccdata := `{"address": "ccaddress:12345", "address": "ccaddress:54321"}`
+				err := os.WriteFile(filepath.Join(instance.ChaincodeServerReleaseDir(), "connection.json"), []byte(ccdata), 0o600)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("returns a malformed chaincode error", func() {
+				_, err := instance.ChaincodeServerInfo()
+				Expect(err).To(MatchError(ContainSubstring("malformed chaincode info")))
+				Expect(err).To(MatchError(ContainSubstring("duplicate object member name")))
+			})
+		})
+
+		When("connection.json uses non-canonical field casing", func() {
+			BeforeEach(func() {
+				ccdata := `{"Address": "ccaddress:12345"}`
+				err := os.WriteFile(filepath.Join(instance.ChaincodeServerReleaseDir(), "connection.json"), []byte(ccdata), 0o600)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("ignores the field and reports a missing address", func() {
+				_, err := instance.ChaincodeServerInfo()
+				Expect(err).To(MatchError("chaincode address not provided"))
+			})
+		})
 	})
 
 	Describe("ChaincodeServerUserData", func() {
@@ -168,8 +194,9 @@ var _ = Describe("Instance", func() {
 						Address: "ccaddress:12345",
 						ClientConfig: comm.ClientConfig{
 							SecOpts: comm.SecureOptions{
-								UseTLS:        true,
-								ServerRootCAs: [][]byte{[]byte("fake-root-cert")},
+								UseTLS:             true,
+								ServerRootCAs:      [][]byte{[]byte("fake-root-cert")},
+								ServerNameOverride: "ccaddress",
 							},
 							KaOpts:      comm.DefaultKeepaliveOptions,
 							DialTimeout: 10 * time.Second,
@@ -265,7 +292,8 @@ var _ = Describe("Instance", func() {
 	})
 
 	Describe("Duration", func() {
-		DescribeTable("Unmarshal",
+		DescribeTable(
+			"Unmarshal",
 			func(input string, expected externalbuilder.Duration, errMatcher types.GomegaMatcher) {
 				var d externalbuilder.Duration
 				err := json.Unmarshal([]byte(input), &d)
@@ -273,11 +301,18 @@ var _ = Describe("Instance", func() {
 			},
 			Entry("Number", `100`, externalbuilder.Duration(100), BeNil()),
 			Entry("Duration", `"1s"`, externalbuilder.Duration(time.Second), BeNil()),
-			Entry("List", `[1, 2, 3]`, externalbuilder.Duration(time.Second), MatchError("invalid duration")),
+			Entry("List", `[1, 2, 3]`, externalbuilder.Duration(time.Second), MatchError(ContainSubstring("invalid duration"))),
 			Entry("Nonsense", `"nonsense"`, externalbuilder.Duration(time.Second), MatchError(MatchRegexp(`time: invalid duration "?nonsense"?`))),
 		)
 
-		DescribeTable("Round Trip",
+		It("marshals as a duration string", func() {
+			marshalled, err := json.Marshal(externalbuilder.Duration(10 * time.Second))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(marshalled)).To(Equal(`"10s"`))
+		})
+
+		DescribeTable(
+			"Round Trip",
 			func(d time.Duration) {
 				marshalled, err := json.Marshal(externalbuilder.Duration(d))
 				Expect(err).NotTo(HaveOccurred())

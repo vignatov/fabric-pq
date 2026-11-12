@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package leveldbhelper
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,12 +62,12 @@ func TestLevelDBHelper(t *testing.T) {
 	require.NoError(t, db.Delete([]byte("key2"), true))
 
 	val1, err1 := db.Get([]byte("key1"))
-	require.NoError(t, err1, "")
-	require.Equal(t, "", string(val1))
+	require.NoError(t, err1)
+	require.Empty(t, string(val1))
 
 	val2, err2 := db.Get([]byte("key2"))
-	require.NoError(t, err2, "")
-	require.Equal(t, "", string(val2))
+	require.NoError(t, err2)
+	require.Empty(t, string(val2))
 
 	db.Close()
 	// second time Close should not have any side effect
@@ -79,36 +78,41 @@ func TestLevelDBHelper(t *testing.T) {
 
 	val3, err3 := db.Get([]byte("key3"))
 	require.Error(t, err3)
-	require.Equal(t, "", string(val3))
+	require.Empty(t, string(val3))
 
 	db.Open()
 	IsEmpty, err = db.IsEmpty()
 	require.NoError(t, err)
 	require.False(t, IsEmpty)
 
-	batch := &leveldb.Batch{}
-	batch.Put([]byte("key1"), []byte("value1"))
-	batch.Put([]byte("key2"), []byte("value2"))
-	batch.Delete([]byte("key3"))
+	batch := &UpdateBatch{
+		dbName:       "",
+		leveldbBatch: &leveldb.Batch{},
+	}
+	batch.leveldbBatch.Put([]byte("key1"), []byte("value1"))
+	batch.leveldbBatch.Put([]byte("key2"), []byte("value2"))
+	batch.leveldbBatch.Delete([]byte("key3"))
 	require.NoError(t, db.WriteBatch(batch, true))
 
 	val1, err1 = db.Get([]byte("key1"))
-	require.NoError(t, err1, "")
+	require.NoError(t, err1)
 	require.Equal(t, "value1", string(val1))
 
 	val2, err2 = db.Get([]byte("key2"))
-	require.NoError(t, err2, "")
+	require.NoError(t, err2)
 	require.Equal(t, "value2", string(val2))
 
 	val3, err3 = db.Get([]byte("key3"))
-	require.NoError(t, err3, "")
-	require.Equal(t, "", string(val3))
+	require.NoError(t, err3)
+	require.Empty(t, string(val3))
 
-	keys := []string{}
-	itr := db.GetIterator(nil, nil)
+	var keys []string
+	itr, err := db.GetIterator(nil, nil)
+	require.NoError(t, err)
 	for itr.Next() {
 		keys = append(keys, string(itr.Key()))
 	}
+	itr.Release()
 	require.Equal(t, []string{"key1", "key2"}, keys)
 }
 
@@ -132,7 +136,7 @@ func TestFileLock(t *testing.T) {
 	// try to acquire the file lock again using the fileLock2
 	// would result in an error
 	err = fileLock2.Lock()
-	expectedErr := fmt.Sprintf("lock is already acquired on file %s", fileLockPath)
+	expectedErr := "lock is already acquired on file " + fileLockPath
 	require.EqualError(t, err, expectedErr)
 	require.Nil(t, fileLock2.db)
 
@@ -186,8 +190,8 @@ func TestFileLockLockUnlockLock(t *testing.T) {
 }
 
 func TestCreateDBInEmptyDir(t *testing.T) {
-	require.NoError(t, os.RemoveAll(testDBPath), "")
-	require.NoError(t, os.MkdirAll(testDBPath, 0o775), "")
+	require.NoError(t, os.RemoveAll(testDBPath))
+	require.NoError(t, os.MkdirAll(testDBPath, 0o775))
 	db := CreateDB(&Conf{DBPath: testDBPath})
 	defer db.Close()
 	defer func() {
@@ -199,10 +203,10 @@ func TestCreateDBInEmptyDir(t *testing.T) {
 }
 
 func TestCreateDBInNonEmptyDir(t *testing.T) {
-	require.NoError(t, os.RemoveAll(testDBPath), "")
-	require.NoError(t, os.MkdirAll(testDBPath, 0o775), "")
+	require.NoError(t, os.RemoveAll(testDBPath))
+	require.NoError(t, os.MkdirAll(testDBPath, 0o775))
 	file, err := os.Create(filepath.Join(testDBPath, "dummyfile.txt"))
-	require.NoError(t, err, "")
+	require.NoError(t, err)
 	file.Close()
 	db := CreateDB(&Conf{DBPath: testDBPath})
 	defer db.Close()

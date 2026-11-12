@@ -17,9 +17,8 @@ import (
 	"github.com/hyperledger/fabric/internal/cryptogen/csp"
 	"github.com/hyperledger/fabric/internal/cryptogen/metadata"
 	"github.com/hyperledger/fabric/internal/cryptogen/msp"
-
+	"go.yaml.in/yaml/v4"
 	"gopkg.in/alecthomas/kingpin.v2"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -229,7 +228,6 @@ var (
 func main() {
 	kingpin.Version("0.0.1")
 	switch kingpin.MustParse(app.Parse(os.Args[1:])) {
-
 	// "generate" command
 	case gen.FullCommand():
 		generate()
@@ -254,14 +252,14 @@ func getConfig() (*Config, error) {
 	if *genConfigFile != nil {
 		data, err := io.ReadAll(*genConfigFile)
 		if err != nil {
-			return nil, fmt.Errorf("Error reading configuration: %s", err)
+			return nil, fmt.Errorf("Error reading configuration: %w", err)
 		}
 
 		configData = string(data)
 	} else if *extConfigFile != nil {
 		data, err := io.ReadAll(*extConfigFile)
 		if err != nil {
-			return nil, fmt.Errorf("Error reading configuration: %s", err)
+			return nil, fmt.Errorf("Error reading configuration: %w", err)
 		}
 
 		configData = string(data)
@@ -272,7 +270,7 @@ func getConfig() (*Config, error) {
 	config := &Config{}
 	err := yaml.Unmarshal([]byte(configData), &config)
 	if err != nil {
-		return nil, fmt.Errorf("Error Unmarshalling YAML: %s", err)
+		return nil, fmt.Errorf("Error Unmarshalling YAML: %w", err)
 	}
 
 	return config, nil
@@ -423,13 +421,13 @@ func generate() {
 func parseTemplate(input string, data any) (string, error) {
 	t, err := template.New("parse").Parse(input)
 	if err != nil {
-		return "", fmt.Errorf("Error parsing template: %s", err)
+		return "", fmt.Errorf("Error parsing template: %w", err)
 	}
 
 	output := new(bytes.Buffer)
 	err = t.Execute(output, data)
 	if err != nil {
-		return "", fmt.Errorf("Error executing template: %s", err)
+		return "", fmt.Errorf("Error executing template: %w", err)
 	}
 
 	return output.String(), nil
@@ -485,7 +483,7 @@ func renderNodeSpec(domain string, spec *NodeSpec) error {
 func renderOrgSpec(orgSpec *OrgSpec, prefix string) error {
 	publickKeyAlg := getPublicKeyAlg(orgSpec.Template.PublicKeyAlgorithm)
 	// First process all of our templated nodes
-	for i := 0; i < orgSpec.Template.Count; i++ {
+	for i := range orgSpec.Template.Count {
 		data := HostnameData{
 			Prefix: prefix,
 			Index:  i + orgSpec.Template.Start,

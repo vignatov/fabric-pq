@@ -19,6 +19,7 @@ import (
 	ordererProtos "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/blockledger/fileledger"
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
 	"github.com/hyperledger/fabric/integration/ordererclient"
@@ -40,13 +41,14 @@ func extractLedger(network *nwo.Network, orderer *nwo.Orderer, channelId string)
 			AttrsToIndex: []blkstorage.IndexableAttr{blkstorage.IndexableAttrBlockNum},
 		},
 		&disabled.Provider{},
+		ledger.GoLevelDB,
 	)
 	Expect(err).NotTo(HaveOccurred())
 	blockStore, err := blockStoreProvider.Open(channelId)
 	Expect(err).NotTo(HaveOccurred())
 	fileLedger := fileledger.NewFileLedger(blockStore)
 	var ledgerArray []*common.Block
-	for i := uint64(0); i < fileLedger.Height(); i++ {
+	for i := range fileLedger.Height() {
 		block, err := fileLedger.RetrieveBlockByNumber(i)
 		Expect(err).NotTo(HaveOccurred())
 		ledgerArray = append(ledgerArray, block)
@@ -96,7 +98,8 @@ var _ = Describe("Smart BFT Block Deliverer", func() {
 		network.Bootstrap()
 
 		for _, orderer := range network.Orderers {
-			runner := network.OrdererRunner(orderer,
+			runner := network.OrdererRunner(
+				orderer,
 				"FABRIC_LOGGING_SPEC=debug",
 				"ORDERER_GENERAL_BACKOFF_MAXDELAY=20s",
 			)

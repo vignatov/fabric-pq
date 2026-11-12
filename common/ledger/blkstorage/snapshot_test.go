@@ -50,7 +50,7 @@ func TestImportFromSnapshot(t *testing.T) {
 		blocksGenerator = bg
 		originalBlockStore, err := env.provider.Open("originalLedger")
 		require.NoError(t, err)
-		txIDGenesisTx, err := protoutil.GetOrComputeTxIDFromEnvelope(genesisBlock.Data.Data[0])
+		txIDGenesisTx, err := protoutil.GetOrComputeTxIDFromEnvelope(genesisBlock.GetData().GetData()[0])
 		require.NoError(t, err)
 
 		blocksDetailsBeforeSnapshot = []*testBlockDetails{
@@ -101,8 +101,8 @@ func TestImportFromSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, &common.BlockchainInfo{
 			Height:            uint64(len(blocksBeforeSnapshot)),
-			CurrentBlockHash:  protoutil.BlockHeaderHash(lastBlock.Header),
-			PreviousBlockHash: protoutil.BlockHeaderHash(prevBlock.Header),
+			CurrentBlockHash:  protoutil.BlockHeaderHash(lastBlock.GetHeader()),
+			PreviousBlockHash: protoutil.BlockHeaderHash(prevBlock.GetHeader()),
 		}, bcInfo)
 
 		_, err = originalBlockStore.ExportTxIds(snapshotDir, testNewHashFunc)
@@ -110,9 +110,9 @@ func TestImportFromSnapshot(t *testing.T) {
 		lastBlockInSnapshot := blocksBeforeSnapshot[len(blocksBeforeSnapshot)-1]
 
 		snapshotInfo = &SnapshotInfo{
-			LastBlockHash:     protoutil.BlockHeaderHash(lastBlockInSnapshot.Header),
-			LastBlockNum:      lastBlockInSnapshot.Header.Number,
-			PreviousBlockHash: lastBlockInSnapshot.Header.PreviousHash,
+			LastBlockHash:     protoutil.BlockHeaderHash(lastBlockInSnapshot.GetHeader()),
+			LastBlockNum:      lastBlockInSnapshot.GetHeader().GetNumber(),
+			PreviousBlockHash: lastBlockInSnapshot.GetHeader().GetPreviousHash(),
 		}
 
 		// bootstrap another blockstore from the snapshot and verify its APIs
@@ -163,7 +163,8 @@ func TestImportFromSnapshot(t *testing.T) {
 		setup()
 		defer cleanup()
 
-		require.EqualError(t,
+		require.EqualError(
+			t,
 			bootstrappedBlockStore.AddBlock(blocksAfterSnapshot[1]),
 			"block number should have been 3 but was 4",
 		)
@@ -173,20 +174,22 @@ func TestImportFromSnapshot(t *testing.T) {
 		}
 		finalBlock := blocksAfterSnapshot[len(blocksAfterSnapshot)-1]
 		expectedBCInfo := &common.BlockchainInfo{
-			Height:            finalBlock.Header.Number + 1,
-			CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.Header),
-			PreviousBlockHash: finalBlock.Header.PreviousHash,
+			Height:            finalBlock.GetHeader().GetNumber() + 1,
+			CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.GetHeader()),
+			PreviousBlockHash: finalBlock.GetHeader().GetPreviousHash(),
 			BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
 				LastBlockInSnapshot: snapshotInfo.LastBlockNum,
 			},
 		}
-		verifyQueriesOnBlocksPriorToSnapshot(t,
+		verifyQueriesOnBlocksPriorToSnapshot(
+			t,
 			bootstrappedBlockStore,
 			expectedBCInfo,
 			blocksDetailsBeforeSnapshot,
 			blocksBeforeSnapshot,
 		)
-		verifyQueriesOnBlocksAddedAfterBootstrapping(t,
+		verifyQueriesOnBlocksAddedAfterBootstrapping(
+			t,
 			bootstrappedBlockStore,
 			expectedBCInfo,
 			blocksDetailsAfterSnapshot,
@@ -200,7 +203,8 @@ func TestImportFromSnapshot(t *testing.T) {
 
 		closeBlockStore()
 		require.NoError(t, reopenBlockStore())
-		verifyQueriesOnBlocksPriorToSnapshot(t,
+		verifyQueriesOnBlocksPriorToSnapshot(
+			t,
 			bootstrappedBlockStore,
 			&common.BlockchainInfo{
 				Height:            snapshotInfo.LastBlockNum + 1,
@@ -221,14 +225,15 @@ func TestImportFromSnapshot(t *testing.T) {
 		require.NoError(t, reopenBlockStore())
 		finalBlock := blocksAfterSnapshot[len(blocksAfterSnapshot)-1]
 		expectedBCInfo := &common.BlockchainInfo{
-			Height:            finalBlock.Header.Number + 1,
-			CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.Header),
-			PreviousBlockHash: finalBlock.Header.PreviousHash,
+			Height:            finalBlock.GetHeader().GetNumber() + 1,
+			CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.GetHeader()),
+			PreviousBlockHash: finalBlock.GetHeader().GetPreviousHash(),
 			BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
 				LastBlockInSnapshot: snapshotInfo.LastBlockNum,
 			},
 		}
-		verifyQueriesOnBlocksAddedAfterBootstrapping(t,
+		verifyQueriesOnBlocksAddedAfterBootstrapping(
+			t,
 			bootstrappedBlockStore,
 			expectedBCInfo,
 			blocksDetailsAfterSnapshot,
@@ -278,13 +283,13 @@ func TestImportFromSnapshot(t *testing.T) {
 			// redirect index writes to some random place and add two blocks and then set the original index back
 			blkfileMgr := bootstrappedBlockStore.fileMgr
 			originalIndexDB := blkfileMgr.index.db
-			bootstrappedBlockStore.fileMgr.index.db = env.provider.leveldbProvider.GetDBHandle(filepath.Join(testDir, "someRandomPlace"))
+			bootstrappedBlockStore.fileMgr.index.db = env.provider.dbProvider.GetDBHandle(filepath.Join(testDir, "someRandomPlace"))
 			require.NoError(t, blkfileMgr.addBlock(block))
 			blkfileMgr.index.db = originalIndexDB
 
 			// before, we test for index sync-up, verify that the last set of blocks not indexed in the original index
-			_, err := blkfileMgr.retrieveBlockByNumber(block.Header.Number)
-			require.EqualError(t, err, fmt.Sprintf("no such block number [%d] in index", block.Header.Number))
+			_, err := blkfileMgr.retrieveBlockByNumber(block.GetHeader().GetNumber())
+			require.EqualError(t, err, fmt.Sprintf("no such block number [%d] in index", block.GetHeader().GetNumber()))
 
 			// close and open should be able to sync-up the index
 			closeBlockStore()
@@ -295,9 +300,9 @@ func TestImportFromSnapshot(t *testing.T) {
 				t,
 				bootstrappedBlockStore,
 				&common.BlockchainInfo{
-					Height:            finalBlock.Header.Number + 1,
-					CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.Header),
-					PreviousBlockHash: finalBlock.Header.PreviousHash,
+					Height:            finalBlock.GetHeader().GetNumber() + 1,
+					CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.GetHeader()),
+					PreviousBlockHash: finalBlock.GetHeader().GetPreviousHash(),
 					BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
 						LastBlockInSnapshot: snapshotInfo.LastBlockNum,
 					},
@@ -315,7 +320,8 @@ func TestImportFromSnapshot(t *testing.T) {
 		closeBlockStore()
 		require.NoError(t, os.RemoveAll(env.provider.conf.getIndexDir()))
 		err := reopenBlockStore()
-		require.EqualError(t, err,
+		require.EqualError(
+			t, err,
 			fmt.Sprintf(
 				"cannot sync index with block files. blockstore is bootstrapped from a snapshot and first available block=[%d]",
 				len(blocksBeforeSnapshot),
@@ -437,7 +443,7 @@ func generateNextTestBlock(bg *testutil.BlockGenerator, d *testBlockDetails) *co
 	}
 	block := bg.NextBlockWithTxid(txContents, d.txIDs)
 	for i, validationCode := range d.validationCodes {
-		txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER]).SetFlag(i, validationCode)
+		txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER]).SetFlag(i, validationCode)
 	}
 	return block
 }
@@ -454,8 +460,8 @@ func verifyQueriesOnBlocksPriorToSnapshot(
 	require.Equal(t, expectedBCInfo, bci)
 
 	for _, b := range blocksBeforeSnapshot {
-		blockNum := b.Header.Number
-		blockHash := protoutil.BlockHeaderHash(b.Header)
+		blockNum := b.GetHeader().GetNumber()
+		blockHash := protoutil.BlockHeaderHash(b.GetHeader())
 		expectedErrStr := fmt.Sprintf(
 			"cannot serve block [%d]. The ledger is bootstrapped from a snapshot. First available block = [%d]",
 			blockNum, len(blocksBeforeSnapshot),
@@ -508,24 +514,24 @@ func verifyQueriesOnBlocksAddedAfterBootstrapping(t *testing.T,
 	require.Equal(t, expectedBCInfo, bci)
 
 	for _, b := range blocksAfterSnapshot {
-		retrievedBlock, err := bootstrappedBlockStore.RetrieveBlockByNumber(b.Header.Number)
+		retrievedBlock, err := bootstrappedBlockStore.RetrieveBlockByNumber(b.GetHeader().GetNumber())
 		require.NoError(t, err)
 		require.Equal(t, b, retrievedBlock)
 
-		retrievedBlock, err = bootstrappedBlockStore.RetrieveBlockByHash(protoutil.BlockHeaderHash(b.Header))
+		retrievedBlock, err = bootstrappedBlockStore.RetrieveBlockByHash(protoutil.BlockHeaderHash(b.GetHeader()))
 		require.NoError(t, err)
 		require.Equal(t, b, retrievedBlock)
 
-		itr, err := bootstrappedBlockStore.RetrieveBlocks(b.Header.Number)
+		itr, err := bootstrappedBlockStore.RetrieveBlocks(b.GetHeader().GetNumber())
 		require.NoError(t, err)
 		blk, err := itr.Next()
 		require.NoError(t, err)
 		require.Equal(t, b, blk)
 		itr.Close()
 
-		retrievedTxEnv, err := bootstrappedBlockStore.RetrieveTxByBlockNumTranNum(b.Header.Number, 0)
+		retrievedTxEnv, err := bootstrappedBlockStore.RetrieveTxByBlockNumTranNum(b.GetHeader().GetNumber(), 0)
 		require.NoError(t, err)
-		expectedTxEnv, err := protoutil.GetEnvelopeFromBlock(b.Data.Data[0])
+		expectedTxEnv, err := protoutil.GetEnvelopeFromBlock(b.GetData().GetData()[0])
 		require.NoError(t, err)
 		require.Equal(t, expectedTxEnv, retrievedTxEnv)
 	}
@@ -539,7 +545,7 @@ func verifyQueriesOnBlocksAddedAfterBootstrapping(t *testing.T,
 
 			retrievedTxEnv, err := bootstrappedBlockStore.RetrieveTxByID(txID)
 			require.NoError(t, err)
-			expectedTxEnv, err := protoutil.GetEnvelopeFromBlock(block.Data.Data[j])
+			expectedTxEnv, err := protoutil.GetEnvelopeFromBlock(block.GetData().GetData()[j])
 			require.NoError(t, err)
 			require.Equal(t, expectedTxEnv, retrievedTxEnv)
 
@@ -552,7 +558,7 @@ func verifyQueriesOnBlocksAddedAfterBootstrapping(t *testing.T,
 			retrievedValidationCode, blkNum, err := bootstrappedBlockStore.RetrieveTxValidationCodeByTxID(d.txIDs[j])
 			require.NoError(t, err)
 			require.Equal(t, validationCode, retrievedValidationCode)
-			require.Equal(t, block.Header.Number, blkNum)
+			require.Equal(t, block.GetHeader().GetNumber(), blkNum)
 		}
 	}
 }

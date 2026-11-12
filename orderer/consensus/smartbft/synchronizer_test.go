@@ -10,8 +10,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
-	"github.com/hyperledger-labs/SmartBFT/smartbftprotos"
+	"github.com/hyperledger/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/smartbftprotos"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
@@ -21,7 +21,6 @@ import (
 	"github.com/hyperledger/fabric/orderer/consensus/smartbft"
 	"github.com/hyperledger/fabric/orderer/consensus/smartbft/mocks"
 	"github.com/hyperledger/fabric/protoutil"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -83,7 +82,7 @@ func TestSynchronizerSync(t *testing.T) {
 		}
 
 		d := syn.Sync()
-		assert.Equal(t, *decision, d)
+		require.Equal(t, *decision, d)
 	})
 
 	t.Run("all nodes present", func(t *testing.T) {
@@ -146,7 +145,7 @@ func TestSynchronizerSync(t *testing.T) {
 		}
 
 		d := syn.Sync()
-		assert.Equal(t, *decision, d)
+		require.Equal(t, *decision, d)
 	})
 
 	t.Run("3/4 nodes present", func(t *testing.T) {
@@ -208,7 +207,7 @@ func TestSynchronizerSync(t *testing.T) {
 		}
 
 		d := syn.Sync()
-		assert.Equal(t, *decision, d)
+		require.Equal(t, *decision, d)
 	})
 
 	t.Run("2/4 nodes present", func(t *testing.T) {
@@ -269,7 +268,7 @@ func TestSynchronizerSync(t *testing.T) {
 		}
 
 		d := syn.Sync()
-		assert.Equal(t, *decision, d)
+		require.Equal(t, *decision, d)
 	})
 
 	t.Run("1/4 nodes present", func(t *testing.T) {
@@ -332,7 +331,7 @@ func TestSynchronizerSync(t *testing.T) {
 		}
 
 		d := syn.Sync()
-		assert.Equal(t, *decision, d)
+		require.Equal(t, *decision, d)
 	})
 }
 

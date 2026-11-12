@@ -32,14 +32,14 @@ func NewPolicyProvider(deserializer msp.IdentityDeserializer) policies.Provider 
 func (pr *provider) NewPolicy(data []byte) (policies.Policy, proto.Message, error) {
 	sigPolicy := &cb.SignaturePolicyEnvelope{}
 	if err := proto.Unmarshal(data, sigPolicy); err != nil {
-		return nil, nil, fmt.Errorf("Error unmarshalling to SignaturePolicy: %s", err)
+		return nil, nil, fmt.Errorf("Error unmarshalling to SignaturePolicy: %w", err)
 	}
 
-	if sigPolicy.Version != 0 {
-		return nil, nil, fmt.Errorf("This evaluator only understands messages of version 0, but version was %d", sigPolicy.Version)
+	if sigPolicy.GetVersion() != 0 {
+		return nil, nil, fmt.Errorf("This evaluator only understands messages of version 0, but version was %d", sigPolicy.GetVersion())
 	}
 
-	compiled, err := compile(sigPolicy.Rule, sigPolicy.Identities)
+	compiled, err := compile(sigPolicy.GetRule(), sigPolicy.GetIdentities())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -62,7 +62,7 @@ func (pp *EnvelopeBasedPolicyProvider) NewPolicy(sigPolicy *cb.SignaturePolicyEn
 		return nil, errors.New("invalid arguments")
 	}
 
-	compiled, err := compile(sigPolicy.Rule, sigPolicy.Identities)
+	compiled, err := compile(sigPolicy.GetRule(), sigPolicy.GetIdentities())
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (p *policy) EvaluateSignedData(signatureSet []*protoutil.SignedData) error 
 // they satisfy the policy
 func (p *policy) EvaluateIdentities(identities []msp.Identity) error {
 	if p == nil {
-		return fmt.Errorf("No such policy")
+		return errors.New("No such policy")
 	}
 
 	ok := p.evaluator(identities, make([]bool, len(identities)))

@@ -33,6 +33,14 @@ func trimID(objType, id string) (string, error) {
 	return id, nil
 }
 
+// valueOrZero returns the value pointed to by p, or the zero value of T if p is nil.
+func valueOrZero[T any](p *T) (zero T) {
+	if p != nil {
+		return *p
+	}
+	return zero
+}
+
 // parseAPIVersion checks v to be a well-formed ("<major>.<minor>")
 // API version. It returns an error if the value is empty or does not
 // have the correct format, but does not validate if the API version is
@@ -136,14 +144,19 @@ func newCancelReadCloser(ctx context.Context, rc io.ReadCloser) io.ReadCloser {
 		rc:    rc,
 		close: sync.OnceValue(rc.Close),
 	}
-	context.AfterFunc(ctx, func() { _ = crc.Close() })
+	crc.stop = context.AfterFunc(ctx, func() { _ = crc.close() })
 	return crc
 }
 
 type cancelReadCloser struct {
 	rc    io.ReadCloser
 	close func() error
+	stop  func() bool
 }
 
 func (c *cancelReadCloser) Read(p []byte) (int, error) { return c.rc.Read(p) }
-func (c *cancelReadCloser) Close() error               { return c.close() }
+
+func (c *cancelReadCloser) Close() error {
+	c.stop() // unregister AfterFunc
+	return c.close()
+}

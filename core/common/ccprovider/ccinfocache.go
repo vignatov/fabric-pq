@@ -48,12 +48,11 @@ func (c *ccInfoCacheImpl) GetChaincodeData(ccNameVersion string) (*ChaincodeData
 	c.RUnlock()
 
 	if !in {
-
 		// the chaincode data is not in the cache
 		// try to look it up from the file system
 		ccpack, err := c.cacheSupport.GetChaincode(ccNameVersion)
 		if err != nil || ccpack == nil {
-			return nil, fmt.Errorf("cannot retrieve package for chaincode %ss, error %s", ccNameVersion, err)
+			return nil, fmt.Errorf("cannot retrieve package for chaincode %s, error %w", ccNameVersion, err)
 		}
 
 		// we have a non-nil ChaincodeData, put it in the cache

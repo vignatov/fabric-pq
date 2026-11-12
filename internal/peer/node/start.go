@@ -99,10 +99,10 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"go.yaml.in/yaml/v4"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -125,7 +125,7 @@ var nodeStartCmd = &cobra.Command{
 	Long:  `Starts a node that interacts with the network.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 0 {
-			return fmt.Errorf("trailing args detected")
+			return errors.New("trailing args detected")
 		}
 		// Parsing of the command line is done so silence cmd usage
 		cmd.SilenceUsage = true
@@ -250,7 +250,7 @@ func serve(args []string) error {
 
 	peerHost, _, err := net.SplitHostPort(coreConfig.PeerAddress)
 	if err != nil {
-		return fmt.Errorf("peer address is not in the format of host:port: %v", err)
+		return fmt.Errorf("peer address is not in the format of host:port: %w", err)
 	}
 
 	listenAddr := coreConfig.ListenAddress
@@ -291,8 +291,10 @@ func serve(args []string) error {
 		cs.SetClientCertificate(clientCert)
 	}
 
+	ledgerConf := ledgerConfig()
 	transientStoreProvider, err := transientstore.NewStoreProvider(
 		filepath.Join(coreconfig.GetPath("peer.fileSystemPath"), "transientstore"),
+		ledgerConf.StateDatabase,
 	)
 	if err != nil {
 		return errors.WithMessage(err, "failed to open transient store")
@@ -453,7 +455,7 @@ func serve(args []string) error {
 			MetricsProvider:                 metricsProvider,
 			HealthCheckRegistry:             opsSystem,
 			StateListeners:                  []ledger.StateListener{lifecycleCache},
-			Config:                          ledgerConfig(),
+			Config:                          ledgerConf,
 			HashProvider:                    factory.GetDefault(),
 			EbMetadataProvider:              ebMetadataProvider,
 		},
@@ -484,7 +486,7 @@ func serve(args []string) error {
 
 	peerInstance.GossipService = gossipService
 
-	if err := lifecycleCache.InitializeLocalChaincodes(); err != nil {
+	if err = lifecycleCache.InitializeLocalChaincodes(); err != nil {
 		return errors.WithMessage(err, "could not initialize local chaincodes")
 	}
 
@@ -746,7 +748,7 @@ func serve(args []string) error {
 	}
 	endorsementPluginsByName := reg.Lookup(library.Endorsement).(map[string]endorsement2.PluginFactory)
 	validationPluginsByName := reg.Lookup(library.Validation).(map[string]validation.PluginFactory)
-	signingIdentityFetcher := (endorsement3.SigningIdentityFetcher)(endorserSupport)
+	signingIdentityFetcher := endorsement3.SigningIdentityFetcher(endorserSupport)
 	channelStateRetriever := endorser.ChannelStateRetriever(endorserSupport)
 	pluginMapper := endorser.MapBasedPluginMapper(endorsementPluginsByName)
 	pluginEndorser := endorser.NewPluginEndorser(&endorser.PluginSupport{
@@ -878,7 +880,7 @@ func serve(args []string) error {
 	rootFSPath := filepath.Join(coreconfig.GetPath("peer.fileSystemPath"), "ledgersData")
 	preResetHeights, err := kvledger.LoadPreResetHeight(rootFSPath, ledgerIDs)
 	if err != nil {
-		return fmt.Errorf("error loading prereset height: %s", err)
+		return fmt.Errorf("error loading prereset height: %w", err)
 	}
 
 	for cid, height := range preResetHeights {
@@ -926,7 +928,7 @@ func serve(args []string) error {
 	go func() {
 		var grpcErr error
 		if grpcErr = peerServer.Start(); grpcErr != nil {
-			grpcErr = fmt.Errorf("grpc server exited with error: %s", grpcErr)
+			grpcErr = fmt.Errorf("grpc server exited with error: %w", grpcErr)
 		}
 		serve <- grpcErr
 	}()
@@ -1271,16 +1273,14 @@ func initGossipService(
 
 func newOperationsSystem(coreConfig *peer.Config) *operations.System {
 	return operations.NewSystem(operations.Options{
-		Options: fabhttp.Options{
-			Logger:        flogging.MustGetLogger("peer.operations"),
-			ListenAddress: coreConfig.OperationsListenAddress,
-			TLS: fabhttp.TLS{
-				Enabled:            coreConfig.OperationsTLSEnabled,
-				CertFile:           coreConfig.OperationsTLSCertFile,
-				KeyFile:            coreConfig.OperationsTLSKeyFile,
-				ClientCertRequired: coreConfig.OperationsTLSClientAuthRequired,
-				ClientCACertFiles:  coreConfig.OperationsTLSClientRootCAs,
-			},
+		Logger:        flogging.MustGetLogger("peer.operations"),
+		ListenAddress: coreConfig.OperationsListenAddress,
+		TLS: fabhttp.TLS{
+			Enabled:            coreConfig.OperationsTLSEnabled,
+			CertFile:           coreConfig.OperationsTLSCertFile,
+			KeyFile:            coreConfig.OperationsTLSKeyFile,
+			ClientCertRequired: coreConfig.OperationsTLSClientAuthRequired,
+			ClientCACertFiles:  coreConfig.OperationsTLSClientRootCAs,
 		},
 		Metrics: operations.MetricsOptions{
 			Provider: coreConfig.MetricsProvider,
@@ -1320,31 +1320,29 @@ func getDockerHostConfig() *dcontainer.HostConfig {
 	}
 
 	return &dcontainer.HostConfig{
-		LogConfig:      logConfig,
-		NetworkMode:    dcontainer.NetworkMode(networkMode),
-		CapAdd:         viper.GetStringSlice(dockerKey("CapAdd")),
-		CapDrop:        viper.GetStringSlice(dockerKey("CapDrop")),
-		DNS:            dns,
-		DNSSearch:      viper.GetStringSlice(dockerKey("DnsSearch")),
-		ExtraHosts:     viper.GetStringSlice(dockerKey("ExtraHosts")),
-		IpcMode:        dcontainer.IpcMode(viper.GetString(dockerKey("IpcMode"))),
-		PidMode:        dcontainer.PidMode(viper.GetString(dockerKey("PidMode"))),
-		ReadonlyRootfs: viper.GetBool(dockerKey("ReadonlyRootfs")),
-		SecurityOpt:    viper.GetStringSlice(dockerKey("SecurityOpt")),
-		UTSMode:        dcontainer.UTSMode(viper.GetString(dockerKey("UTSMode"))),
-		Resources: dcontainer.Resources{
-			CPUShares:        getInt64("CpuShares"),
-			Memory:           getInt64("Memory"),
-			CgroupParent:     viper.GetString(dockerKey("CgroupParent")),
-			BlkioWeight:      viper.GetUint16("BlkioWeight"),
-			CPUPeriod:        getInt64("CpuPeriod"),
-			CPUQuota:         getInt64("CpuQuota"),
-			CpusetCpus:       viper.GetString(dockerKey("CpusetCPUs")),
-			CpusetMems:       viper.GetString(dockerKey("CpusetMEMs")),
-			MemorySwap:       getInt64("MemorySwap"),
-			MemorySwappiness: &memorySwappiness,
-			OomKillDisable:   &oomKillDisable,
-		},
+		LogConfig:        logConfig,
+		NetworkMode:      dcontainer.NetworkMode(networkMode),
+		CapAdd:           viper.GetStringSlice(dockerKey("CapAdd")),
+		CapDrop:          viper.GetStringSlice(dockerKey("CapDrop")),
+		DNS:              dns,
+		DNSSearch:        viper.GetStringSlice(dockerKey("DnsSearch")),
+		ExtraHosts:       viper.GetStringSlice(dockerKey("ExtraHosts")),
+		IpcMode:          dcontainer.IpcMode(viper.GetString(dockerKey("IpcMode"))),
+		PidMode:          dcontainer.PidMode(viper.GetString(dockerKey("PidMode"))),
+		ReadonlyRootfs:   viper.GetBool(dockerKey("ReadonlyRootfs")),
+		SecurityOpt:      viper.GetStringSlice(dockerKey("SecurityOpt")),
+		UTSMode:          dcontainer.UTSMode(viper.GetString(dockerKey("UTSMode"))),
+		CPUShares:        getInt64("CpuShares"),
+		Memory:           getInt64("Memory"),
+		CgroupParent:     viper.GetString(dockerKey("CgroupParent")),
+		BlkioWeight:      viper.GetUint16("BlkioWeight"),
+		CPUPeriod:        getInt64("CpuPeriod"),
+		CPUQuota:         getInt64("CpuQuota"),
+		CpusetCpus:       viper.GetString(dockerKey("CpusetCPUs")),
+		CpusetMems:       viper.GetString(dockerKey("CpusetMEMs")),
+		MemorySwap:       getInt64("MemorySwap"),
+		MemorySwappiness: &memorySwappiness,
+		OomKillDisable:   &oomKillDisable,
 	}
 }
 

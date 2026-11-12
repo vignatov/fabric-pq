@@ -18,9 +18,9 @@ type Mgr struct {
 	MockCCInfoProvider *mock.DeployedChaincodeInfoProvider
 }
 
-func NewMgr(dbPath string) (*Mgr, error) {
+func NewMgr(dbPath, dbType string) (*Mgr, error) {
 	mockCCInfoProvider := &mock.DeployedChaincodeInfoProvider{}
-	configHistory, err := confighistory.NewMgr(dbPath, mockCCInfoProvider)
+	configHistory, err := confighistory.NewMgr(dbPath, mockCCInfoProvider, dbType)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,8 @@ func BuildCollConfigPkg(staticCollectionConfigs []*peer.StaticCollectionConfig) 
 		Config: []*peer.CollectionConfig{},
 	}
 	for _, c := range staticCollectionConfigs {
-		pkg.Config = append(pkg.Config,
+		pkg.Config = append(
+			pkg.Config,
 			&peer.CollectionConfig{
 				Payload: &peer.CollectionConfig_StaticCollectionConfig{
 					StaticCollectionConfig: c,

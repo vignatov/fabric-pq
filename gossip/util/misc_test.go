@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func TestGetRandomInt(t *testing.T) {
 }
 
 func TestNonNegativeValues(t *testing.T) {
-	require.True(t, RandomInt(1000000) >= 0)
+	require.GreaterOrEqual(t, RandomInt(1000000), 0)
 }
 
 func TestGetRandomIntBadInput(t *testing.T) {
@@ -56,7 +57,7 @@ type reader struct {
 }
 
 func (r *reader) Read(p []byte) (int, error) {
-	args := r.Mock.Called(p)
+	args := r.Called(p)
 	n := args.Get(0).(int)
 	err := args.Get(1)
 	if err == nil {
@@ -75,6 +76,34 @@ func TestGetRandomIntNoEntropy(t *testing.T) {
 	rand.Reader = r
 	// Make sure randomness still works even when we have no entropy
 	testHappyPath(t)
+}
+
+func TestRandomUInt64Concurrent(t *testing.T) {
+	const goroutines = 8
+	const perGoroutine = 10000
+
+	results := make([][]uint64, goroutines)
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Go(func() {
+			for range perGoroutine {
+				results[i] = append(results[i], RandomUInt64())
+			}
+		})
+	}
+	wg.Wait()
+
+	seen := make(map[uint64]struct{}, goroutines*perGoroutine)
+	duplicates := 0
+	for _, res := range results {
+		for _, n := range res {
+			if _, exists := seen[n]; exists {
+				duplicates++
+			}
+			seen[n] = struct{}{}
+		}
+	}
+	require.Zero(t, duplicates, "RandomUInt64 returned the same value more than once")
 }
 
 func TestRandomIndices(t *testing.T) {
@@ -114,13 +143,13 @@ func TestGetLogger(t *testing.T) {
 
 func TestSet(t *testing.T) {
 	s := NewSet()
-	require.Len(t, s.ToArray(), 0)
-	require.Equal(t, s.Size(), 0)
+	require.Empty(t, s.ToArray())
+	require.Equal(t, 0, s.Size())
 	require.False(t, s.Exists(42))
 	s.Add(42)
 	require.True(t, s.Exists(42))
 	require.Len(t, s.ToArray(), 1)
-	require.Equal(t, s.Size(), 1)
+	require.Equal(t, 1, s.Size())
 	s.Remove(42)
 	require.False(t, s.Exists(42))
 	s.Add(42)

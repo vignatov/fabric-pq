@@ -80,28 +80,33 @@ func (gs *Server) Endorse(ctx context.Context, request *gp.EndorseRequest) (*gp.
 			break
 		}
 		// send to all the endorsers
-		waitCh := make(chan bool, len(endorsers))
+		waitCh := make(chan string, len(endorsers))
 		for _, e := range endorsers {
 			go func(e *endorser) {
+				var g string
 				for e != nil {
 					if gs.processProposal(ctx, plan, e, signedProposal, logger) {
 						break
 					}
-					e = plan.nextPeerInGroup(e)
+					e, g = plan.nextPeerInGroup(e)
 				}
-				waitCh <- true
+				waitCh <- g
 			}(e)
 		}
+
+		groups := make([]string, 0, len(endorsers))
 		for range endorsers {
 			select {
-			case <-waitCh:
+			case group := <-waitCh:
 				// Endorser completedLayout normally
+				groups = append(groups, group)
 			case <-ctx.Done():
 				logger.Warnw("Endorse call timed out while collecting endorsements", "numEndorsers", len(endorsers))
 				return nil, newRpcError(codes.DeadlineExceeded, "endorsement timeout expired while collecting endorsements")
 			}
 		}
 
+		plan.abandonGroupRemoveLayouts(groups...)
 	}
 
 	if plan.completedLayout == nil {
@@ -128,7 +133,7 @@ type ppResponse struct {
 // Returns boolean true if the endorsement was successful.
 func (gs *Server) processProposal(ctx context.Context, plan *plan, endorser *endorser, signedProposal *peer.SignedProposal, logger *flogging.FabricLogger) bool {
 	var response *peer.ProposalResponse
-	done := make(chan *ppResponse)
+	done := make(chan *ppResponse, 1) // buffered so the goroutine can exit if the caller has already returned on timeout
 	go func() {
 		defer close(done)
 		logger.Debugw("Sending to endorser:", "MSPID", endorser.mspid, "endpoint", endorser.address)
@@ -150,7 +155,7 @@ func (gs *Server) processProposal(ctx context.Context, plan *plan, endorser *end
 			return false
 		}
 		response = resp.response
-		logger.Debugw("Endorse call to endorser returned success", "MSPID", endorser.mspid, "endpoint", endorser.address, "status", response.Response.Status, "message", response.Response.Message)
+		logger.Debugw("Endorse call to endorser returned success", "MSPID", endorser.mspid, "endpoint", endorser.address, "status", response.GetResponse().GetStatus(), "message", response.GetResponse().GetMessage())
 
 		responseMessage := response.GetResponse()
 		if responseMessage != nil {
@@ -211,8 +216,10 @@ func (gs *Server) planFromFirstEndorser(ctx context.Context, channel string, cha
 				if remove {
 					gs.registry.removeEndorser(firstEndorser)
 				}
-				firstEndorser = plan.nextPeerInGroup(firstEndorser)
+				var group string
+				firstEndorser, group = plan.nextPeerInGroup(firstEndorser)
 				firstResponse = nil
+				plan.abandonGroupRemoveLayouts(group)
 			}
 		}()
 		select {
@@ -230,7 +237,7 @@ func (gs *Server) planFromFirstEndorser(ctx context.Context, channel string, cha
 
 	// 3. Extract ChaincodeInterest and SBE policies
 	// The chaincode interest could be nil for legacy peers and for chaincode functions that don't produce a read-write set
-	interest := firstResponse.Interest
+	interest := firstResponse.GetInterest()
 	if len(interest.GetChaincodes()) == 0 {
 		interest = defaultInterest
 	}
@@ -243,9 +250,9 @@ func (gs *Server) planFromFirstEndorser(ctx context.Context, channel string, cha
 		for _, call := range interest.GetChaincodes() {
 			ccc := proto.Clone(call).(*peer.ChaincodeCall)
 			originalInterest.Chaincodes = append(originalInterest.Chaincodes, ccc)
-			if call.NoPrivateReads {
+			if call.GetNoPrivateReads() {
 				call.NoPrivateReads = false
-				protectedCollections = append(protectedCollections, call.CollectionNames...)
+				protectedCollections = append(protectedCollections, call.GetCollectionNames()...)
 			}
 		}
 	}

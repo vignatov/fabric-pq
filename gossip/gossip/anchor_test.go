@@ -9,6 +9,7 @@ package gossip
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -33,7 +34,7 @@ type peerMock struct {
 	gRGCserv             *grpc.Server
 	finishedSignal       sync.WaitGroup
 	expectedMsgs2Receive uint32
-	msgReceivedCount     uint32
+	msgReceivedCount     atomic.Uint32
 	msgAssertions        []msgInspection
 	t                    *testing.T
 }
@@ -42,7 +43,7 @@ func (p *peerMock) GossipStream(stream proto.Gossip_GossipStreamServer) error {
 	sessionCounter := 0
 	for {
 		envelope, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -61,8 +62,8 @@ func (p *peerMock) GossipStream(stream proto.Gossip_GossipStreamServer) error {
 		}
 		p.t.Log("sessionCounter:", sessionCounter, string(p.pkiID), "got msg:", gMsg)
 		sessionCounter++
-		atomic.AddUint32(&p.msgReceivedCount, uint32(1))
-		if atomic.LoadUint32(&p.msgReceivedCount) == p.expectedMsgs2Receive {
+		p.msgReceivedCount.Add(uint32(1))
+		if p.msgReceivedCount.Load() == p.expectedMsgs2Receive {
 			p.finishedSignal.Done()
 		}
 	}
@@ -73,7 +74,8 @@ func (p *peerMock) Ping(context.Context, *proto.Empty) (*proto.Empty, error) {
 }
 
 func newPeerMockWithGRPC(port int, gRPCServer *comm.GRPCServer, certs *common.TLSCertificates,
-	expectedMsgs2Receive int, t *testing.T, msgAssertions ...msgInspection) *peerMock {
+	expectedMsgs2Receive int, t *testing.T, msgAssertions ...msgInspection,
+) *peerMock {
 	p := &peerMock{
 		gRGCserv:             gRPCServer.Server(),
 		msgAssertions:        msgAssertions,
@@ -207,9 +209,9 @@ func TestAnchorPeer(t *testing.T) {
 		if m.GetMemReq() == nil {
 			return
 		}
-		require.True(t, index > 0)
+		require.Positive(t, index)
 		req := m.GetMemReq()
-		am, err := protoext.EnvelopeToGossipMessage(req.SelfInformation)
+		am, err := protoext.EnvelopeToGossipMessage(req.GetSelfInformation())
 		require.NoError(t, err)
 		require.NotEmpty(t, protoext.InternalEndpoint(am.GetSecretEnvelope()))
 		m.respond(memResp(m.Nonce, fmt.Sprintf("127.0.0.1:%d", port3)))
@@ -219,9 +221,9 @@ func TestAnchorPeer(t *testing.T) {
 		if m.GetMemReq() == nil {
 			return
 		}
-		require.True(t, index > 0)
+		require.Positive(t, index)
 		req := m.GetMemReq()
-		am, err := protoext.EnvelopeToGossipMessage(req.SelfInformation)
+		am, err := protoext.EnvelopeToGossipMessage(req.GetSelfInformation())
 		require.NoError(t, err)
 		require.Nil(t, am.GetSecretEnvelope())
 		m.respond(memResp(m.Nonce, fmt.Sprintf("127.0.0.1:%d", port4)))

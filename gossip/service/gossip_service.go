@@ -153,7 +153,8 @@ func (df *deliveryFactoryImpl) Service(
 			OrdererEndpointOverrides: ordererEndpointOverrides,
 			ChannelConfig:            channelConfig,
 			CryptoProvider:           cryptoProvider,
-		})
+		},
+	)
 }
 
 type privateHandler struct {
@@ -397,7 +398,8 @@ func (g *GossipService) InitializeChannel(
 		coordinator,
 		g.metrics.StateMetrics,
 		blockingMode,
-		stateConfig)
+		stateConfig,
+	)
 	if g.deliveryService[channelID] == nil {
 		g.deliveryService[channelID] = g.deliveryFactory.Service(g, ordererEndpointOverrides, g.serviceConfig.OrgLeader, channelConfig, cryptoProvider)
 	}
@@ -461,11 +463,11 @@ func (g *GossipService) updateAnchors(configUpdate ConfigUpdate) {
 		jcm.members2AnchorPeers[appOrg.MSPID()] = []api.AnchorPeer{}
 		for _, ap := range appOrg.AnchorPeers() {
 			anchorPeer := api.AnchorPeer{
-				Host: ap.Host,
-				Port: int(ap.Port),
+				Host: ap.GetHost(),
+				Port: int(ap.GetPort()),
 			}
 			jcm.members2AnchorPeers[appOrg.MSPID()] = append(jcm.members2AnchorPeers[appOrg.MSPID()], anchorPeer)
-			anchorPeerEndpoints[fmt.Sprintf("%s:%d", ap.Host, ap.Port)] = struct{}{}
+			anchorPeerEndpoints[fmt.Sprintf("%s:%d", ap.GetHost(), ap.GetPort())] = struct{}{}
 		}
 	}
 	g.anchorPeerTracker.update(configUpdate.ChannelID, anchorPeerEndpoints)
@@ -504,7 +506,8 @@ func (g *GossipService) Stop() {
 }
 
 func (g *GossipService) newLeaderElectionComponent(channelID string, callback func(bool),
-	electionMetrics *gossipmetrics.ElectionMetrics) election.LeaderElectionService {
+	electionMetrics *gossipmetrics.ElectionMetrics,
+) election.LeaderElectionService {
 	PKIid := g.mcs.GetPKIidOfCert(g.peerIdentity)
 	adapter := election.NewAdapter(g, PKIid, common.ChannelID(channelID), electionMetrics)
 	config := election.ElectionConfig{

@@ -120,8 +120,10 @@ func TestMain(m *testing.M) {
 func TestGreenPath(t *testing.T) {
 	t.Parallel()
 	client, admin, service := createClientAndService(t, testdir)
-	defer service.Stop()
-	defer client.conn.Close()
+	t.Cleanup(func() {
+		client.conn.Close()
+		service.Stop()
+	})
 
 	service.lsccMetadataManager.query.On("GetState", "lscc", "cc1").Return(cc1Bytes, nil)
 	service.lsccMetadataManager.query.On("GetState", "lscc", "cc2").Return(cc2Bytes, nil)
@@ -146,6 +148,7 @@ func TestGreenPath(t *testing.T) {
 	req, err := req.AddPeersQuery().AddPeersQuery(col1).AddPeersQuery(nonExistentCollection).AddConfigQuery().AddEndorsersQuery(cc2cc, ccWithCollection)
 
 	t.Run("Local peer query", func(t *testing.T) {
+		t.Parallel()
 		require.NoError(t, err)
 		res, err := admin.Send(context.Background(), req, admin.AuthInfo)
 		require.NoError(t, err)
@@ -155,6 +158,7 @@ func TestGreenPath(t *testing.T) {
 	})
 
 	t.Run("Channel peer queries", func(t *testing.T) {
+		t.Parallel()
 		require.NoError(t, err)
 		res, err := client.Send(context.Background(), req, client.AuthInfo)
 		require.NoError(t, err)
@@ -176,10 +180,11 @@ func TestGreenPath(t *testing.T) {
 	})
 
 	t.Run("Endorser chaincode to chaincode", func(t *testing.T) {
+		t.Parallel()
 		require.NoError(t, err)
 		res, err := client.Send(context.Background(), req, client.AuthInfo)
 		require.NoError(t, err)
-		endorsers, err := res.ForChannel("mychannel").Endorsers(cc2cc.Chaincodes, disc.NoFilter)
+		endorsers, err := res.ForChannel("mychannel").Endorsers(cc2cc.GetChaincodes(), disc.NoFilter)
 		require.NoError(t, err)
 		endorsersByMSP := map[string][]string{}
 
@@ -187,43 +192,45 @@ func TestGreenPath(t *testing.T) {
 			endorsersByMSP[endorser.MSPID] = append(endorsersByMSP[endorser.MSPID], string(endorser.Identity))
 		}
 		// For cc2cc we expect 2 peers from Org1MSP and 1 from Org2MSP
-		require.Equal(t, 2, len(endorsersByMSP["Org1MSP"]))
-		require.Equal(t, 1, len(endorsersByMSP["Org2MSP"]))
+		require.Len(t, endorsersByMSP["Org1MSP"], 2)
+		require.Len(t, endorsersByMSP["Org2MSP"], 1)
 	})
 
 	t.Run("Endorser chaincode with collection", func(t *testing.T) {
+		t.Parallel()
 		require.NoError(t, err)
 		res, err := client.Send(context.Background(), req, client.AuthInfo)
 		require.NoError(t, err)
-		endorsers, err := res.ForChannel("mychannel").Endorsers(ccWithCollection.Chaincodes, disc.NoFilter)
+		endorsers, err := res.ForChannel("mychannel").Endorsers(ccWithCollection.GetChaincodes(), disc.NoFilter)
 		require.NoError(t, err)
 
 		endorsersByMSP := map[string][]string{}
 		for _, endorser := range endorsers {
 			endorsersByMSP[endorser.MSPID] = append(endorsersByMSP[endorser.MSPID], string(endorser.Identity))
 		}
-		require.Equal(t, 1, len(endorsersByMSP["Org1MSP"]))
-		require.Equal(t, 1, len(endorsersByMSP["Org2MSP"]))
+		require.Len(t, endorsersByMSP["Org1MSP"], 1)
+		require.Len(t, endorsersByMSP["Org2MSP"], 1)
 	})
 
 	t.Run("Config query", func(t *testing.T) {
+		t.Parallel()
 		require.NoError(t, err)
 		res, err := client.Send(context.Background(), req, client.AuthInfo)
 		require.NoError(t, err)
 		conf, err := res.ForChannel("mychannel").Config()
 		require.NoError(t, err)
 		// Ensure MSP Configs are exactly as they appear in the config block
-		for mspID, mspConfig := range conf.Msps {
+		for mspID, mspConfig := range conf.GetMsps() {
 			expectedConfig := service.sup.mspConfigs[mspID]
 			require.True(t, proto.Equal(expectedConfig, mspConfig))
 		}
 		// Ensure orderer endpoints are as they appear in the config block
-		for mspID, endpoints := range conf.Orderers {
+		for mspID, endpoints := range conf.GetOrderers() {
 			require.Equal(t, "OrdererMSP", mspID)
-			endpoints := endpoints.Endpoint
+			endpoints := endpoints.GetEndpoint()
 			require.Len(t, endpoints, 1)
-			require.Equal(t, "orderer.example.com", endpoints[0].Host)
-			require.Equal(t, uint32(7050), endpoints[0].Port)
+			require.Equal(t, "orderer.example.com", endpoints[0].GetHost())
+			require.Equal(t, uint32(7050), endpoints[0].GetPort())
 		}
 	})
 }
@@ -250,7 +257,7 @@ func TestEndorsementComputationFailure(t *testing.T) {
 	res, err := client.Send(context.Background(), req, client.AuthInfo)
 	require.NoError(t, err)
 
-	endorsers, err := res.ForChannel("mychannel").Endorsers(ccWithCollection.Chaincodes, disc.NoFilter)
+	endorsers, err := res.ForChannel("mychannel").Endorsers(ccWithCollection.GetChaincodes(), disc.NoFilter)
 	require.Empty(t, endorsers)
 	require.Contains(t, err.Error(), "failed constructing descriptor")
 }
@@ -276,7 +283,7 @@ func TestLedgerFailure(t *testing.T) {
 	res, err := client.Send(context.Background(), req, client.AuthInfo)
 	require.NoError(t, err)
 
-	endorsers, err := res.ForChannel("mychannel").Endorsers(ccWithCollection.Chaincodes, disc.NoFilter)
+	endorsers, err := res.ForChannel("mychannel").Endorsers(ccWithCollection.GetChaincodes(), disc.NoFilter)
 	require.Empty(t, endorsers)
 	require.Contains(t, err.Error(), "failed constructing descriptor")
 }
@@ -291,7 +298,7 @@ func TestRevocation(t *testing.T) {
 	res, err := client.Send(context.Background(), req, client.AuthInfo)
 	require.NoError(t, err)
 	// Record number of times we deserialized the identity
-	firstCount := atomic.LoadUint32(&service.sup.deserializeIdentityCount)
+	firstCount := service.sup.deserializeIdentityCount.Load()
 
 	// Do the same query again
 	peers, err := res.ForChannel("mychannel").Peers()
@@ -302,24 +309,24 @@ func TestRevocation(t *testing.T) {
 	require.NoError(t, err)
 	// The amount of times deserializeIdentity was called should not have changed
 	// because requests should have hit the cache
-	secondCount := atomic.LoadUint32(&service.sup.deserializeIdentityCount)
+	secondCount := service.sup.deserializeIdentityCount.Load()
 	require.Equal(t, firstCount, secondCount)
 
 	// Now, increment the config sequence
-	oldSeq := service.sup.sequenceWrapper.Sequence()
+	oldSeq := service.sup.Sequence()
 	v := &mocks.ConfigtxValidator{}
 	v.SequenceReturns(oldSeq + 1)
-	service.sup.sequenceWrapper.instance.Store(v)
+	service.sup.instance.Store(v)
 
 	// Revoke all identities inside the MSP manager
-	atomic.AddUint32(&service.sup.mspWrapper.blocks, uint32(1))
+	service.sup.blocks.Add(uint32(1))
 
 	// Send the query for the third time
 	res, err = client.Send(context.Background(), req, client.AuthInfo)
 	require.NoError(t, err)
 	// The cache should have been purged, thus deserializeIdentity should have been
 	// called an additional time
-	thirdCount := atomic.LoadUint32(&service.sup.deserializeIdentityCount)
+	thirdCount := service.sup.deserializeIdentityCount.Load()
 	require.NotEqual(t, thirdCount, secondCount)
 
 	// We should be denied access
@@ -339,15 +346,15 @@ func (c *client) newConnection() (*grpc.ClientConn, error) {
 }
 
 type mspWrapper struct {
-	deserializeIdentityCount uint32
+	deserializeIdentityCount atomic.Uint32
 	msp.MSPManager
 	mspConfigs map[string]*msprotos.FabricMSPConfig
-	blocks     uint32
+	blocks     atomic.Uint32
 }
 
 func (w *mspWrapper) DeserializeIdentity(serializedIdentity []byte) (msp.Identity, error) {
-	atomic.AddUint32(&w.deserializeIdentityCount, 1)
-	if atomic.LoadUint32(&w.blocks) == uint32(1) {
+	w.deserializeIdentityCount.Add(1)
+	if w.blocks.Load() == uint32(1) {
 		return nil, errors.New("failed deserializing identity")
 	}
 	return w.MSPManager.DeserializeIdentity(serializedIdentity)
@@ -550,7 +557,7 @@ func createMSP(t *testing.T, dir, mspID string) (msp.MSP, *msprotos.FabricMSPCon
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	require.NoError(t, err)
 	channelMSP, err := msp.New(
-		&msp.BCCSPNewOpts{NewBaseOpts: msp.NewBaseOpts{Version: msp.MSPv1_4_3}},
+		&msp.BCCSPNewOpts{Version: msp.MSPv1_4_3},
 		cryptoProvider,
 	)
 	require.NoError(t, err)
@@ -559,7 +566,7 @@ func createMSP(t *testing.T, dir, mspID string) (msp.MSP, *msprotos.FabricMSPCon
 	require.NoError(t, err)
 
 	fabConf := &msprotos.FabricMSPConfig{}
-	proto.Unmarshal(mspConf.Config, fabConf)
+	proto.Unmarshal(mspConf.GetConfig(), fabConf)
 
 	channelMSP.Setup(mspConf)
 	return channelMSP, fabConf
@@ -638,8 +645,8 @@ func generateChannelArtifacts() (string, error) {
 	cryptoConfigDir := filepath.Join(dir, "crypto-config")
 	args := []string{
 		"generate",
-		fmt.Sprintf("--output=%s", cryptoConfigDir),
-		fmt.Sprintf("--config=%s", filepath.Join("testdata", "crypto-config.yaml")),
+		"--output=" + cryptoConfigDir,
+		"--config=" + filepath.Join("testdata", "crypto-config.yaml"),
 	}
 	b, err := exec.Command(cryptogen, args...).CombinedOutput()
 	if err != nil {
@@ -647,7 +654,7 @@ func generateChannelArtifacts() (string, error) {
 	}
 
 	idemixConfigDir := filepath.Join(dir, "crypto-config", "idemix")
-	b, err = exec.Command(idemixgen, "ca-keygen", fmt.Sprintf("--output=%s", idemixConfigDir)).CombinedOutput()
+	b, err = exec.Command(idemixgen, "ca-keygen", "--output="+idemixConfigDir).CombinedOutput()
 	if err != nil {
 		return "", errors.Wrap(err, string(b))
 	}
@@ -786,7 +793,7 @@ func peersToTestPeers(peers []*disc.Peer) testPeerSet {
 			stateInfoMember = gdisc.NetworkMember{
 				PKIid:      pkiID,
 				Envelope:   p.StateInfoMessage.Envelope,
-				Properties: stateInfo.GetStateInfo().Properties,
+				Properties: stateInfo.GetStateInfo().GetProperties(),
 			}
 		}
 
@@ -808,7 +815,7 @@ func peersToTestPeers(peers []*disc.Peer) testPeerSet {
 func newPeer(dir, mspID string, org, id int) *testPeer {
 	peerStr := fmt.Sprintf("peer%d.org%d.example.com", id, org)
 	certFile := filepath.Join(dir, fmt.Sprintf("org%d.example.com", org),
-		"peers", peerStr, "msp", "signcerts", fmt.Sprintf("%s-cert.pem", peerStr))
+		"peers", peerStr, "msp", "signcerts", peerStr+"-cert.pem")
 	certBytes, err := os.ReadFile(certFile)
 	if err != nil {
 		panic(fmt.Sprintf("failed reading file %s: %v", certFile, err))
@@ -854,7 +861,7 @@ func stateInfoMsg(pkiID gcommon.PKIidType) gdisc.NetworkMember {
 	}
 	sm, _ := protoext.NoopSign(gm)
 	return gdisc.NetworkMember{
-		Properties: si.Properties,
+		Properties: si.GetProperties(),
 		PKIid:      pkiID,
 		Envelope:   sm.Envelope,
 	}

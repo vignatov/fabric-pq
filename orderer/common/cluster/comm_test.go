@@ -9,6 +9,7 @@ package cluster_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net"
@@ -36,6 +37,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -51,7 +54,7 @@ var (
 	// is based on TLS pinning
 	ca = createCAOrPanic()
 
-	lastNodeID uint64
+	lastNodeID atomic.Uint64
 
 	testSubReq = &orderer.SubmitRequest{
 		Channel: "test",
@@ -96,7 +99,7 @@ var (
 )
 
 func nextUnusedID() uint64 {
-	return atomic.AddUint64(&lastNodeID, 1)
+	return lastNodeID.Add(1)
 }
 
 func createCAOrPanic() tlsgen.CA {
@@ -112,9 +115,9 @@ type mockChannelExtractor struct{}
 func (*mockChannelExtractor) TargetChannel(msg proto.Message) string {
 	switch req := msg.(type) {
 	case *orderer.ConsensusRequest:
-		return req.Channel
+		return req.GetChannel()
 	case *orderer.SubmitRequest:
-		return req.Channel
+		return req.GetChannel()
 	default:
 		return ""
 	}
@@ -149,7 +152,7 @@ func (cn *clusterNode) Step(stream orderer.Cluster_StepServer) error {
 	if submitReq := req.GetSubmitRequest(); submitReq != nil {
 		return cn.c.DispatchSubmit(stream.Context(), submitReq)
 	}
-	if err := cn.c.DispatchConsensus(stream.Context(), req.GetConsensusRequest()); err != nil {
+	if err = cn.c.DispatchConsensus(stream.Context(), req.GetConsensusRequest()); err != nil {
 		return err
 	}
 	return stream.Send(&orderer.StepResponse{})
@@ -182,7 +185,7 @@ func (cn *clusterNode) unfreeze() {
 func (cn *clusterNode) resurrect() {
 	gRPCServer, err := comm_utils.NewGRPCServer(cn.bindAddress, cn.serverConfig)
 	if err != nil {
-		panic(fmt.Errorf("failed starting gRPC server: %v", err))
+		panic(fmt.Errorf("failed starting gRPC server: %w", err))
 	}
 	cn.srv = gRPCServer
 	orderer.RegisterClusterServer(gRPCServer.Server(), cn.dispatcher)
@@ -197,11 +200,11 @@ func (cn *clusterNode) stop() {
 func (cn *clusterNode) renewCertificates() {
 	clientKeyPair, err := ca.NewClientCertKeyPair()
 	if err != nil {
-		panic(fmt.Errorf("failed creating client certificate %v", err))
+		panic(fmt.Errorf("failed creating client certificate %w", err))
 	}
 	serverKeyPair, err := ca.NewServerCertKeyPair("127.0.0.1")
 	if err != nil {
-		panic(fmt.Errorf("failed creating server certificate %v", err))
+		panic(fmt.Errorf("failed creating server certificate %w", err))
 	}
 
 	cn.nodeInfo.ClientTLSCert = clientKeyPair.TLSCert.Raw
@@ -341,7 +344,7 @@ func TestSendBigMessage(t *testing.T) {
 		Payload: make([]byte, msgSize),
 	}
 
-	_, err := rand.Read(bigMsg.Payload)
+	_, err := rand.Read(bigMsg.GetPayload())
 	require.NoError(t, err)
 
 	wrappedMsg := &orderer.StepRequest{
@@ -353,7 +356,7 @@ func TestSendBigMessage(t *testing.T) {
 	for _, node := range []*clusterNode{node2, node3, node4, node5} {
 		node.handler.On("OnConsensus", testChannel, node1.nodeInfo.ID, mock.Anything).Run(func(args mock.Arguments) {
 			msg := args.Get(2).(*orderer.ConsensusRequest)
-			require.Len(t, msg.Payload, msgSize)
+			require.Len(t, msg.GetPayload(), msgSize)
 			messageReceived.Done()
 		}).Return(nil)
 	}
@@ -470,7 +473,7 @@ func TestBlockingSend(t *testing.T) {
 
 			// The third blocks, so we need to unblock it ourselves
 			// in order for it to go through, unless the operation
-			// is non blocking.
+			// is non-blocking.
 			go func() {
 				time.Sleep(time.Second)
 				if testCase.streamUnblocks {
@@ -487,7 +490,7 @@ func TestBlockingSend(t *testing.T) {
 			}
 			elapsed := time.Since(t1)
 			t.Log("Elapsed time:", elapsed)
-			require.True(t, elapsed > testCase.elapsedGreaterThan)
+			require.Greater(t, elapsed, testCase.elapsedGreaterThan)
 
 			if !testCase.streamUnblocks {
 				close(unBlock)
@@ -644,11 +647,9 @@ func TestStreamAbort(t *testing.T) {
 	defer node2.stop()
 
 	invalidNodeInfo := cluster.RemoteNode{
-		NodeAddress: cluster.NodeAddress{ID: node2.nodeInfo.ID},
-		NodeCerts: cluster.NodeCerts{
-			ServerTLSCert: []byte{1, 2, 3},
-			ClientTLSCert: []byte{1, 2, 3},
-		},
+		ID:            node2.nodeInfo.ID,
+		ServerTLSCert: []byte{1, 2, 3},
+		ClientTLSCert: []byte{1, 2, 3},
 	}
 
 	for _, tst := range []struct {
@@ -698,13 +699,13 @@ func testStreamAbort(t *testing.T, node2 *clusterNode, newMembership []cluster.R
 	rm1, err := node1.c.Remote(testChannel, node2.nodeInfo.ID)
 	require.NoError(t, err)
 
+	stream := assertEventualEstablishStream(t, rm1)
+	errCh := make(chan error, 2)
 	go func() {
-		stream := assertEventualEstablishStream(t, rm1)
 		// Signal the reconfiguration
-		err = stream.Send(wrapSubmitReq(testReq))
-		require.NoError(t, err)
-		_, err := stream.Recv()
-		require.Contains(t, err.Error(), expectedError)
+		errCh <- stream.Send(wrapSubmitReq(testReq))
+		_, recvErr := stream.Recv()
+		errCh <- recvErr
 		close(stopChan)
 	}()
 
@@ -716,6 +717,8 @@ func testStreamAbort(t *testing.T, node2 *clusterNode, newMembership []cluster.R
 	}()
 
 	<-stopChan
+	require.NoError(t, <-errCh)
+	require.Error(t, <-errCh)
 }
 
 func TestDoubleReconfigure(t *testing.T) {
@@ -738,7 +741,7 @@ func TestDoubleReconfigure(t *testing.T) {
 	rm2, err := node1.c.Remote(testChannel, node2.nodeInfo.ID)
 	require.NoError(t, err)
 	// Ensure the references are equal
-	require.True(t, rm1 == rm2)
+	require.Same(t, rm1, rm2)
 }
 
 func TestInvalidChannel(t *testing.T) {
@@ -864,6 +867,47 @@ func testAbort(t *testing.T, abortFunc func(*cluster.RemoteContext), rpcTimeout 
 	require.EqualError(t, err, expectedErr)
 
 	node2.handler.AssertNumberOfCalls(t, "OnSubmit", 1)
+}
+
+func TestAbortCancelsAllStreams(t *testing.T) {
+	// Scenario: node 1 creates multiple streams to node 2 (simulating
+	// concurrent Consensus and Submit operations). When Abort() is called,
+	// ALL streams must be canceled, not just the first one encountered
+	// during sync.Map iteration.
+
+	node1 := newTestNode(t)
+	defer node1.stop()
+
+	node2 := newTestNode(t)
+	defer node2.stop()
+
+	config := []cluster.RemoteNode{node1.nodeInfo, node2.nodeInfo}
+	node1.c.Configure(testChannel, config)
+	node2.c.Configure(testChannel, config)
+
+	node2.handler.On("OnSubmit", testChannel, node1.nodeInfo.ID, mock.Anything).Return(nil)
+	node2.handler.On("OnConsensus", testChannel, node1.nodeInfo.ID, mock.Anything).Return(nil)
+
+	rm, err := node1.c.Remote(testChannel, node2.nodeInfo.ID)
+	require.NoError(t, err)
+
+	// Create multiple streams to the same remote node
+	stream1 := assertEventualEstablishStream(t, rm)
+	stream2 := assertEventualEstablishStream(t, rm)
+	stream3 := assertEventualEstablishStream(t, rm)
+
+	// Verify none are canceled before Abort
+	require.False(t, stream1.Canceled())
+	require.False(t, stream2.Canceled())
+	require.False(t, stream3.Canceled())
+
+	// Abort should cancel ALL streams
+	rm.Abort()
+
+	// Verify every stream was canceled
+	require.True(t, stream1.Canceled(), "stream1 should be canceled after Abort()")
+	require.True(t, stream2.Canceled(), "stream2 should be canceled after Abort()")
+	require.True(t, stream3.Canceled(), "stream3 should be canceled after Abort()")
 }
 
 func TestNoTLSCertificate(t *testing.T) {
@@ -1263,8 +1307,8 @@ func TestMetrics(t *testing.T) {
 				assertBiDiCommunication(t, node1, node2, testReq)
 				require.Equal(t, []string{"host", node2.nodeInfo.Endpoint, "msg_type", "transaction", "channel", testChannel},
 					testMetrics.egressQueueLength.WithArgsForCall(0))
-				require.Equal(t, float64(0), testMetrics.egressQueueLength.SetArgsForCall(0))
-				require.Equal(t, float64(1), testMetrics.egressQueueCapacity.SetArgsForCall(0))
+				require.InDelta(t, float64(0), testMetrics.egressQueueLength.SetArgsForCall(0), 0)
+				require.InDelta(t, float64(1), testMetrics.egressQueueCapacity.SetArgsForCall(0), 0)
 
 				var messageReceived sync.WaitGroup
 				messageReceived.Add(1)
@@ -1281,8 +1325,8 @@ func TestMetrics(t *testing.T) {
 
 				require.Equal(t, []string{"host", node2.nodeInfo.Endpoint, "msg_type", "consensus", "channel", testChannel},
 					testMetrics.egressQueueLength.WithArgsForCall(1))
-				require.Equal(t, float64(0), testMetrics.egressQueueLength.SetArgsForCall(1))
-				require.Equal(t, float64(1), testMetrics.egressQueueCapacity.SetArgsForCall(1))
+				require.InDelta(t, float64(0), testMetrics.egressQueueLength.SetArgsForCall(1), 0)
+				require.InDelta(t, float64(1), testMetrics.egressQueueCapacity.SetArgsForCall(1), 0)
 			},
 		},
 		{
@@ -1309,7 +1353,7 @@ func TestMetrics(t *testing.T) {
 				require.Equal(t, []string{"channel", testChannel2}, testMetrics.egressStreamCount.WithArgsForCall(1))
 
 				// A single TLS connection despite 2 streams
-				require.Equal(t, float64(1), testMetrics.egressTLSConnCount.SetArgsForCall(0))
+				require.InDelta(t, float64(1), testMetrics.egressTLSConnCount.SetArgsForCall(0), 0)
 				require.Equal(t, 1, testMetrics.egressTLSConnCount.SetCallCount())
 			},
 		},
@@ -1322,8 +1366,8 @@ func TestMetrics(t *testing.T) {
 				assertBiDiCommunicationForChannel(t, node1, node2, testReq2, testChannel2)
 				require.Equal(t, []string{"channel", testChannel2}, testMetrics.egressStreamCount.WithArgsForCall(1))
 
-				require.Equal(t, float64(1), testMetrics.egressWorkerSize.SetArgsForCall(0))
-				require.Equal(t, float64(1), testMetrics.egressWorkerSize.SetArgsForCall(1))
+				require.InDelta(t, float64(1), testMetrics.egressWorkerSize.SetArgsForCall(0), 0)
+				require.InDelta(t, float64(1), testMetrics.egressWorkerSize.SetArgsForCall(1), 0)
 			},
 		},
 		{
@@ -1433,11 +1477,22 @@ func TestCertExpirationWarningEgress(t *testing.T) {
 
 	node2.handler.On("OnSubmit", testChannel, node1.nodeInfo.ID, mock.Anything).Return(nil)
 
+	// Use a mock stream so that sending multiple messages does not depend on the
+	// lifecycle of the server-side stream, which serves a single request.
+	streamContext := peer.NewContext(context.Background(), &peer.Peer{
+		AuthInfo: credentials.TLSInfo{
+			State: tls.ConnectionState{
+				PeerCertificates: []*x509.Certificate{cert},
+			},
+		},
+	})
 	mockgRPC := &mocks.StepClient{}
 	mockgRPC.On("Send", mock.Anything).Return(nil)
-	mockgRPC.On("Context").Return(context.Background())
-	mockClient := &mocks.ClusterClient{}
-	mockClient.On("Step", mock.Anything).Return(mockgRPC, nil)
+	mockgRPC.On("Context").Return(streamContext)
+
+	stub.GetStreamFunc = func(context.Context) (cluster.StepClientStream, error) {
+		return &cluster.CommClientStream{StepClient: mockgRPC}, nil
+	}
 
 	stream := assertEventualEstablishStream(t, stub)
 

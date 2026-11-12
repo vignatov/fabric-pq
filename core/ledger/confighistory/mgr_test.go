@@ -17,6 +17,7 @@ import (
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	dbpkg "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/snapshot"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/mock"
@@ -36,13 +37,14 @@ func TestMain(m *testing.M) {
 func TestWithNoCollectionConfig(t *testing.T) {
 	dbPath := t.TempDir()
 	mockCCInfoProvider := &mock.DeployedChaincodeInfoProvider{}
-	mgr, err := NewMgr(dbPath, mockCCInfoProvider)
+	mgr, err := NewMgr(dbPath, mockCCInfoProvider, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 	testutilEquipMockCCInfoProviderToReturnDesiredCollConfig(mockCCInfoProvider, "chaincode1", nil)
-	err = mgr.HandleStateUpdates(&ledger.StateUpdateTrigger{
-		LedgerID:           "ledger1",
-		CommittingBlockNum: 50,
-	},
+	err = mgr.HandleStateUpdates(
+		&ledger.StateUpdateTrigger{
+			LedgerID:           "ledger1",
+			CommittingBlockNum: 50,
+		},
 	)
 	require.NoError(t, err)
 	retriever := mgr.GetRetriever("ledger1")
@@ -54,17 +56,18 @@ func TestWithNoCollectionConfig(t *testing.T) {
 func TestWithEmptyCollectionConfig(t *testing.T) {
 	dbPath := t.TempDir()
 	mockCCInfoProvider := &mock.DeployedChaincodeInfoProvider{}
-	mgr, err := NewMgr(dbPath, mockCCInfoProvider)
+	mgr, err := NewMgr(dbPath, mockCCInfoProvider, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 	testutilEquipMockCCInfoProviderToReturnDesiredCollConfig(
 		mockCCInfoProvider,
 		"chaincode1",
 		&peer.CollectionConfigPackage{},
 	)
-	err = mgr.HandleStateUpdates(&ledger.StateUpdateTrigger{
-		LedgerID:           "ledger1",
-		CommittingBlockNum: 50,
-	},
+	err = mgr.HandleStateUpdates(
+		&ledger.StateUpdateTrigger{
+			LedgerID:           "ledger1",
+			CommittingBlockNum: 50,
+		},
 	)
 	require.NoError(t, err)
 	retriever := mgr.GetRetriever("ledger1")
@@ -76,7 +79,7 @@ func TestWithEmptyCollectionConfig(t *testing.T) {
 func TestMgrQueries(t *testing.T) {
 	dbPath := t.TempDir()
 	mockCCInfoProvider := &mock.DeployedChaincodeInfoProvider{}
-	mgr, err := NewMgr(dbPath, mockCCInfoProvider)
+	mgr, err := NewMgr(dbPath, mockCCInfoProvider, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 	chaincodeName := "chaincode1"
 	configCommittingBlockNums := []uint64{5, 10, 15, 100}
@@ -88,10 +91,11 @@ func TestMgrQueries(t *testing.T) {
 			// for each ledgerid and commitHeight combination, construct a unique collConfigPackage and induce a stateUpdate
 			collConfigPackage := sampleCollectionConfigPackage(ledgerid, committingBlockNum)
 			testutilEquipMockCCInfoProviderToReturnDesiredCollConfig(mockCCInfoProvider, chaincodeName, collConfigPackage)
-			err = mgr.HandleStateUpdates(&ledger.StateUpdateTrigger{
-				LedgerID:           ledgerid,
-				CommittingBlockNum: committingBlockNum,
-			},
+			err = mgr.HandleStateUpdates(
+				&ledger.StateUpdateTrigger{
+					LedgerID:           ledgerid,
+					CommittingBlockNum: committingBlockNum,
+				},
 			)
 			require.NoError(t, err)
 		}
@@ -122,7 +126,7 @@ func TestMgrQueries(t *testing.T) {
 func TestDrop(t *testing.T) {
 	dbPath := t.TempDir()
 	mockCCInfoProvider := &mock.DeployedChaincodeInfoProvider{}
-	mgr, err := NewMgr(dbPath, mockCCInfoProvider)
+	mgr, err := NewMgr(dbPath, mockCCInfoProvider, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 	chaincodeName := "chaincode1"
 	configCommittingBlockNums := []uint64{5, 10, 15, 100}
@@ -182,7 +186,7 @@ func TestWithImplicitColls(t *testing.T) {
 		},
 		nil,
 	)
-	p, err := newDBProvider(dbPath)
+	p, err := newDBProvider(dbPath, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 
 	mgr := &Mgr{
@@ -237,7 +241,7 @@ type testEnvForSnapshot struct {
 
 func newTestEnvForSnapshot(t *testing.T) *testEnvForSnapshot {
 	dbPath := t.TempDir()
-	mgr, err := NewMgr(dbPath, &mock.DeployedChaincodeInfoProvider{})
+	mgr, err := NewMgr(dbPath, &mock.DeployedChaincodeInfoProvider{}, dbpkg.GoLevelDB)
 	if err != nil {
 		t.Fatalf("Failed to create new config history manager: %s", err)
 	}
@@ -350,7 +354,7 @@ func TestExportAndImportConfigHistory(t *testing.T) {
 		require.Empty(t, fileHashes)
 		files, err := os.ReadDir(env.testSnapshotDir)
 		require.NoError(t, err)
-		require.Len(t, files, 0)
+		require.Empty(t, files)
 	})
 
 	t.Run("export confighistory", func(t *testing.T) {
@@ -447,7 +451,7 @@ func TestExportAndImportConfigHistory(t *testing.T) {
 		require.NoError(t, err)
 		defer dataFileWriter.Close()
 		err = env.mgr.ImportFromSnapshot("ledger2", env.testSnapshotDir)
-		require.EqualError(t, err, "internal leveldb error while obtaining db iterator: leveldb: closed")
+		require.EqualError(t, err, "internal leveldb error while obtaining next entry from iterator: leveldb: closed")
 	})
 }
 
@@ -485,7 +489,8 @@ func verifyExportedConfigHistory(t *testing.T, dir string, fileHashes map[string
 		require.NoError(t, err)
 		val, err := dataReader.DecodeBytes()
 		require.NoError(t, err)
-		retrievedCollectionConfigs = append(retrievedCollectionConfigs,
+		retrievedCollectionConfigs = append(
+			retrievedCollectionConfigs,
 			&compositeKV{decodeCompositeKey(key), val},
 		)
 	}
@@ -554,7 +559,8 @@ func sampleCollectionConfigPackage(collNamePart1 string, collNamePart2 uint64) *
 func testutilEquipMockCCInfoProviderToReturnDesiredCollConfig(
 	mockCCInfoProvider *mock.DeployedChaincodeInfoProvider,
 	chaincodeName string,
-	collConfigPackage *peer.CollectionConfigPackage) {
+	collConfigPackage *peer.CollectionConfigPackage,
+) {
 	mockCCInfoProvider.UpdatedChaincodesReturns(
 		[]*ledger.ChaincodeLifecycleInfo{
 			{Name: chaincodeName},
@@ -572,7 +578,8 @@ func testutilCreateCollConfigPkg(collNames []string) *peer.CollectionConfigPacka
 		Config: []*peer.CollectionConfig{},
 	}
 	for _, collName := range collNames {
-		pkg.Config = append(pkg.Config,
+		pkg.Config = append(
+			pkg.Config,
 			&peer.CollectionConfig{
 				Payload: &peer.CollectionConfig_StaticCollectionConfig{
 					StaticCollectionConfig: &peer.StaticCollectionConfig{

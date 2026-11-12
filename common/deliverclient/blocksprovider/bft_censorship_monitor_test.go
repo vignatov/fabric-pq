@@ -151,7 +151,8 @@ func TestBFTCensorshipMonitor_NoHeadersNoBlocks(t *testing.T) {
 			})
 
 			return client, func() {}, nil
-		})
+		},
+	)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -170,7 +171,7 @@ func TestBFTCensorshipMonitor_NoHeadersNoBlocks(t *testing.T) {
 	require.Eventually(t, func() bool { return s.fakeRequester.SeekInfoHeadersFromCallCount() == 3 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeRequester.ConnectCallCount() == 3 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeProgressReporter.BlockProgressCallCount() >= 9 }, 5*time.Second, 10*time.Millisecond)
-	for i := 0; i < s.fakeRequester.ConnectCallCount(); i++ {
+	for i := range s.fakeRequester.ConnectCallCount() {
 		n := s.fakeRequester.SeekInfoHeadersFromArgsForCall(i)
 		require.Equal(t, uint64(0), n)
 		env, ep := s.fakeRequester.ConnectArgsForCall(i)
@@ -225,7 +226,8 @@ func TestBFTCensorshipMonitor_CensorshipDetected(t *testing.T) {
 			})
 
 			return client, func() {}, nil
-		})
+		},
+	)
 	b7time := time.Now()
 	s.fakeProgressReporter.BlockProgressReturns(uint64(7), b7time)
 
@@ -246,7 +248,7 @@ func TestBFTCensorshipMonitor_CensorshipDetected(t *testing.T) {
 	require.Eventually(t, func() bool { return s.fakeRequester.SeekInfoHeadersFromCallCount() == 3 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeRequester.ConnectCallCount() == 3 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeProgressReporter.BlockProgressCallCount() > 9 }, 5*time.Second, 10*time.Millisecond)
-	for i := 0; i < s.fakeRequester.ConnectCallCount(); i++ {
+	for i := range s.fakeRequester.ConnectCallCount() {
 		n := s.fakeRequester.SeekInfoHeadersFromArgsForCall(i)
 		require.Equal(t, uint64(8), n, "should seek from block 8")
 		env, ep := s.fakeRequester.ConnectArgsForCall(i)
@@ -311,7 +313,8 @@ func TestBFTCensorshipMonitor_SuspicionsRemovedCensorshipDetected(t *testing.T) 
 			})
 
 			return client, func() {}, nil
-		})
+		},
+	)
 	blockTime := time.Now()
 	s.fakeProgressReporter.BlockProgressReturns(uint64(7), blockTime)
 
@@ -332,7 +335,7 @@ func TestBFTCensorshipMonitor_SuspicionsRemovedCensorshipDetected(t *testing.T) 
 	require.Eventually(t, func() bool { return s.fakeRequester.SeekInfoHeadersFromCallCount() == 3 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeRequester.ConnectCallCount() == 3 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeProgressReporter.BlockProgressCallCount() > 9 }, 5*time.Second, 10*time.Millisecond)
-	for i := 0; i < s.fakeRequester.ConnectCallCount(); i++ {
+	for i := range s.fakeRequester.ConnectCallCount() {
 		n := s.fakeRequester.SeekInfoHeadersFromArgsForCall(i)
 		require.Equal(t, uint64(8), n, "should seek from block 8")
 		env, ep := s.fakeRequester.ConnectArgsForCall(i)
@@ -421,7 +424,8 @@ func TestBFTCensorshipMonitor_SuspicionRemoved(t *testing.T) {
 			})
 
 			return client, func() {}, nil
-		})
+		},
+	)
 	blockTime := time.Now()
 	s.fakeProgressReporter.BlockProgressReturns(uint64(7), blockTime)
 
@@ -442,7 +446,7 @@ func TestBFTCensorshipMonitor_SuspicionRemoved(t *testing.T) {
 	require.Eventually(t, func() bool { return s.fakeRequester.SeekInfoHeadersFromCallCount() == 3 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeRequester.ConnectCallCount() == 3 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeProgressReporter.BlockProgressCallCount() > 9 }, 5*time.Second, 10*time.Millisecond)
-	for i := 0; i < s.fakeRequester.ConnectCallCount(); i++ {
+	for i := range s.fakeRequester.ConnectCallCount() {
 		n := s.fakeRequester.SeekInfoHeadersFromArgsForCall(i)
 		require.Equal(t, uint64(8), n, "should seek from block 8")
 		env, ep := s.fakeRequester.ConnectArgsForCall(i)
@@ -533,7 +537,8 @@ func TestBFTCensorshipMonitor_FaultySourceIgnored(t *testing.T) {
 			}
 
 			return client, func() {}, nil
-		})
+		},
+	)
 	blockTime := time.Now()
 	s.fakeProgressReporter.BlockProgressReturns(uint64(7), blockTime)
 
@@ -554,7 +559,7 @@ func TestBFTCensorshipMonitor_FaultySourceIgnored(t *testing.T) {
 	require.Eventually(t, func() bool { return s.fakeRequester.SeekInfoHeadersFromCallCount() >= 6 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeRequester.ConnectCallCount() >= 6 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeProgressReporter.BlockProgressCallCount() >= 12 }, 5*time.Second, 10*time.Millisecond)
-	for i := 0; i < s.fakeRequester.ConnectCallCount(); i++ {
+	for i := range s.fakeRequester.ConnectCallCount() {
 		n := s.fakeRequester.SeekInfoHeadersFromArgsForCall(i)
 		require.Equal(t, uint64(8), n, "should seek from block 8")
 		env, ep := s.fakeRequester.ConnectArgsForCall(i)
@@ -660,7 +665,8 @@ func TestBFTCensorshipMonitor_FaultySourceRecovery(t *testing.T) {
 			})
 
 			return client, func() {}, nil
-		})
+		},
+	)
 	blockTime := time.Now()
 	s.fakeProgressReporter.BlockProgressReturns(uint64(7), blockTime)
 
@@ -681,7 +687,7 @@ func TestBFTCensorshipMonitor_FaultySourceRecovery(t *testing.T) {
 	require.Eventually(t, func() bool { return s.fakeRequester.SeekInfoHeadersFromCallCount() >= 30 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeRequester.ConnectCallCount() >= 30 }, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool { return s.fakeProgressReporter.BlockProgressCallCount() >= 60 }, 5*time.Second, 10*time.Millisecond)
-	for i := 0; i < s.fakeRequester.ConnectCallCount(); i++ {
+	for i := range s.fakeRequester.ConnectCallCount() {
 		n := s.fakeRequester.SeekInfoHeadersFromArgsForCall(i)
 		require.Equal(t, uint64(8), n, "should seek from block 8")
 		env, ep := s.fakeRequester.ConnectArgsForCall(i)

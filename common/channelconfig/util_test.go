@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/hyperledger/fabric-config/protolator"
@@ -122,14 +123,16 @@ func createCfgBlockWithSupportedCapabilities(t *testing.T) *cb.Block {
 				MaxMessageCount:   65535,
 				AbsoluteMaxBytes:  1024000000,
 				PreferredMaxBytes: 1024000000,
-			}),
+			},
+		),
 		ModPolicy: AdminsPolicyKey,
 	}
 	config.ChannelGroup.Groups[OrdererGroupKey].Values[BatchTimeoutKey] = &cb.ConfigValue{
 		Value: protoutil.MarshalOrPanic(
 			&ab.BatchTimeout{
 				Timeout: "2s",
-			}),
+			},
+		),
 		ModPolicy: AdminsPolicyKey,
 	}
 	ordererCapabilities := make(map[string]bool)
@@ -142,7 +145,8 @@ func createCfgBlockWithSupportedCapabilities(t *testing.T) *cb.Block {
 		Value: protoutil.MarshalOrPanic(
 			&ab.ConsensusType{
 				Type: "solo",
-			}),
+			},
+		),
 		ModPolicy: AdminsPolicyKey,
 	}
 
@@ -236,14 +240,16 @@ func createCfgBlockWithUnsupportedCapabilities(t *testing.T) *cb.Block {
 				MaxMessageCount:   65535,
 				AbsoluteMaxBytes:  1024000000,
 				PreferredMaxBytes: 1024000000,
-			}),
+			},
+		),
 		ModPolicy: AdminsPolicyKey,
 	}
 	config.ChannelGroup.Groups[OrdererGroupKey].Values[BatchTimeoutKey] = &cb.ConfigValue{
 		Value: protoutil.MarshalOrPanic(
 			&ab.BatchTimeout{
 				Timeout: "2s",
-			}),
+			},
+		),
 		ModPolicy: AdminsPolicyKey,
 	}
 	ordererCapabilities := make(map[string]bool)
@@ -256,7 +262,8 @@ func createCfgBlockWithUnsupportedCapabilities(t *testing.T) *cb.Block {
 		Value: protoutil.MarshalOrPanic(
 			&ab.ConsensusType{
 				Type: "solo",
-			}),
+			},
+		),
 		ModPolicy: AdminsPolicyKey,
 	}
 
@@ -335,15 +342,15 @@ func TestMarshalEtcdRaftMetadata(t *testing.T) {
 		},
 	}
 	packed, err := MarshalEtcdRaftMetadata(md)
-	require.Nil(t, err, "marshalling should succeed")
+	require.NoError(t, err, "marshalling should succeed")
 	require.NotNil(t, packed)
 
 	packed, err = MarshalEtcdRaftMetadata(md)
-	require.Nil(t, err, "marshalling should succeed a second time because we did not mutate ourselves")
+	require.NoError(t, err, "marshalling should succeed a second time because we did not mutate ourselves")
 	require.NotNil(t, packed)
 
 	unpacked := &etcdraft.ConfigMetadata{}
-	require.Nil(t, proto.Unmarshal(packed, unpacked), "unmarshalling should succeed")
+	require.NoError(t, proto.Unmarshal(packed, unpacked), "unmarshalling should succeed")
 
 	var outputCerts, inputCerts [3][]byte
 	for i := range unpacked.GetConsenters() {
@@ -354,4 +361,39 @@ func TestMarshalEtcdRaftMetadata(t *testing.T) {
 	for i := range len(inputCerts) - 1 {
 		require.NotEqual(t, outputCerts[i+1], outputCerts[i], "expected extracted certs to differ from each other")
 	}
+}
+
+func TestMarshalEtcdRaftMetadataNoPEMContent(t *testing.T) {
+	emptyCert := filepath.Join(t.TempDir(), "empty.pem")
+	require.NoError(t, os.WriteFile(emptyCert, nil, 0o600))
+
+	t.Run("client cert", func(t *testing.T) {
+		md := &etcdraft.ConfigMetadata{
+			Consenters: []*etcdraft.Consenter{
+				{
+					Host:          "node-1.example.com",
+					Port:          7050,
+					ClientTlsCert: []byte(emptyCert),
+					ServerTlsCert: []byte("testdata/tls-server-1.pem"),
+				},
+			},
+		}
+		_, err := MarshalEtcdRaftMetadata(md)
+		require.EqualError(t, err, "cannot load client cert for consenter node-1.example.com:7050: no PEM content in "+emptyCert)
+	})
+
+	t.Run("server cert", func(t *testing.T) {
+		md := &etcdraft.ConfigMetadata{
+			Consenters: []*etcdraft.Consenter{
+				{
+					Host:          "node-1.example.com",
+					Port:          7050,
+					ClientTlsCert: []byte("testdata/tls-client-1.pem"),
+					ServerTlsCert: []byte(emptyCert),
+				},
+			},
+		}
+		_, err := MarshalEtcdRaftMetadata(md)
+		require.EqualError(t, err, "cannot load server cert for consenter node-1.example.com:7050: no PEM content in "+emptyCert)
+	})
 }

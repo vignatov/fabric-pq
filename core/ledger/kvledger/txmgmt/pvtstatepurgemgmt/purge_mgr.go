@@ -72,7 +72,7 @@ func (p *PurgeMgr) PrepareForExpiringKeys(expiringAtBlk uint64) {
 // WaitForPrepareToFinish holds the caller till the background goroutine launched by 'PrepareForExpiringKeys' is finished
 func (p *PurgeMgr) WaitForPrepareToFinish() {
 	p.lock.Lock()
-	p.lock.Unlock() //lint:ignore SA2001 syncpoint
+	p.lock.Unlock() //nolint:staticcheck
 }
 
 // UpdateExpiryInfoOfPvtDataOfOldBlocks updates the existing expiry entries in the expiryKeeper with the given pvtUpdates
@@ -147,7 +147,8 @@ func (p *PurgeMgr) addMissingPvtDataToWorkingSet(pvtKeys privacyenabledstate.Pvt
 // commit
 func (p *PurgeMgr) UpdateExpiryInfo(
 	pvtUpdates *privacyenabledstate.PvtUpdateBatch,
-	hashedUpdates *privacyenabledstate.HashedUpdateBatch) error {
+	hashedUpdates *privacyenabledstate.HashedUpdateBatch,
+) error {
 	expiryInfoUpdates, err := buildExpirySchedule(p.btlPolicy, pvtUpdates, hashedUpdates)
 	if err != nil {
 		return err
@@ -158,7 +159,8 @@ func (p *PurgeMgr) UpdateExpiryInfo(
 // AddExpiredEntriesToUpdateBatch add the expired pvtdata to the updateBatch of next block to be committed
 func (p *PurgeMgr) AddExpiredEntriesToUpdateBatch(
 	pvtUpdates *privacyenabledstate.PvtUpdateBatch,
-	hashedUpdates *privacyenabledstate.HashedUpdateBatch) error {
+	hashedUpdates *privacyenabledstate.HashedUpdateBatch,
+) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	if p.workingset.err != nil {
@@ -244,7 +246,8 @@ func (p *PurgeMgr) prepareWorkingsetFor(expiringAtBlk uint64) *workingset {
 		if sameVersion(currentVersion, purgeEntryV.committingBlock) {
 			logger.Debugf(
 				"The version of the hashed key in the committed state and in the expiry entry is same " +
-					"hence, keeping the entry in the purge list")
+					"hence, keeping the entry in the purge list",
+			)
 			continue
 		}
 
@@ -260,7 +263,8 @@ func (p *PurgeMgr) prepareWorkingsetFor(expiringAtBlk uint64) *workingset {
 			if sameVersionFromVal(committedPvtVerVal, purgeEntryV.committingBlock) {
 				logger.Debugf(
 					"The version of the pvt key in the committed state and in the expiry entry is same" +
-						"Including only key in the purge list and not the hashed key")
+						"Including only key in the purge list and not the hashed key",
+				)
 				purgeEntryV.purgeKeyOnly = true
 				continue
 			}
@@ -291,11 +295,11 @@ func (p *PurgeMgr) preloadCommittedVersionsInCache(expInfoMap expiryInfoMap) err
 func transformToExpiryInfoMap(expiryInfo []*expiryInfo) expiryInfoMap {
 	expinfoMap := make(expiryInfoMap)
 	for _, expinfo := range expiryInfo {
-		for ns, colls := range expinfo.pvtdataKeys.Map {
-			for coll, keysAndHashes := range colls.Map {
-				for _, keyAndHash := range keysAndHashes.List {
-					compositeKey := privacyenabledstate.HashedCompositeKey{Namespace: ns, CollectionName: coll, KeyHash: string(keyAndHash.Hash)}
-					expinfoMap[compositeKey] = &keyAndVersion{key: keyAndHash.Key, committingBlock: expinfo.expiryInfoKey.committingBlk}
+		for ns, colls := range expinfo.pvtdataKeys.GetMap() {
+			for coll, keysAndHashes := range colls.GetMap() {
+				for _, keyAndHash := range keysAndHashes.GetList() {
+					compositeKey := privacyenabledstate.HashedCompositeKey{Namespace: ns, CollectionName: coll, KeyHash: string(keyAndHash.GetHash())}
+					expinfoMap[compositeKey] = &keyAndVersion{key: keyAndHash.GetKey(), committingBlock: expinfo.expiryInfoKey.committingBlk}
 				}
 			}
 		}

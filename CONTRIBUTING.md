@@ -9,6 +9,25 @@ docs to learn how to make contributions to this exciting project.
 
 ## Running Unit tests
 
+Use the Go version specified in [go.mod](go.mod). On Windows, run tests in a
+WSL2 Linux checkout rather than on the mounted Windows filesystem, since some
+tests depend on Linux file permissions.
+
+The PQ wrapper requires CGO, a C compiler, and liboqs. The bundled Linux library
+is x86-64 and requires OpenSSL 3. To test the wrapper independently of Docker:
+
+```sh
+go test -short ./pq-crypto
+```
+
+The full `make unit-test` target also requires Docker for CouchDB.
+
+This fork uses a PQ-enabled copy of `fabric-lib-go` in
+[third_party/fabric-lib-go](third_party/fabric-lib-go). When updating that
+dependency, integrate upstream changes into the local copy without removing
+the PQ support, then run `go mod tidy` and `go mod vendor` from the repository
+root.
+
 An example of using the script as used in the CI pipeline to run Unit Tests 
 
 ```

@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package etcdraft
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -16,7 +17,7 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/protoutil"
-	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/raft/v3/raftpb"
 )
 
 // PeriodicCheck checks periodically a condition, and reports
@@ -29,7 +30,7 @@ type PeriodicCheck struct {
 	ReportCleared       func()
 	conditionHoldsSince time.Time
 	once                sync.Once // Used to prevent double initialization
-	stopped             uint32
+	stopped             atomic.Uint32
 }
 
 // Run runs the PeriodicCheck
@@ -40,11 +41,11 @@ func (pc *PeriodicCheck) Run() {
 // Stop stops the periodic checks
 func (pc *PeriodicCheck) Stop() {
 	pc.Logger.Info("Periodic check is stopping.")
-	atomic.AddUint32(&pc.stopped, 1)
+	pc.stopped.Add(1)
 }
 
 func (pc *PeriodicCheck) shouldRun() bool {
-	return atomic.LoadUint32(&pc.stopped) == 0
+	return pc.stopped.Load() == 0
 }
 
 func (pc *PeriodicCheck) check() {
@@ -114,27 +115,27 @@ func (es *evictionSuspector) confirmSuspicion(cumulativeSuspicion time.Duration)
 		return
 	}
 
-	es.logger.Infof("Last config block was found to be block [%d]", lastConfigBlock.Header.Number)
+	es.logger.Infof("Last config block was found to be block [%d]", lastConfigBlock.GetHeader().GetNumber())
 
 	err = es.amIInChannel(lastConfigBlock)
-	if err != cluster.ErrNotInChannel && err != cluster.ErrForbidden {
-		details := fmt.Sprintf(", our certificate was found in config block with sequence %d", lastConfigBlock.Header.Number)
+	if !errors.Is(err, cluster.ErrNotInChannel) && !errors.Is(err, cluster.ErrForbidden) {
+		details := fmt.Sprintf(", our certificate was found in config block with sequence %d", lastConfigBlock.GetHeader().GetNumber())
 		if err != nil {
-			details = fmt.Sprintf(": %s", err.Error())
+			details = ": " + err.Error()
 		}
 		es.logger.Infof("Cannot confirm our own eviction from the channel%s", details)
 
 		es.triggerCatchUp(&raftpb.Snapshot{Data: protoutil.MarshalOrPanic(lastConfigBlock)})
 		return
 	}
-	es.logger.Warningf("Detected our own eviction from the channel in block [%d]", lastConfigBlock.Header.Number)
+	es.logger.Warningf("Detected our own eviction from the channel in block [%d]", lastConfigBlock.GetHeader().GetNumber())
 
 	es.logger.Infof("Waiting for chain to halt")
 	es.halt()
 	es.halted = true
 
 	height := es.height()
-	if lastConfigBlock.Header.Number+1 <= height {
+	if lastConfigBlock.GetHeader().GetNumber()+1 <= height {
 		es.logger.Infof("Our height is higher or equal than the height of the orderer we pulled the last block from, aborting.")
 		return
 	}
@@ -142,13 +143,13 @@ func (es *evictionSuspector) confirmSuspicion(cumulativeSuspicion time.Duration)
 	es.logger.Infof("Chain has been halted, pulling remaining blocks up to (and including) eviction block.")
 
 	nextBlock := height
-	es.logger.Infof("Will now pull blocks %d to %d", nextBlock, lastConfigBlock.Header.Number)
-	for seq := nextBlock; seq <= lastConfigBlock.Header.Number; seq++ {
+	es.logger.Infof("Will now pull blocks %d to %d", nextBlock, lastConfigBlock.GetHeader().GetNumber())
+	for seq := nextBlock; seq <= lastConfigBlock.GetHeader().GetNumber(); seq++ {
 		es.logger.Infof("Pulling block [%d]", seq)
 		block := puller.PullBlock(seq)
 		err := es.writeBlock(block)
 		if err != nil {
-			es.logger.Panicf("Failed writing block [%d] to the ledger: %v", block.Header.Number, err)
+			es.logger.Panicf("Failed writing block [%d] to the ledger: %v", block.GetHeader().GetNumber(), err)
 		}
 	}
 

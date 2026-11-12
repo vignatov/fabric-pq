@@ -8,7 +8,6 @@ package common
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"strings"
 
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -46,12 +45,12 @@ type BroadcastOrdererClient interface {
 
 // Broadcast returns a broadcast client for the AtomicBroadcast service
 func (oc *OrdererClient) Broadcast() (BroadcastOrdererClient, error) {
-	return newMulticastBroadcastClient(oc.address, oc.CommonClient.clientConfig.Dial)
+	return newMulticastBroadcastClient(oc.address, oc.clientConfig.Dial)
 }
 
 // Deliver returns a deliver client for the AtomicBroadcast service
 func (oc *OrdererClient) Deliver() (ab.AtomicBroadcast_DeliverClient, error) {
-	conn, err := oc.CommonClient.clientConfig.Dial(oc.address)
+	conn, err := oc.Dial(oc.address)
 	if err != nil {
 		return nil, errors.WithMessagef(err, "orderer client failed to connect to %s", oc.address)
 	}
@@ -81,7 +80,7 @@ func newMulticastBroadcastClient(addressString string, dial dialer) (*multicastB
 	for _, addr := range addresses {
 		conn, err := dial(addr)
 		if err != nil {
-			return nil, errors.WithMessage(err, fmt.Sprintf("orderer client failed to connect to %s", addr))
+			return nil, errors.WithMessage(err, "orderer client failed to connect to "+addr)
 		}
 		cl, err := ab.NewAtomicBroadcastClient(conn).Broadcast(context.TODO())
 		if err != nil {

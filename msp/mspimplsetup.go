@@ -25,13 +25,13 @@ func (msp *bccspmsp) getCertifiersIdentifier(certRaw []byte) ([]byte, error) {
 	// 1. check that certificate is registered in msp.rootCerts or msp.intermediateCerts
 	cert, err := msp.getCertFromPem(certRaw)
 	if err != nil {
-		return nil, fmt.Errorf("Failed getting certificate for [%v]: [%s]", certRaw, err)
+		return nil, fmt.Errorf("Failed getting certificate for [%v]: [%w]", certRaw, err)
 	}
 
 	// 2. Sanitize it to ensure like for like comparison
 	cert, err = msp.sanitizeCert(cert)
 	if err != nil {
-		return nil, fmt.Errorf("sanitizeCert failed %s", err)
+		return nil, fmt.Errorf("sanitizeCert failed %w", err)
 	}
 
 	found := false
@@ -66,21 +66,21 @@ func (msp *bccspmsp) getCertifiersIdentifier(certRaw []byte) ([]byte, error) {
 	} else {
 		chain, err = msp.getValidationChain(cert, true)
 		if err != nil {
-			return nil, fmt.Errorf("Failed computing validation chain for [%v]. [%s]", cert, err)
+			return nil, fmt.Errorf("Failed computing validation chain for [%v]. [%w]", cert, err)
 		}
 	}
 
 	// 4. compute the hash of the certification path
 	certifiersIdentifier, err = msp.getCertificationChainIdentifierFromChain(chain)
 	if err != nil {
-		return nil, fmt.Errorf("Failed computing Certifiers Identifier for [%v]. [%s]", certRaw, err)
+		return nil, fmt.Errorf("Failed computing Certifiers Identifier for [%v]. [%w]", certRaw, err)
 	}
 
 	return certifiersIdentifier, nil
 }
 
 func (msp *bccspmsp) setupCrypto(conf *m.FabricMSPConfig) error {
-	msp.cryptoConfig = conf.CryptoConfig
+	msp.cryptoConfig = conf.GetCryptoConfig()
 	if msp.cryptoConfig == nil {
 		// Move to defaults
 		msp.cryptoConfig = &m.FabricCryptoConfig{
@@ -89,11 +89,11 @@ func (msp *bccspmsp) setupCrypto(conf *m.FabricMSPConfig) error {
 		}
 		mspLogger.Debugf("CryptoConfig was nil. Move to defaults.")
 	}
-	if msp.cryptoConfig.SignatureHashFamily == "" {
+	if msp.cryptoConfig.GetSignatureHashFamily() == "" {
 		msp.cryptoConfig.SignatureHashFamily = bccsp.SHA2
 		mspLogger.Debugf("CryptoConfig.SignatureHashFamily was nil. Move to defaults.")
 	}
-	if msp.cryptoConfig.IdentityIdentifierHashFunction == "" {
+	if msp.cryptoConfig.GetIdentityIdentifierHashFunction() == "" {
 		msp.cryptoConfig.IdentityIdentifierHashFunction = bccsp.SHA256
 		mspLogger.Debugf("CryptoConfig.IdentityIdentifierHashFunction was nil. Move to defaults.")
 	}
@@ -106,7 +106,7 @@ func (msp *bccspmsp) setupCrypto(conf *m.FabricMSPConfig) error {
 
 func (msp *bccspmsp) setupCAs(conf *m.FabricMSPConfig) error {
 	// make and fill the set of CA certs - we expect them to be there
-	if len(conf.RootCerts) == 0 {
+	if len(conf.GetRootCerts()) == 0 {
 		return errors.New("expected at least one CA certificate")
 	}
 
@@ -116,14 +116,14 @@ func (msp *bccspmsp) setupCAs(conf *m.FabricMSPConfig) error {
 	// CA certificates. After their sanitization is done, the opts
 	// will be recreated using the sanitized certs.
 	msp.opts = &x509.VerifyOptions{Roots: x509.NewCertPool(), Intermediates: x509.NewCertPool()}
-	for _, v := range conf.RootCerts {
+	for _, v := range conf.GetRootCerts() {
 		cert, err := msp.getCertFromPem(v)
 		if err != nil {
 			return err
 		}
 		msp.opts.Roots.AddCert(cert)
 	}
-	for _, v := range conf.IntermediateCerts {
+	for _, v := range conf.GetIntermediateCerts() {
 		cert, err := msp.getCertFromPem(v)
 		if err != nil {
 			return err
@@ -133,8 +133,8 @@ func (msp *bccspmsp) setupCAs(conf *m.FabricMSPConfig) error {
 
 	// Load root and intermediate CA identities
 	// Recall that when an identity is created, its certificate gets sanitized
-	msp.rootCerts = make([]Identity, len(conf.RootCerts))
-	for i, trustedCert := range conf.RootCerts {
+	msp.rootCerts = make([]Identity, len(conf.GetRootCerts()))
+	for i, trustedCert := range conf.GetRootCerts() {
 		id, _, _, err := msp.getIdentityFromConf(trustedCert)
 		if err != nil {
 			return err
@@ -144,8 +144,8 @@ func (msp *bccspmsp) setupCAs(conf *m.FabricMSPConfig) error {
 	}
 
 	// make and fill the set of intermediate certs (if present)
-	msp.intermediateCerts = make([]Identity, len(conf.IntermediateCerts))
-	for i, trustedCert := range conf.IntermediateCerts {
+	msp.intermediateCerts = make([]Identity, len(conf.GetIntermediateCerts()))
+	for i, trustedCert := range conf.GetIntermediateCerts() {
 		id, _, _, err := msp.getIdentityFromConf(trustedCert)
 		if err != nil {
 			return err
@@ -172,8 +172,8 @@ func (msp *bccspmsp) setupAdmins(conf *m.FabricMSPConfig) error {
 
 func (msp *bccspmsp) setupAdminsPreV142(conf *m.FabricMSPConfig) error {
 	// make and fill the set of admin certs (if present)
-	msp.admins = make([]Identity, len(conf.Admins))
-	for i, admCert := range conf.Admins {
+	msp.admins = make([]Identity, len(conf.GetAdmins()))
+	for i, admCert := range conf.GetAdmins() {
 		id, _, _, err := msp.getIdentityFromConf(admCert)
 		if err != nil {
 			return err
@@ -217,8 +217,8 @@ func isECDSASignatureAlgorithm(algid asn1.ObjectIdentifier) bool {
 
 func (msp *bccspmsp) setupCRLs(conf *m.FabricMSPConfig) error {
 	// setup the CRL (if present)
-	msp.CRL = make([]*pkix.CertificateList, len(conf.RevocationList))
-	for i, crlbytes := range conf.RevocationList {
+	msp.CRL = make([]*pkix.CertificateList, len(conf.GetRevocationList()))
+	for i, crlbytes := range conf.GetRevocationList() {
 		crl, err := x509.ParseCRL(crlbytes)
 		if err != nil {
 			return errors.Wrap(err, "could not parse RevocationList")
@@ -282,22 +282,21 @@ func (msp *bccspmsp) finalizeSetupCAs() error {
 }
 
 func (msp *bccspmsp) setupNodeOUs(config *m.FabricMSPConfig) error {
-	if config.FabricNodeOus != nil {
+	if config.GetFabricNodeOus() != nil {
+		msp.ouEnforcement = config.GetFabricNodeOus().GetEnable()
 
-		msp.ouEnforcement = config.FabricNodeOus.Enable
-
-		if config.FabricNodeOus.ClientOuIdentifier == nil || len(config.FabricNodeOus.ClientOuIdentifier.OrganizationalUnitIdentifier) == 0 {
+		if config.GetFabricNodeOus().GetClientOuIdentifier() == nil || len(config.GetFabricNodeOus().GetClientOuIdentifier().GetOrganizationalUnitIdentifier()) == 0 {
 			return errors.New("Failed setting up NodeOUs. ClientOU must be different from nil.")
 		}
 
-		if config.FabricNodeOus.PeerOuIdentifier == nil || len(config.FabricNodeOus.PeerOuIdentifier.OrganizationalUnitIdentifier) == 0 {
+		if config.GetFabricNodeOus().GetPeerOuIdentifier() == nil || len(config.GetFabricNodeOus().GetPeerOuIdentifier().GetOrganizationalUnitIdentifier()) == 0 {
 			return errors.New("Failed setting up NodeOUs. PeerOU must be different from nil.")
 		}
 
 		// ClientOU
-		msp.clientOU = &OUIdentifier{OrganizationalUnitIdentifier: config.FabricNodeOus.ClientOuIdentifier.OrganizationalUnitIdentifier}
-		if len(config.FabricNodeOus.ClientOuIdentifier.Certificate) != 0 {
-			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.FabricNodeOus.ClientOuIdentifier.Certificate)
+		msp.clientOU = &OUIdentifier{OrganizationalUnitIdentifier: config.GetFabricNodeOus().GetClientOuIdentifier().GetOrganizationalUnitIdentifier()}
+		if len(config.GetFabricNodeOus().GetClientOuIdentifier().GetCertificate()) != 0 {
+			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.GetFabricNodeOus().GetClientOuIdentifier().GetCertificate())
 			if err != nil {
 				return err
 			}
@@ -305,15 +304,14 @@ func (msp *bccspmsp) setupNodeOUs(config *m.FabricMSPConfig) error {
 		}
 
 		// PeerOU
-		msp.peerOU = &OUIdentifier{OrganizationalUnitIdentifier: config.FabricNodeOus.PeerOuIdentifier.OrganizationalUnitIdentifier}
-		if len(config.FabricNodeOus.PeerOuIdentifier.Certificate) != 0 {
-			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.FabricNodeOus.PeerOuIdentifier.Certificate)
+		msp.peerOU = &OUIdentifier{OrganizationalUnitIdentifier: config.GetFabricNodeOus().GetPeerOuIdentifier().GetOrganizationalUnitIdentifier()}
+		if len(config.GetFabricNodeOus().GetPeerOuIdentifier().GetCertificate()) != 0 {
+			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.GetFabricNodeOus().GetPeerOuIdentifier().GetCertificate())
 			if err != nil {
 				return err
 			}
 			msp.peerOU.CertifiersIdentifier = certifiersIdentifier
 		}
-
 	} else {
 		msp.ouEnforcement = false
 	}
@@ -322,19 +320,19 @@ func (msp *bccspmsp) setupNodeOUs(config *m.FabricMSPConfig) error {
 }
 
 func (msp *bccspmsp) setupNodeOUsV142(config *m.FabricMSPConfig) error {
-	if config.FabricNodeOus == nil {
+	if config.GetFabricNodeOus() == nil {
 		msp.ouEnforcement = false
 		return nil
 	}
 
-	msp.ouEnforcement = config.FabricNodeOus.Enable
+	msp.ouEnforcement = config.GetFabricNodeOus().GetEnable()
 
 	counter := 0
 	// ClientOU
-	if config.FabricNodeOus.ClientOuIdentifier != nil {
-		msp.clientOU = &OUIdentifier{OrganizationalUnitIdentifier: config.FabricNodeOus.ClientOuIdentifier.OrganizationalUnitIdentifier}
-		if len(config.FabricNodeOus.ClientOuIdentifier.Certificate) != 0 {
-			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.FabricNodeOus.ClientOuIdentifier.Certificate)
+	if config.GetFabricNodeOus().GetClientOuIdentifier() != nil {
+		msp.clientOU = &OUIdentifier{OrganizationalUnitIdentifier: config.GetFabricNodeOus().GetClientOuIdentifier().GetOrganizationalUnitIdentifier()}
+		if len(config.GetFabricNodeOus().GetClientOuIdentifier().GetCertificate()) != 0 {
+			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.GetFabricNodeOus().GetClientOuIdentifier().GetCertificate())
 			if err != nil {
 				return err
 			}
@@ -346,10 +344,10 @@ func (msp *bccspmsp) setupNodeOUsV142(config *m.FabricMSPConfig) error {
 	}
 
 	// PeerOU
-	if config.FabricNodeOus.PeerOuIdentifier != nil {
-		msp.peerOU = &OUIdentifier{OrganizationalUnitIdentifier: config.FabricNodeOus.PeerOuIdentifier.OrganizationalUnitIdentifier}
-		if len(config.FabricNodeOus.PeerOuIdentifier.Certificate) != 0 {
-			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.FabricNodeOus.PeerOuIdentifier.Certificate)
+	if config.GetFabricNodeOus().GetPeerOuIdentifier() != nil {
+		msp.peerOU = &OUIdentifier{OrganizationalUnitIdentifier: config.GetFabricNodeOus().GetPeerOuIdentifier().GetOrganizationalUnitIdentifier()}
+		if len(config.GetFabricNodeOus().GetPeerOuIdentifier().GetCertificate()) != 0 {
+			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.GetFabricNodeOus().GetPeerOuIdentifier().GetCertificate())
 			if err != nil {
 				return err
 			}
@@ -361,10 +359,10 @@ func (msp *bccspmsp) setupNodeOUsV142(config *m.FabricMSPConfig) error {
 	}
 
 	// AdminOU
-	if config.FabricNodeOus.AdminOuIdentifier != nil {
-		msp.adminOU = &OUIdentifier{OrganizationalUnitIdentifier: config.FabricNodeOus.AdminOuIdentifier.OrganizationalUnitIdentifier}
-		if len(config.FabricNodeOus.AdminOuIdentifier.Certificate) != 0 {
-			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.FabricNodeOus.AdminOuIdentifier.Certificate)
+	if config.GetFabricNodeOus().GetAdminOuIdentifier() != nil {
+		msp.adminOU = &OUIdentifier{OrganizationalUnitIdentifier: config.GetFabricNodeOus().GetAdminOuIdentifier().GetOrganizationalUnitIdentifier()}
+		if len(config.GetFabricNodeOus().GetAdminOuIdentifier().GetCertificate()) != 0 {
+			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.GetFabricNodeOus().GetAdminOuIdentifier().GetCertificate())
 			if err != nil {
 				return err
 			}
@@ -376,10 +374,10 @@ func (msp *bccspmsp) setupNodeOUsV142(config *m.FabricMSPConfig) error {
 	}
 
 	// OrdererOU
-	if config.FabricNodeOus.OrdererOuIdentifier != nil {
-		msp.ordererOU = &OUIdentifier{OrganizationalUnitIdentifier: config.FabricNodeOus.OrdererOuIdentifier.OrganizationalUnitIdentifier}
-		if len(config.FabricNodeOus.OrdererOuIdentifier.Certificate) != 0 {
-			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.FabricNodeOus.OrdererOuIdentifier.Certificate)
+	if config.GetFabricNodeOus().GetOrdererOuIdentifier() != nil {
+		msp.ordererOU = &OUIdentifier{OrganizationalUnitIdentifier: config.GetFabricNodeOus().GetOrdererOuIdentifier().GetOrganizationalUnitIdentifier()}
+		if len(config.GetFabricNodeOus().GetOrdererOuIdentifier().GetCertificate()) != 0 {
+			certifiersIdentifier, err := msp.getCertifiersIdentifier(config.GetFabricNodeOus().GetOrdererOuIdentifier().GetCertificate())
 			if err != nil {
 				return err
 			}
@@ -399,8 +397,8 @@ func (msp *bccspmsp) setupNodeOUsV142(config *m.FabricMSPConfig) error {
 }
 
 func (msp *bccspmsp) setupSigningIdentity(conf *m.FabricMSPConfig) error {
-	if conf.SigningIdentity != nil {
-		sid, err := msp.getSigningIdentityFromConf(conf.SigningIdentity)
+	if conf.GetSigningIdentity() != nil {
+		sid, err := msp.getSigningIdentityFromConf(conf.GetSigningIdentity())
 		if err != nil {
 			return err
 		}
@@ -423,18 +421,17 @@ func (msp *bccspmsp) setupSigningIdentity(conf *m.FabricMSPConfig) error {
 
 func (msp *bccspmsp) setupOUs(conf *m.FabricMSPConfig) error {
 	msp.ouIdentifiers = make(map[string][][]byte)
-	for _, ou := range conf.OrganizationalUnitIdentifiers {
-
-		certifiersIdentifier, err := msp.getCertifiersIdentifier(ou.Certificate)
+	for _, ou := range conf.GetOrganizationalUnitIdentifiers() {
+		certifiersIdentifier, err := msp.getCertifiersIdentifier(ou.GetCertificate())
 		if err != nil {
 			return errors.WithMessagef(err, "failed getting certificate for [%v]", ou)
 		}
 
 		// Check for duplicates
 		found := false
-		for _, id := range msp.ouIdentifiers[ou.OrganizationalUnitIdentifier] {
+		for _, id := range msp.ouIdentifiers[ou.GetOrganizationalUnitIdentifier()] {
 			if bytes.Equal(id, certifiersIdentifier) {
-				mspLogger.Warningf("Duplicate found in ou identifiers [%s, %v]", ou.OrganizationalUnitIdentifier, id)
+				mspLogger.Warningf("Duplicate found in ou identifiers [%s, %v]", ou.GetOrganizationalUnitIdentifier(), id)
 				found = true
 				break
 			}
@@ -442,8 +439,8 @@ func (msp *bccspmsp) setupOUs(conf *m.FabricMSPConfig) error {
 
 		if !found {
 			// No duplicates found, add it
-			msp.ouIdentifiers[ou.OrganizationalUnitIdentifier] = append(
-				msp.ouIdentifiers[ou.OrganizationalUnitIdentifier],
+			msp.ouIdentifiers[ou.GetOrganizationalUnitIdentifier()] = append(
+				msp.ouIdentifiers[ou.GetOrganizationalUnitIdentifier()],
 				certifiersIdentifier,
 			)
 		}
@@ -456,9 +453,9 @@ func (msp *bccspmsp) setupTLSCAs(conf *m.FabricMSPConfig) error {
 	opts := &x509.VerifyOptions{Roots: x509.NewCertPool(), Intermediates: x509.NewCertPool()}
 
 	// Load TLS root and intermediate CA identities
-	msp.tlsRootCerts = make([][]byte, len(conf.TlsRootCerts))
-	rootCerts := make([]*x509.Certificate, len(conf.TlsRootCerts))
-	for i, trustedCert := range conf.TlsRootCerts {
+	msp.tlsRootCerts = make([][]byte, len(conf.GetTlsRootCerts()))
+	rootCerts := make([]*x509.Certificate, len(conf.GetTlsRootCerts()))
+	for i, trustedCert := range conf.GetTlsRootCerts() {
 		cert, err := msp.getCertFromPem(trustedCert)
 		if err != nil {
 			return err
@@ -470,9 +467,9 @@ func (msp *bccspmsp) setupTLSCAs(conf *m.FabricMSPConfig) error {
 	}
 
 	// make and fill the set of intermediate certs (if present)
-	msp.tlsIntermediateCerts = make([][]byte, len(conf.TlsIntermediateCerts))
-	intermediateCerts := make([]*x509.Certificate, len(conf.TlsIntermediateCerts))
-	for i, trustedCert := range conf.TlsIntermediateCerts {
+	msp.tlsIntermediateCerts = make([][]byte, len(conf.GetTlsIntermediateCerts()))
+	intermediateCerts := make([]*x509.Certificate, len(conf.GetTlsIntermediateCerts()))
+	for i, trustedCert := range conf.GetTlsIntermediateCerts() {
 		cert, err := msp.getCertFromPem(trustedCert)
 		if err != nil {
 			return err

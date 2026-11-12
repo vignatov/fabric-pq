@@ -8,6 +8,7 @@ package inquire
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -36,12 +37,12 @@ func NewInquireableSignaturePolicy(sigPol *common.SignaturePolicyEnvelope) polic
 // SatisfiedBy returns a slice of PrincipalSets that each of them
 // satisfies the policy.
 func (isp *inquireableSignaturePolicy) SatisfiedBy() []policies.PrincipalSet {
-	rootId := fmt.Sprintf("%d", 0)
-	root := graph.NewTreeVertex(rootId, isp.sigPol.Rule)
+	rootId := strconv.Itoa(0)
+	root := graph.NewTreeVertex(rootId, isp.sigPol.GetRule())
 	computePolicyTree(root)
 	var res []policies.PrincipalSet
 	for _, perm := range root.ToTree().Permute(combinationsUpperBound) {
-		principalSet := principalsOfTree(perm, isp.sigPol.Identities)
+		principalSet := principalsOfTree(perm, isp.sigPol.GetIdentities())
 		if len(principalSet) == 0 {
 			return nil
 		}
@@ -66,7 +67,7 @@ func principalsOfTree(tree *graph.Tree, principals policies.PrincipalSet) polici
 			logger.Warnf("Malformed policy, it is either not composed of signature policy envelopes or is missing some")
 			return nil
 		}
-		switch principalIndex := pol.Type.(type) {
+		switch principalIndex := pol.GetType().(type) {
 		case *common.SignaturePolicy_SignedBy:
 			if len(principals) <= int(principalIndex.SignedBy) {
 				logger.Warning("Failed computing principalsOfTree, index out of bounds")
@@ -86,8 +87,8 @@ func principalsOfTree(tree *graph.Tree, principals policies.PrincipalSet) polici
 func computePolicyTree(v *graph.TreeVertex) {
 	sigPol := v.Data.(*common.SignaturePolicy)
 	if p := sigPol.GetNOutOf(); p != nil {
-		v.Threshold = int(p.N)
-		for i, rule := range p.Rules {
+		v.Threshold = int(p.GetN())
+		for i, rule := range p.GetRules() {
 			id := fmt.Sprintf("%s.%d", v.Id, i)
 			u := v.AddDescendant(graph.NewTreeVertex(id, rule))
 			computePolicyTree(u)

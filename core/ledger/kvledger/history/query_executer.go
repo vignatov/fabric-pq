@@ -11,23 +11,21 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/queryresult"
 	commonledger "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
-	"github.com/syndtr/goleveldb/leveldb/iterator"
 )
 
-// QueryExecutor is a query executor against the LevelDB history DB
+// QueryExecutor is a query executor against the history DB
 type QueryExecutor struct {
-	levelDB    *leveldbhelper.DBHandle
+	dbHandle   commonledger.DBHandle
 	blockStore *blkstorage.BlockStore
 }
 
 // GetHistoryForKey implements method in interface `ledger.HistoryQueryExecutor`
 func (q *QueryExecutor) GetHistoryForKey(namespace string, key string) (commonledger.ResultsIterator, error) {
 	rangeScan := constructRangeScan(namespace, key)
-	dbItr, err := q.levelDB.GetIterator(rangeScan.startKey, rangeScan.endKey)
+	dbItr, err := q.dbHandle.GetIterator(rangeScan.startKey, rangeScan.endKey)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +44,7 @@ type historyScanner struct {
 	rangeScan  *rangeScan
 	namespace  string
 	key        string
-	dbItr      iterator.Iterator
+	dbItr      commonledger.Iterator
 	blockStore *blkstorage.BlockStore
 }
 
@@ -84,7 +82,7 @@ func (scanner *historyScanner) Next() (commonledger.QueryResult, error) {
 		return nil, errors.Errorf("no namespace or key is found for namespace %s and key %s with decoded blockNum %d and tranNum %d", scanner.namespace, scanner.key, blockNum, tranNum)
 	}
 	logger.Debugf("Found historic key value for namespace:%s key:%s from transaction %s",
-		scanner.namespace, scanner.key, queryResult.(*queryresult.KeyModification).TxId)
+		scanner.namespace, scanner.key, queryResult.(*queryresult.KeyModification).GetTxId())
 	return queryResult, nil
 }
 
@@ -97,34 +95,34 @@ func getKeyModificationFromTran(tranEnvelope *common.Envelope, namespace string,
 	logger.Debugf("Entering getKeyModificationFromTran %s:%s", namespace, key)
 
 	// extract action from the envelope
-	payload, err := protoutil.UnmarshalPayload(tranEnvelope.Payload)
+	payload, err := protoutil.UnmarshalPayload(tranEnvelope.GetPayload())
 	if err != nil {
 		return nil, err
 	}
 
-	tx, err := protoutil.UnmarshalTransaction(payload.Data)
+	tx, err := protoutil.UnmarshalTransaction(payload.GetData())
 	if err != nil {
 		return nil, err
 	}
 
-	_, respPayload, err := protoutil.GetPayloads(tx.Actions[0])
+	_, respPayload, err := protoutil.GetPayloads(tx.GetActions()[0])
 	if err != nil {
 		return nil, err
 	}
 
-	chdr, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
+	chdr, err := protoutil.UnmarshalChannelHeader(payload.GetHeader().GetChannelHeader())
 	if err != nil {
 		return nil, err
 	}
 
-	txID := chdr.TxId
-	timestamp := chdr.Timestamp
+	txID := chdr.GetTxId()
+	timestamp := chdr.GetTimestamp()
 
 	txRWSet := &rwsetutil.TxRwSet{}
 
 	// Get the Result from the Action and then Unmarshal
 	// it into a TxReadWriteSet using custom unmarshalling
-	if err = txRWSet.FromProtoBytes(respPayload.Results); err != nil {
+	if err = txRWSet.FromProtoBytes(respPayload.GetResults()); err != nil {
 		return nil, err
 	}
 
@@ -132,10 +130,10 @@ func getKeyModificationFromTran(tranEnvelope *common.Envelope, namespace string,
 	for _, nsRWSet := range txRWSet.NsRwSets {
 		if nsRWSet.NameSpace == namespace {
 			// got the correct namespace, now find the key write
-			for _, kvWrite := range nsRWSet.KvRwSet.Writes {
-				if kvWrite.Key == key {
+			for _, kvWrite := range nsRWSet.KvRwSet.GetWrites() {
+				if kvWrite.GetKey() == key {
 					return &queryresult.KeyModification{
-						TxId: txID, Value: kvWrite.Value,
+						TxId: txID, Value: kvWrite.GetValue(),
 						Timestamp: timestamp, IsDelete: rwsetutil.IsKVWriteDelete(kvWrite),
 					}, nil
 				}

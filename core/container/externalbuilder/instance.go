@@ -7,7 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 package externalbuilder
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	errors2 "errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,21 +38,25 @@ type Instance struct {
 // Duration used for the DialTimeout property
 type Duration time.Duration
 
-func (d Duration) MarshalJSON() ([]byte, error) {
-	return json.Marshal(time.Duration(d).String())
+func (d Duration) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return enc.WriteToken(jsontext.String(time.Duration(d).String()))
 }
 
-func (d *Duration) UnmarshalJSON(b []byte) error {
-	var v any
-	if err := json.Unmarshal(b, &v); err != nil {
+func (d *Duration) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	tok, err := dec.ReadToken()
+	if err != nil {
 		return err
 	}
 
-	switch value := v.(type) {
-	case float64:
+	switch tok.Kind() {
+	case jsontext.KindNumber:
+		value, err := tok.Float()
+		if err != nil {
+			return err
+		}
 		*d = Duration(time.Duration(value))
-	case string:
-		dur, err := time.ParseDuration(value)
+	case jsontext.KindString:
+		dur, err := time.ParseDuration(tok.String())
 		if err != nil {
 			return err
 		}
@@ -72,7 +78,6 @@ type ChaincodeServerUserData struct {
 	ClientKey          string   `json:"client_key"`  // PEM encoded client key
 	ClientCert         string   `json:"client_cert"` // PEM encoded client certificate
 	RootCert           string   `json:"root_cert"`   // PEM encoded peer chaincode certificate
-
 }
 
 func (c *ChaincodeServerUserData) ChaincodeServerInfo(cryptoDir string) (*ccintf.ChaincodeServerInfo, error) {
@@ -103,12 +108,12 @@ func (c *ChaincodeServerUserData) ChaincodeServerInfo(cryptoDir string) (*ccintf
 	}
 
 	connInfo.ClientConfig.SecOpts.UseTLS = true
+	connInfo.ClientConfig.SecOpts.ServerNameOverride = c.Domain
 
 	if c.ClientAuthRequired {
 		connInfo.ClientConfig.SecOpts.RequireClientCert = true
 		connInfo.ClientConfig.SecOpts.Certificate = []byte(c.ClientCert)
 		connInfo.ClientConfig.SecOpts.Key = []byte(c.ClientKey)
-		connInfo.ClientConfig.SecOpts.ServerNameOverride = c.Domain
 	}
 
 	connInfo.ClientConfig.SecOpts.ServerRootCAs = [][]byte{[]byte(c.RootCert)}
@@ -187,7 +192,7 @@ func (i *Instance) Wait() (int, error) {
 
 	err := i.Session.Wait()
 	err = errors.Wrapf(err, "builder '%s' run failed", i.Builder.Name)
-	if exitErr, ok := errors.Cause(err).(*exec.ExitError); ok {
+	if exitErr, ok := errors2.AsType[*exec.ExitError](errors.Cause(err)); ok {
 		return exitErr.ExitCode(), err
 	}
 	return 0, err

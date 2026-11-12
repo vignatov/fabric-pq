@@ -14,9 +14,9 @@ import (
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/snapshot"
 	"github.com/hyperledger/fabric/common/ledger/util"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 	"github.com/hyperledger/fabric/internal/pkg/txflags"
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -52,10 +52,10 @@ type blockIdxInfo struct {
 
 type blockIndex struct {
 	indexItemsMap map[IndexableAttr]bool
-	db            *leveldbhelper.DBHandle
+	db            db.DBHandle
 }
 
-func newBlockIndex(indexConfig *IndexConfig, db *leveldbhelper.DBHandle) (*blockIndex, error) {
+func newBlockIndex(indexConfig *IndexConfig, db db.DBHandle) (*blockIndex, error) {
 	indexItems := indexConfig.AttrsToIndex
 	logger.Debugf("newBlockIndex() - indexItems:[%s]", indexItems)
 	indexItemsMap := make(map[IndexableAttr]bool)
@@ -91,7 +91,7 @@ func (index *blockIndex) indexBlock(blockIdxInfo *blockIdxInfo) error {
 	txOffsets := blockIdxInfo.txOffsets
 	blkNum := blockIdxInfo.blockNum
 	blkHash := blockIdxInfo.blockHash
-	txsfltr := txflags.ValidationFlags(blockIdxInfo.metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsfltr := txflags.ValidationFlags(blockIdxInfo.metadata.GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	batch := index.db.NewUpdateBatch()
 	flpBytes := flp.marshal()
 
@@ -193,7 +193,7 @@ func (index *blockIndex) getTxLoc(txID string) (*fileLocPointer, error) {
 		return nil, err
 	}
 	txFLP := &fileLocPointer{}
-	if err = txFLP.unmarshal(v.TxLocation); err != nil {
+	if err = txFLP.unmarshal(v.GetTxLocation()); err != nil {
 		return nil, err
 	}
 	return txFLP, nil
@@ -205,7 +205,7 @@ func (index *blockIndex) getBlockLocByTxID(txID string) (*fileLocPointer, error)
 		return nil, err
 	}
 	blkFLP := &fileLocPointer{}
-	if err = blkFLP.unmarshal(v.BlkLocation); err != nil {
+	if err = blkFLP.unmarshal(v.GetBlkLocation()); err != nil {
 		return nil, err
 	}
 	return blkFLP, nil
@@ -216,7 +216,7 @@ func (index *blockIndex) getTxValidationCodeByTxID(txID string) (peer.TxValidati
 	if err != nil {
 		return peer.TxValidationCode(-1), 0, err
 	}
-	return peer.TxValidationCode(v.TxValidationCode), blkNum, nil
+	return peer.TxValidationCode(v.GetTxValidationCode()), blkNum, nil
 }
 
 func (index *blockIndex) txIDExists(txID string) (bool, error) {
@@ -361,11 +361,14 @@ func (index *blockIndex) exportUniqueTxIDs(dir string, newHashFunc snapshot.NewH
 func importTxIDsFromSnapshot(
 	snapshotDir string,
 	lastBlockNumInSnapshot uint64,
-	db *leveldbhelper.DBHandle) error {
+	db db.DBHandle,
+) error {
 	txIDsMetadata, err := snapshot.OpenFile(filepath.Join(snapshotDir, snapshotMetadataFileName), snapshotFileFormat)
 	if err != nil {
 		return err
 	}
+	defer txIDsMetadata.Close()
+
 	numTxIDs, err := txIDsMetadata.DecodeUVarInt()
 	if err != nil {
 		return err
@@ -374,6 +377,7 @@ func importTxIDsFromSnapshot(
 	if err != nil {
 		return err
 	}
+	defer txIDsData.Close()
 
 	batch := db.NewUpdateBatch()
 	for i := range numTxIDs {

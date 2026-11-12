@@ -9,9 +9,10 @@ package history
 import (
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/dataformat"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
+	"github.com/hyperledger/fabric/common/ledger/util/dbfactory"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
@@ -24,74 +25,68 @@ var logger = flogging.MustGetLogger("history")
 
 // DBProvider provides handle to HistoryDB for a given channel
 type DBProvider struct {
-	leveldbProvider *leveldbhelper.Provider
+	dbProvider db.Provider
 }
 
 // NewDBProvider instantiates DBProvider
-func NewDBProvider(path string) (*DBProvider, error) {
-	logger.Debugf("constructing HistoryDBProvider dbPath=%s", path)
-	levelDBProvider, err := leveldbhelper.NewProvider(
-		&leveldbhelper.Conf{
-			DBPath:         path,
-			ExpectedFormat: dataformat.CurrentFormat,
-		},
-	)
+func NewDBProvider(dbPath string, dbType string) (*DBProvider, error) {
+	logger.Debugf("constructing HistoryDBProvider dbPath=%s", dbPath)
+	dbp, err := dbfactory.NewProvider(dbType, dbPath, dataformat.CurrentFormat)
 	if err != nil {
 		return nil, err
 	}
 	return &DBProvider{
-		leveldbProvider: levelDBProvider,
+		dbProvider: dbp,
 	}, nil
 }
 
 // MarkStartingSavepoint creates historydb to be used for a ledger that is created from a snapshot
 func (p *DBProvider) MarkStartingSavepoint(name string, savepoint *version.Height) error {
 	db := p.GetDBHandle(name)
-	err := db.levelDB.Put(savePointKey, savepoint.ToBytes(), true)
+	err := db.dbHandle.Put(savePointKey, savepoint.ToBytes(), true)
 	return errors.WithMessagef(err, "error while writing the starting save point for ledger [%s]", name)
 }
 
 // GetDBHandle gets the handle to a named database
 func (p *DBProvider) GetDBHandle(name string) *DB {
 	return &DB{
-		levelDB: p.leveldbProvider.GetDBHandle(name),
-		name:    name,
+		dbHandle: p.dbProvider.GetDBHandle(name),
+		name:     name,
 	}
 }
 
 // Close closes the underlying db
 func (p *DBProvider) Close() {
-	p.leveldbProvider.Close()
+	p.dbProvider.Close()
 }
 
 // Drop drops channel-specific data from the history db
 func (p *DBProvider) Drop(channelName string) error {
-	return p.leveldbProvider.Drop(channelName)
+	return p.dbProvider.Drop(channelName)
 }
 
 // DB maintains and provides access to history data for a particular channel
 type DB struct {
-	levelDB *leveldbhelper.DBHandle
-	name    string
+	dbHandle db.DBHandle
+	name     string
 }
 
 // Commit implements method in HistoryDB interface
 func (d *DB) Commit(block *common.Block) error {
-	blockNo := block.Header.Number
+	blockNo := block.GetHeader().GetNumber()
 	// Set the starting tranNo to 0
 	var tranNo uint64
 
-	dbBatch := d.levelDB.NewUpdateBatch()
+	dbBatch := d.dbHandle.NewUpdateBatch()
 
 	logger.Debugf("Channel [%s]: Updating history database for blockNo [%v] with [%d] transactions",
-		d.name, blockNo, len(block.Data.Data))
+		d.name, blockNo, len(block.GetData().GetData()))
 
 	// Get the invalidation byte array for the block
-	txsFilter := txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsFilter := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 
 	// write each tran's write set to history db
-	for _, envBytes := range block.Data.Data {
-
+	for _, envBytes := range block.GetData().GetData() {
 		// If the tran is marked as invalid, skip it
 		if txsFilter.IsInvalid(int(tranNo)) {
 			logger.Debugf("Channel [%s]: Skipping history write for invalid transaction number %d",
@@ -105,37 +100,36 @@ func (d *DB) Commit(block *common.Block) error {
 			return err
 		}
 
-		payload, err := protoutil.UnmarshalPayload(env.Payload)
+		payload, err := protoutil.UnmarshalPayload(env.GetPayload())
 		if err != nil {
 			return err
 		}
 
-		chdr, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
+		chdr, err := protoutil.UnmarshalChannelHeader(payload.GetHeader().GetChannelHeader())
 		if err != nil {
 			return err
 		}
 
-		if common.HeaderType(chdr.Type) == common.HeaderType_ENDORSER_TRANSACTION {
+		if common.HeaderType(chdr.GetType()) == common.HeaderType_ENDORSER_TRANSACTION {
 			// extract RWSet from transaction
 			respPayload, err := protoutil.GetActionFromEnvelope(envBytes)
 			if err != nil {
 				return err
 			}
 			txRWSet := &rwsetutil.TxRwSet{}
-			if err = txRWSet.FromProtoBytes(respPayload.Results); err != nil {
+			if err = txRWSet.FromProtoBytes(respPayload.GetResults()); err != nil {
 				return err
 			}
 			// add a history record for each write
 			for _, nsRWSet := range txRWSet.NsRwSets {
 				ns := nsRWSet.NameSpace
 
-				for _, kvWrite := range nsRWSet.KvRwSet.Writes {
-					dataKey := constructDataKey(ns, kvWrite.Key, blockNo, tranNo)
+				for _, kvWrite := range nsRWSet.KvRwSet.GetWrites() {
+					dataKey := constructDataKey(ns, kvWrite.GetKey(), blockNo, tranNo)
 					// No value is required, write an empty byte array (emptyValue) since Put() of nil is not allowed
 					dbBatch.Put(dataKey, emptyValue)
 				}
 			}
-
 		} else {
 			logger.Debugf("Skipping transaction [%d] since it is not an endorsement transaction\n", tranNo)
 		}
@@ -148,7 +142,7 @@ func (d *DB) Commit(block *common.Block) error {
 
 	// write the block's history records and savepoint to LevelDB
 	// Setting snyc to true as a precaution, false may be an ok optimization after further testing.
-	if err := d.levelDB.WriteBatch(dbBatch, true); err != nil {
+	if err := d.dbHandle.WriteBatch(dbBatch, true); err != nil {
 		return err
 	}
 
@@ -158,12 +152,12 @@ func (d *DB) Commit(block *common.Block) error {
 
 // NewQueryExecutor implements method in HistoryDB interface
 func (d *DB) NewQueryExecutor(blockStore *blkstorage.BlockStore) (ledger.HistoryQueryExecutor, error) {
-	return &QueryExecutor{d.levelDB, blockStore}, nil
+	return &QueryExecutor{d.dbHandle, blockStore}, nil
 }
 
 // GetLastSavepoint implements returns the height till which the history is present in the db
 func (d *DB) GetLastSavepoint() (*version.Height, error) {
-	versionBytes, err := d.levelDB.Get(savePointKey)
+	versionBytes, err := d.dbHandle.Get(savePointKey)
 	if err != nil || versionBytes == nil {
 		return nil, err
 	}
@@ -196,10 +190,10 @@ func (d *DB) CommitLostBlock(blockAndPvtdata *ledger.BlockAndPvtData) error {
 	block := blockAndPvtdata.Block
 
 	// log every 1000th block at Info level so that history rebuild progress can be tracked in production envs.
-	if block.Header.Number%1000 == 0 {
-		logger.Infof("Recommitting block [%d] to history database", block.Header.Number)
+	if block.GetHeader().GetNumber()%1000 == 0 {
+		logger.Infof("Recommitting block [%d] to history database", block.GetHeader().GetNumber())
 	} else {
-		logger.Debugf("Recommitting block [%d] to history database", block.Header.Number)
+		logger.Debugf("Recommitting block [%d] to history database", block.GetHeader().GetNumber())
 	}
 	return d.Commit(block)
 }

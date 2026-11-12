@@ -9,7 +9,7 @@ package gateway
 import (
 	"fmt"
 	"math/rand/v2"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -105,7 +105,7 @@ func (reg *registry) endorsementPlan(channel string, interest *peer.ChaincodeInt
 			groupPeers = append(groupPeers, &endorserState{peer: peer, endorser: endorser, height: height})
 		}
 		// sort by decreasing height
-		sort.Slice(groupPeers, sorter(groupPeers, reg.localEndorser.address))
+		slices.SortFunc(groupPeers, sorter(reg.localEndorser.address))
 
 		if len(groupPeers) > 0 {
 			var endorsers []*endorser
@@ -197,7 +197,7 @@ func (reg *registry) endorsersByOrg(channel string, chaincode string) map[string
 
 	// sort by decreasing height in each org
 	for _, es := range endorsersByOrg {
-		sort.Slice(es, sorter(es, reg.localEndorser.address))
+		slices.SortFunc(es, sorter(reg.localEndorser.address))
 	}
 
 	return endorsersByOrg
@@ -264,7 +264,7 @@ func (reg *registry) evaluator(channel string, chaincode string, targetOrgs []st
 		}
 	}
 	// sort all the 'other orgs' endorsers by decreasing block height
-	sort.Slice(otherOrgEndorsers, sorter(otherOrgEndorsers, ""))
+	slices.SortFunc(otherOrgEndorsers, sorter(""))
 
 	var allEndorsers []*endorser
 	for _, e := range append(localOrgEndorsers, otherOrgEndorsers...) {
@@ -278,13 +278,23 @@ func (reg *registry) evaluator(channel string, chaincode string, targetOrgs []st
 	return nil, fmt.Errorf("no peers available to evaluate chaincode %s in channel %s", chaincode, channel)
 }
 
-func sorter(e []*endorserState, host string) func(i, j int) bool {
-	return func(i, j int) bool {
-		if e[i].height == e[j].height {
+// sorter orders endorsers by decreasing height, preferring the host peer on ties.
+func sorter(host string) func(a, b *endorserState) int {
+	return func(a, b *endorserState) int {
+		if a.height == b.height {
 			// prefer host peer
-			return e[i].endorser.address == host
+			if a.endorser.address == host && b.endorser.address != host {
+				return -1
+			}
+			if b.endorser.address == host && a.endorser.address != host {
+				return 1
+			}
+			return 0
 		}
-		return e[i].height > e[j].height
+		if a.height > b.height {
+			return -1
+		}
+		return 1
 	}
 }
 
@@ -323,10 +333,10 @@ func (reg *registry) orderers(channel string) ([]*orderer, int, error) {
 				err = client.closeConnection()
 				if err != nil {
 					// Failed to close this new connection.  Log the problem.
-					reg.logger.Warnw("Failed to close connection to orderer", "address", client.endpointConfig.logAddress, "err", err)
+					reg.logger.Warnw("Failed to close connection to orderer", "address", client.logAddress, "err", err)
 				}
 			} else {
-				reg.logger.Infow("Added orderer to registry", "address", client.endpointConfig.logAddress)
+				reg.logger.Infow("Added orderer to registry", "address", client.logAddress)
 			}
 		}
 		orderers = append(orderers, entry.(*orderer))
@@ -445,8 +455,8 @@ func (reg *registry) config(channel string) ([]*endpointConfig, error) {
 			tlsRootCerts = append(tlsRootCerts, mspInfo.GetTlsRootCerts()...)
 			tlsRootCerts = append(tlsRootCerts, mspInfo.GetTlsIntermediateCerts()...)
 		}
-		for _, ep := range eps.Endpoint {
-			address := fmt.Sprintf("%s:%d", ep.Host, ep.Port)
+		for _, ep := range eps.GetEndpoint() {
+			address := fmt.Sprintf("%s:%d", ep.GetHost(), ep.GetPort())
 			channelOrderers = append(channelOrderers, &endpointConfig{address: address, mspid: mspid, tlsRootCerts: tlsRootCerts})
 		}
 	}

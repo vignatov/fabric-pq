@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/blockledger/fileledger/mock"
 	"github.com/hyperledger/fabric/orderer/common/filerepo"
 	"github.com/stretchr/testify/require"
@@ -91,25 +92,25 @@ func TestMultiReinitialization(t *testing.T) {
 
 	dir := t.TempDir()
 
-	f, err := New(dir, metricsProvider)
+	f, err := New(dir, db.GoLevelDB, metricsProvider)
 	require.NoError(t, err)
 	_, err = f.GetOrCreate("testchannelid")
 	require.NoError(t, err, "Error GetOrCreate channel")
-	require.Equal(t, 1, len(f.ChannelIDs()), "Expected 1 channel")
+	require.Len(t, f.ChannelIDs(), 1, "Expected 1 channel")
 	f.Close()
 
-	f, err = New(dir, metricsProvider)
+	f, err = New(dir, db.GoLevelDB, metricsProvider)
 	require.NoError(t, err)
 	_, err = f.GetOrCreate("foo")
 	require.NoError(t, err, "Error creating channel")
-	require.Equal(t, 2, len(f.ChannelIDs()), "Expected channel to be recovered")
+	require.Len(t, f.ChannelIDs(), 2, "Expected channel to be recovered")
 	f.Close()
 
-	f, err = New(dir, metricsProvider)
+	f, err = New(dir, db.GoLevelDB, metricsProvider)
 	require.NoError(t, err)
 	_, err = f.GetOrCreate("bar")
 	require.NoError(t, err, "Error creating channel")
-	require.Equal(t, 3, len(f.ChannelIDs()), "Expected channel to be recovered")
+	require.Len(t, f.ChannelIDs(), 3, "Expected channel to be recovered")
 	f.Close()
 
 	bar2FileRepoDir := filepath.Join(dir, "pendingops", "remove", "bar2.remove")
@@ -122,15 +123,15 @@ func TestMultiReinitialization(t *testing.T) {
 	_, err = os.Create(filepath.Join(bar2ChainsDir, "blockfile_000000"))
 	require.NoError(t, err, "Error creating temp file: %s", err)
 
-	f, err = New(dir, metricsProvider)
+	f, err = New(dir, db.GoLevelDB, metricsProvider)
 	require.NoError(t, err)
 
 	err = f.Remove("bar")
 	require.NoError(t, err, "Error removing channel")
-	require.Equal(t, 2, len(f.ChannelIDs()))
+	require.Len(t, f.ChannelIDs(), 2)
 	err = f.Remove("this-isnt-an-existing-channel")
 	require.NoError(t, err, "Error removing channel")
-	require.Equal(t, 2, len(f.ChannelIDs()))
+	require.Len(t, f.ChannelIDs(), 2)
 
 	_, err = os.Stat(bar2ChainsDir)
 	require.EqualError(t, err, fmt.Sprintf("stat %s: no such file or directory", bar2ChainsDir))
@@ -162,7 +163,7 @@ func TestNewErrors(t *testing.T) {
 			require.NoError(t, os.Chmod(filepath.Join(dir, "pendingops", "remove"), 0o777))
 		})
 
-		_, err = New(dir, metricsProvider)
+		_, err = New(dir, db.GoLevelDB, metricsProvider)
 		require.Error(t, err)
 		require.ErrorContains(t, err, fmt.Sprintf("error checking if dir [%s] is empty:", fileRepoDir))
 		require.ErrorContains(t, err, "permission denied")
@@ -185,7 +186,7 @@ func TestNewErrors(t *testing.T) {
 			require.NoError(t, os.Chmod(filepath.Join(dir, "pendingops", "remove"), 0o777))
 		})
 
-		_, err = New(dir, metricsProvider)
+		_, err = New(dir, db.GoLevelDB, metricsProvider)
 		require.EqualError(t, err, fmt.Sprintf("unlinkat %s: permission denied", removeFile))
 	})
 }

@@ -67,8 +67,8 @@ func newOrderer(port int, t *testing.T) *timeoutOrderer {
 }
 
 func (o *timeoutOrderer) Shutdown() {
-	o.Server.Stop()
-	o.Listener.Close()
+	o.Stop()
+	o.Close()
 }
 
 func (*timeoutOrderer) Broadcast(orderer.AtomicBroadcast_BroadcastServer) error {
@@ -140,7 +140,7 @@ func InitMSP() {
 func initMSP() {
 	err := msptesttools.LoadMSPSetupForTesting()
 	if err != nil {
-		panic(fmt.Errorf("Fatal error when reading MSP config: err %s", err))
+		panic(fmt.Errorf("Fatal error when reading MSP config: err %w", err))
 	}
 }
 
@@ -389,7 +389,7 @@ func TestCreateChainDeliverFail(t *testing.T) {
 		t.Fatalf("Get default signer error: %v", err)
 	}
 
-	sendErr := fmt.Errorf("skeleton")
+	sendErr := errors.New("skeleton")
 	mockCF := &ChannelCmdFactory{
 		BroadcastFactory: func() (common.BroadcastClient, error) {
 			return common.GetMockBroadcastClient(sendErr), nil
@@ -536,7 +536,7 @@ func TestCreateChainInvalidTx(t *testing.T) {
 
 	if err = cmd.Execute(); err == nil {
 		t.Errorf("expected error")
-	} else if _, ok := err.(InvalidCreateTx); !ok {
+	} else if _, ok := errors.AsType[InvalidCreateTx](err); !ok {
 		t.Errorf("invalid error")
 	}
 
@@ -547,7 +547,7 @@ func TestCreateChainInvalidTx(t *testing.T) {
 
 	if err = cmd.Execute(); err == nil {
 		t.Errorf("expected error")
-	} else if _, ok := err.(InvalidCreateTx); !ok {
+	} else if _, ok := errors.AsType[InvalidCreateTx](err); !ok {
 		t.Errorf("invalid error")
 	}
 
@@ -558,7 +558,7 @@ func TestCreateChainInvalidTx(t *testing.T) {
 
 	if err := cmd.Execute(); err == nil {
 		t.Errorf("expected error")
-	} else if _, ok := err.(InvalidCreateTx); !ok {
+	} else if _, ok := errors.AsType[InvalidCreateTx](err); !ok {
 		t.Errorf("invalid error")
 	}
 }
@@ -664,7 +664,8 @@ func TestSanityCheckAndSignChannelCreateTx(t *testing.T) {
 		nil,
 		&cb.ConfigEnvelope{},
 		0,
-		0)
+		0,
+	)
 	require.NoError(t, err)
 	_, err = sanityCheckAndSignConfigTx(env, signer)
 	require.EqualError(t, err, "bad signer header")
@@ -678,7 +679,8 @@ func TestSanityCheckAndSignChannelCreateTx(t *testing.T) {
 		nil,
 		&cb.ConfigEnvelope{},
 		0,
-		0)
+		0,
+	)
 	require.NoError(t, err)
 	_, err = sanityCheckAndSignConfigTx(env, signer)
 	require.EqualError(t, err, "signer failed to sign")

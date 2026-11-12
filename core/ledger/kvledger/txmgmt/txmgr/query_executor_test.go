@@ -17,11 +17,50 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/privacyenabledstate"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
+	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb"
 	btltestutil "github.com/hyperledger/fabric/core/ledger/pvtdatapolicy/testutil"
 	"github.com/hyperledger/fabric/core/ledger/util"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
+
+// erroringVersionedDB embeds statedb.VersionedDB so it satisfies the full
+// interface, but only GetState{,Private}MultipleKeys are ever exercised by
+// the tests below - every other method is left as a nil-interface call and
+// would panic if hit, which is the point: it must never be reached.
+type erroringVersionedDB struct {
+	statedb.VersionedDB
+	err error
+}
+
+func (db *erroringVersionedDB) GetStateMultipleKeys(_ string, _ []string) ([]*statedb.VersionedValue, error) {
+	return nil, db.err
+}
+
+func TestGetStateMultipleKeysPropagatesDBError(t *testing.T) {
+	dbErr := errors.New("simulated statedb failure")
+	fakeDB, err := privacyenabledstate.NewDB(&erroringVersionedDB{err: dbErr}, "test-ledger", nil)
+	require.NoError(t, err)
+	txMgr := &LockBasedTxMgr{ledgerid: "test-ledger", db: fakeDB}
+	qe := newQueryExecutor(txMgr, "", nil, false, testHashFunc)
+
+	values, err := qe.GetStateMultipleKeys("ns", []string{"key1", "key2"})
+	require.Error(t, err, "a statedb error must not be swallowed as a silent empty result")
+	require.Nil(t, values)
+}
+
+func TestGetPrivateDataMultipleKeysPropagatesDBError(t *testing.T) {
+	dbErr := errors.New("simulated statedb failure")
+	fakeDB, err := privacyenabledstate.NewDB(&erroringVersionedDB{err: dbErr}, "test-ledger", nil)
+	require.NoError(t, err)
+	txMgr := &LockBasedTxMgr{ledgerid: "test-ledger", db: fakeDB}
+	qe := newQueryExecutor(txMgr, "", nil, false, testHashFunc)
+
+	values, err := qe.GetPrivateDataMultipleKeys("ns", "coll", []string{"key1", "key2"})
+	require.Error(t, err, "a statedb error must not be swallowed as a silent empty result")
+	require.Nil(t, values)
+}
 
 var testHashFunc = func(data []byte) ([]byte, error) {
 	h := sha256.New()
@@ -44,9 +83,10 @@ func TestPvtdataResultsItr(t *testing.T) {
 	defer testEnv.cleanup()
 
 	txMgr := testEnv.getTxMgr()
-	populateCollConfigForTest(t, txMgr, []collConfigkey{
-		{"ns1", "coll1"}, {"ns2", "coll1"}, {"ns3", "coll1"}, {"ns4", "coll1"},
-	},
+	populateCollConfigForTest(
+		t, txMgr, []collConfigkey{
+			{"ns1", "coll1"}, {"ns2", "coll1"}, {"ns3", "coll1"}, {"ns4", "coll1"},
+		},
 		version.NewHeight(1, 0),
 	)
 
@@ -76,8 +116,8 @@ func testItr(t *testing.T, itr commonledger.ResultsIterator, expectedNs string, 
 	for _, expectedKey := range expectedKeys {
 		queryResult, _ := itr.Next()
 		pvtdataKV := queryResult.(*queryresult.KV)
-		ns := pvtdataKV.Namespace
-		key := pvtdataKV.Key
+		ns := pvtdataKV.GetNamespace()
+		key := pvtdataKV.GetKey()
 		require.Equal(t, expectedNs, ns)
 		require.Equal(t, expectedKey, key)
 	}
@@ -198,10 +238,10 @@ func testGetPvtdataHash(t *testing.T, env testEnv) {
 			},
 		},
 	}
-	require.Equal(t, len(expectedRwSet.NsRwSets), len(txrwset.NsRwSets))
+	require.Len(t, txrwset.NsRwSets, len(expectedRwSet.NsRwSets))
 	require.Equal(t, expectedRwSet.NsRwSets[0].NameSpace, txrwset.NsRwSets[0].NameSpace)
 	require.True(t, proto.Equal(expectedRwSet.NsRwSets[0].KvRwSet, txrwset.NsRwSets[0].KvRwSet))
-	require.Equal(t, len(expectedRwSet.NsRwSets[0].CollHashedRwSets), len(txrwset.NsRwSets[0].CollHashedRwSets))
+	require.Len(t, txrwset.NsRwSets[0].CollHashedRwSets, len(expectedRwSet.NsRwSets[0].CollHashedRwSets))
 	require.Equal(t, expectedRwSet.NsRwSets[0].CollHashedRwSets[0].CollectionName, txrwset.NsRwSets[0].CollHashedRwSets[0].CollectionName)
 	require.True(t, proto.Equal(expectedRwSet.NsRwSets[0].CollHashedRwSets[0].HashedRwSet, txrwset.NsRwSets[0].CollHashedRwSets[0].HashedRwSet))
 }

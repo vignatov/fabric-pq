@@ -42,10 +42,10 @@ import (
 	"github.com/tedsuo/ifrit"
 	ginkgomon "github.com/tedsuo/ifrit/ginkgomon_v2"
 	"github.com/tedsuo/ifrit/grouper"
+	"go.yaml.in/yaml/v4"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/proto"
-	"gopkg.in/yaml.v3"
 )
 
 // Blocks defines block cutting config.
@@ -145,6 +145,9 @@ type Profile struct {
 	SmartBFT            *SmartBFT `yaml:"smart_bft,omitempty"`
 }
 
+// GoLevelDB is the value the core template writes to ledger.state.stateDatabase.
+const GoLevelDB = "goleveldb"
+
 // Network holds information about a fabric network.
 type Network struct {
 	RootDir                  string
@@ -164,6 +167,8 @@ type Network struct {
 	PeerDeliveryClientPolicy string
 	UseWriteBatch            bool
 	UseGetMultipleKeys       bool
+	CCEnvVersion             string
+	StateStateDatabase       string
 
 	PortsByOrdererID map[string]Ports
 	PortsByPeerID    map[string]Ports
@@ -198,16 +203,18 @@ func New(c *Config, rootDir string, dockerClient dcli.APIClient, startPort int, 
 		PeerDeliveryClientPolicy: "",
 		UseWriteBatch:            true,
 		UseGetMultipleKeys:       true,
+		CCEnvVersion:             "$(PROJECT_VERSION)",
 
-		Organizations:  c.Organizations,
-		Consensus:      c.Consensus,
-		Orderers:       c.Orderers,
-		Peers:          c.Peers,
-		Channels:       c.Channels,
-		Profiles:       c.Profiles,
-		Templates:      c.Templates,
-		TLSEnabled:     true, // Set TLS enabled as true for default
-		GatewayEnabled: true, // Set Gateway enabled as true for default
+		Organizations:      c.Organizations,
+		Consensus:          c.Consensus,
+		Orderers:           c.Orderers,
+		Peers:              c.Peers,
+		Channels:           c.Channels,
+		Profiles:           c.Profiles,
+		Templates:          c.Templates,
+		TLSEnabled:         true, // Set TLS enabled as true for default
+		GatewayEnabled:     true, // Set Gateway enabled as true for default
+		StateStateDatabase: GoLevelDB,
 
 		mutex:        &sync.Mutex{},
 		lastExecuted: make(map[string]time.Time),
@@ -266,7 +273,7 @@ func assertImagesExist(dockerClient dcli.APIClient, images ...string) {
 		Expect(err).NotTo(HaveOccurred())
 
 		if len(images.Items) != 1 {
-			ginkgo.Fail(fmt.Sprintf("missing required image: %s", imageName), 1)
+			ginkgo.Fail("missing required image: "+imageName, 1)
 		}
 	}
 }
@@ -306,13 +313,13 @@ func (n *Network) CryptoConfigPath() string {
 // OutputBlockPath returns the path to the genesis block for the named system
 // channel.
 func (n *Network) OutputBlockPath(channelName string) string {
-	return filepath.Join(n.RootDir, fmt.Sprintf("%s_block.pb", channelName))
+	return filepath.Join(n.RootDir, channelName+"_block.pb")
 }
 
 // CreateChannelTxPath returns the path to the create channel transaction for
 // the named channel.
 func (n *Network) CreateChannelTxPath(channelName string) string {
-	return filepath.Join(n.RootDir, fmt.Sprintf("%s_tx.pb", channelName))
+	return filepath.Join(n.RootDir, channelName+"_tx.pb")
 }
 
 // OrdererDir returns the path to the configuration directory for the specified
@@ -1017,7 +1024,7 @@ func (n *Network) UpdateOrgAnchorPeers(o *Orderer, channelName, orgName string, 
 	Expect(peersInOrg).ToNot(BeEmpty())
 	currentConfig := GetConfig(n, peersInOrg[0], o, channelName)
 	updatedConfig := proto.Clone(currentConfig).(*common.Config)
-	orgConfigGroup := updatedConfig.ChannelGroup.Groups["Application"].GetGroups()[orgName]
+	orgConfigGroup := updatedConfig.GetChannelGroup().GetGroups()["Application"].GetGroups()[orgName]
 	Expect(orgConfigGroup).NotTo(BeNil())
 
 	updatedAnchorPeers := &pb.AnchorPeers{}
@@ -1157,7 +1164,7 @@ func (n *Network) JoinChannel(name string, o *Orderer, peers ...*Peer) {
 	Eventually(func() string {
 		block, err := Fetch(n, o, name, "0")
 		if err != nil {
-			return fmt.Sprintf("error is %s", err.Error())
+			return "error is " + err.Error()
 		}
 
 		if block == nil {
@@ -1246,7 +1253,7 @@ func (n *Network) Osnadmin(command Command) (*gexec.Session, error) {
 func (n *Network) OrdererRunner(o *Orderer, env ...string) *ginkgomon.Runner {
 	cmd := exec.Command(n.Components.Orderer())
 	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, fmt.Sprintf("FABRIC_CFG_PATH=%s", n.OrdererDir(o)))
+	cmd.Env = append(cmd.Env, "FABRIC_CFG_PATH="+n.OrdererDir(o))
 	cmd.Env = append(cmd.Env, fabricLoggingSpec)
 	cmd.Env = append(cmd.Env, env...)
 
@@ -1381,8 +1388,8 @@ func (n *Network) PeerUserSession(p *Peer, user string, command Command) (*gexec
 	cmd := n.peerCommand(
 		command,
 		n.PeerUserTLSDir(p, user),
-		fmt.Sprintf("FABRIC_CFG_PATH=%s", n.PeerDir(p)),
-		fmt.Sprintf("CORE_PEER_MSPCONFIGPATH=%s", n.PeerUserMSPDir(p, user)),
+		"FABRIC_CFG_PATH="+n.PeerDir(p),
+		"CORE_PEER_MSPCONFIGPATH="+n.PeerUserMSPDir(p, user),
 		fabricLoggingSpec,
 	)
 	return n.StartSession(cmd, command.SessionName())
@@ -1462,10 +1469,10 @@ func (n *Network) IdemixUserSession(p *Peer, idemixOrg *Organization, user strin
 	cmd := n.peerCommand(
 		command,
 		n.PeerUserTLSDir(p, user),
-		fmt.Sprintf("FABRIC_CFG_PATH=%s", n.PeerDir(p)),
-		fmt.Sprintf("CORE_PEER_MSPCONFIGPATH=%s", n.IdemixUserMSPDir(idemixOrg, user)),
-		fmt.Sprintf("CORE_PEER_LOCALMSPTYPE=%s", "idemix"),
-		fmt.Sprintf("CORE_PEER_LOCALMSPID=%s", idemixOrg.MSPID),
+		"FABRIC_CFG_PATH="+n.PeerDir(p),
+		"CORE_PEER_MSPCONFIGPATH="+n.IdemixUserMSPDir(idemixOrg, user),
+		"CORE_PEER_LOCALMSPTYPE="+"idemix",
+		"CORE_PEER_LOCALMSPID="+idemixOrg.MSPID,
 		fabricLoggingSpec,
 	)
 	return n.StartSession(cmd, command.SessionName())
@@ -1477,9 +1484,9 @@ func (n *Network) OrdererAdminSession(o *Orderer, p *Peer, command Command) (*ge
 	cmd := n.peerCommand(
 		command,
 		n.ordererUserCryptoDir(o, "Admin", "tls"),
-		fmt.Sprintf("CORE_PEER_LOCALMSPID=%s", n.Organization(o.Organization).MSPID),
-		fmt.Sprintf("FABRIC_CFG_PATH=%s", n.PeerDir(p)),
-		fmt.Sprintf("CORE_PEER_MSPCONFIGPATH=%s", n.OrdererUserMSPDir(o, "Admin")),
+		"CORE_PEER_LOCALMSPID="+n.Organization(o.Organization).MSPID,
+		"FABRIC_CFG_PATH="+n.PeerDir(p),
+		"CORE_PEER_MSPCONFIGPATH="+n.OrdererUserMSPDir(o, "Admin"),
 		fabricLoggingSpec,
 	)
 	return n.StartSession(cmd, command.SessionName())
@@ -1874,7 +1881,7 @@ func (n *Network) GenerateOrdererConfig(o *Orderer) {
 	t, err := template.New("orderer").Funcs(template.FuncMap{
 		"Orderer":    func() *Orderer { return o },
 		"ToLower":    func(s string) string { return strings.ToLower(s) },
-		"ReplaceAll": func(s, old, new string) string { return strings.Replace(s, old, new, -1) },
+		"ReplaceAll": func(s, old, new string) string { return strings.ReplaceAll(s, old, new) },
 	}).Parse(n.Templates.OrdererTemplate())
 	Expect(err).NotTo(HaveOccurred())
 
@@ -1897,7 +1904,7 @@ func (n *Network) GenerateCoreConfig(p *Peer) {
 	t, err := template.New("peer").Funcs(template.FuncMap{
 		"Peer":       func() *Peer { return p },
 		"ToLower":    func(s string) string { return strings.ToLower(s) },
-		"ReplaceAll": func(s, old, new string) string { return strings.Replace(s, old, new, -1) },
+		"ReplaceAll": func(s, old, new string) string { return strings.ReplaceAll(s, old, new) },
 	}).Parse(n.Templates.CoreTemplate())
 	Expect(err).NotTo(HaveOccurred())
 

@@ -70,7 +70,7 @@ func newTransientStore(t *testing.T) *testTransientStore {
 	s := &testTransientStore{}
 	var err error
 	s.tempdir = t.TempDir()
-	s.storeProvider, err = transientstore.NewStoreProvider(s.tempdir)
+	s.storeProvider, err = transientstore.NewStoreProvider(s.tempdir, ledger.GoLevelDB)
 	if err != nil {
 		t.Fatalf("Failed to open store, got err %s", err)
 		return s
@@ -88,7 +88,8 @@ func (s *testTransientStore) tearDown() {
 }
 
 func (s *testTransientStore) Persist(txid string, blockHeight uint64,
-	privateSimulationResultsWithConfig *transientstore2.TxPvtReadWriteSetWithConfigInfo) error {
+	privateSimulationResultsWithConfig *transientstore2.TxPvtReadWriteSetWithConfigInfo,
+) error {
 	return s.Store.Persist(txid, blockHeight, privateSimulationResultsWithConfig)
 }
 
@@ -517,8 +518,7 @@ func TestLeaderElectionWithRealGossip(t *testing.T) {
 	for idx, i := range secondChannelPeerIndexes {
 		es := &electionService{nil, false, 0}
 		secondChannelServices[idx] = es
-		secondChannelServices[idx].LeaderElectionService =
-			gossips[i].newLeaderElectionComponent(secondChannelName, es.callback, electionMetrics)
+		secondChannelServices[idx].LeaderElectionService = gossips[i].newLeaderElectionComponent(secondChannelName, es.callback, electionMetrics)
 	}
 
 	require.True(t, waitForLeaderElection(secondChannelServices, time.Second*30, time.Second*2), "One leader should be selected for chanB")
@@ -706,7 +706,8 @@ func startPeers(serviceConfig *ServiceConfig, n int, boot ...int) []*gossipGRPC 
 }
 
 func newGossipInstance(serviceConfig *ServiceConfig, port int, id int, gRPCServer *comm.GRPCServer, certs *gossipcommon.TLSCertificates,
-	secureDialOpts api.PeerSecureDialOpts, maxMsgCount int, bootPorts ...int) *gossipGRPC {
+	secureDialOpts api.PeerSecureDialOpts, maxMsgCount int, bootPorts ...int,
+) *gossipGRPC {
 	conf := &gossip.Config{
 		BindPort:                     port,
 		BootstrapPeers:               bootPeers(bootPorts...),

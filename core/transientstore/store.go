@@ -13,11 +13,11 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset"
 	"github.com/hyperledger/fabric-protos-go-apiv2/transientstore"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
+	db "github.com/hyperledger/fabric/common/ledger"
+	"github.com/hyperledger/fabric/common/ledger/util/dbfactory"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/pkg/errors"
-	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -64,38 +64,38 @@ type EndorserPvtSimulationResults struct {
 // Implementation
 // ///////////////////////////////////////////
 
-// storeProvider encapsulates a leveldb provider which is used to store
+// storeProvider encapsulates a database provider which is used to store
 // private write sets of simulated transactions, and implements TransientStoreProvider
 // interface.
 type storeProvider struct {
-	dbProvider *leveldbhelper.Provider
-	fileLock   *leveldbhelper.FileLock
+	dbProvider db.Provider
+	fileLock   db.FileLock
 }
 
 // store holds an instance of a levelDB.
 type Store struct {
-	db       *leveldbhelper.DBHandle
+	db       db.DBHandle
 	ledgerID string
 }
 
 // RwsetScanner helps iterating over results
 type RwsetScanner struct {
 	txid   string
-	dbItr  iterator.Iterator
+	dbItr  db.Iterator
 	filter ledger.PvtNsCollFilter
 }
 
 // NewStoreProvider instantiates TransientStoreProvider
-func NewStoreProvider(path string) (StoreProvider, error) {
+func NewStoreProvider(path, dbType string) (StoreProvider, error) {
 	// Ensure the routine is invoked while the peer is down.
 	lockPath := filepath.Join(filepath.Dir(path), transientStorageLockName)
-	lock := leveldbhelper.NewFileLock(lockPath)
+	lock := dbfactory.NewFileLock(dbType, lockPath)
 	if err := lock.Lock(); err != nil {
 		return nil, errors.WithMessage(err, "as another peer node command is executing,"+
 			" wait for that command to complete its execution or terminate it before retrying")
 	}
 
-	provider, err := newStoreProvider(path, lock)
+	provider, err := newStoreProvider(path, lock, dbType)
 	if err != nil {
 		lock.Unlock()
 		return nil, errors.WithMessagef(err, "could not construct storage provider in folder [%s]", path)
@@ -106,14 +106,14 @@ func NewStoreProvider(path string) (StoreProvider, error) {
 
 // Private method used to unwind a dependency between the package level Drop and NewStoreProvider routines.
 // This routine must be invoked while holding the newStoreProvider file lock.
-func newStoreProvider(providerPath string, fileLock *leveldbhelper.FileLock) (*storeProvider, error) {
+func newStoreProvider(providerPath string, fileLock db.FileLock, dbType string) (*storeProvider, error) {
 	logger.Debugw("opening provider", "providerPath", providerPath)
 
 	if !fileLock.IsLocked() {
 		panic("newStoreProvider invoked without holding 'fileLock'")
 	}
 
-	dbProvider, err := leveldbhelper.NewProvider(&leveldbhelper.Conf{DBPath: providerPath})
+	dbProvider, err := dbfactory.NewProvider(dbType, providerPath, "")
 	if err != nil {
 		return nil, errors.WithMessage(err, "could not open dbprovider")
 	}
@@ -157,7 +157,7 @@ func (provider *storeProvider) markStorageForDelete(ledgerID string) error {
 	}
 
 	// don't update if the storage is already marked for deletion.
-	if slices.Contains(marked.List, ledgerID) {
+	if slices.Contains(marked.GetList(), ledgerID) {
 		logger.Infow("Transient storage was already marked for delete", "ledgerID", ledgerID)
 		return nil
 	}
@@ -223,7 +223,7 @@ func (provider *storeProvider) clearStorageDeletionStatus(ledgerID string) error
 	newDeletes := &PendingDeleteStorageList{}
 
 	// retain all entries other than the one to be cleared.
-	for _, l := range dl.List {
+	for _, l := range dl.GetList() {
 		if ledgerID == l {
 			continue
 		}
@@ -231,7 +231,7 @@ func (provider *storeProvider) clearStorageDeletionStatus(ledgerID string) error
 	}
 
 	// Nothing to do: ledgerID was not in the current delete list
-	if len(dl.List) == len(newDeletes.List) {
+	if len(dl.GetList()) == len(newDeletes.GetList()) {
 		return nil
 	}
 
@@ -250,7 +250,7 @@ func (provider *storeProvider) processPendingStorageDeletions() error {
 		return errors.WithMessage(err, "processing pending deletion list")
 	}
 
-	for _, l := range dl.List {
+	for _, l := range dl.GetList() {
 		err = provider.deleteStore(l)
 		if err != nil {
 			return errors.WithMessagef(err, "processing delete for storage [%s]", l)
@@ -270,12 +270,12 @@ func (provider *storeProvider) processPendingStorageDeletions() error {
 // due to a crash, the storage will be marked with an UNDER_DELETION status in the a system
 // namespace db.  At the next peer startup, transient storage marked with UNDER_DELETION will
 // be scrubbed from the system.
-func Drop(providerPath, ledgerID string) error {
+func Drop(providerPath, ledgerID, dbType string) error {
 	logger.Infow("Dropping ledger from transient storage", "ledgerID", ledgerID, "providerPath", providerPath)
 
 	// Ensure the routine is invoked while the peer is down.
 	lockPath := filepath.Join(filepath.Dir(providerPath), transientStorageLockName)
-	lock := leveldbhelper.NewFileLock(lockPath)
+	lock := dbfactory.NewFileLock(dbType, lockPath)
 	if err := lock.Lock(); err != nil {
 		return errors.New("as another peer node command is executing," +
 			" wait for that command to complete its execution or terminate it before retrying")
@@ -283,7 +283,7 @@ func Drop(providerPath, ledgerID string) error {
 	defer lock.Unlock()
 
 	// Set up a StoreProvider
-	provider, err := newStoreProvider(providerPath, lock)
+	provider, err := newStoreProvider(providerPath, lock, dbType)
 	if err != nil {
 		return errors.WithMessagef(err, "constructing provider from path [%s]", providerPath)
 	}
@@ -313,7 +313,8 @@ func Drop(providerPath, ledgerID string) error {
 // Persist stores the private write set of a transaction along with the collection config
 // in the transient store based on txid and the block height the private data was received at
 func (s *Store) Persist(txid string, blockHeight uint64,
-	privateSimulationResultsWithConfig *transientstore.TxPvtReadWriteSetWithConfigInfo) error {
+	privateSimulationResultsWithConfig *transientstore.TxPvtReadWriteSetWithConfigInfo,
+) error {
 	logger.Debugf("Persisting private data to transient store for txid [%s] at block height [%d]", txid, blockHeight)
 
 	dbBatch := s.db.NewUpdateBatch()
@@ -527,7 +528,7 @@ func (scanner *RwsetScanner) Next() (*EndorserPvtSimulationResults, error) {
 		// trim the tx rwset based on the current collection filter,
 		// nil will be returned to filteredTxPvtRWSet if the transient store txid entry does not contain the data for the collection
 		filteredTxPvtRWSet = trimPvtWSet(txPvtRWSetWithConfig.GetPvtRwset(), scanner.filter)
-		configs, err := trimPvtCollectionConfigs(txPvtRWSetWithConfig.CollectionConfigs, scanner.filter)
+		configs, err := trimPvtCollectionConfigs(txPvtRWSetWithConfig.GetCollectionConfigs(), scanner.filter)
 		if err != nil {
 			return nil, err
 		}

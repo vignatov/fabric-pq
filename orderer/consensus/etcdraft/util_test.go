@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,6 @@ import (
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/protoutil"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -182,7 +182,7 @@ func TestVerifyConfigMetadata(t *testing.T) {
 			singleConsenter,
 		},
 	}
-	assert.Nil(t, VerifyConfigMetadata(goodMetadata, goodVerifyingOpts))
+	require.NoError(t, VerifyConfigMetadata(goodMetadata, goodVerifyingOpts))
 
 	// test variety of bad metadata
 	for _, testCase := range []struct {
@@ -217,7 +217,7 @@ func TestVerifyConfigMetadata(t *testing.T) {
 			description: "ElectionTick is 0",
 			metadata: &etcdraftproto.ConfigMetadata{
 				Options: &etcdraftproto.Options{
-					HeartbeatTick: validOptions.HeartbeatTick,
+					HeartbeatTick: validOptions.GetHeartbeatTick(),
 					ElectionTick:  0,
 				},
 			},
@@ -228,8 +228,8 @@ func TestVerifyConfigMetadata(t *testing.T) {
 			description: "MaxInflightBlocks is 0",
 			metadata: &etcdraftproto.ConfigMetadata{
 				Options: &etcdraftproto.Options{
-					HeartbeatTick:     validOptions.HeartbeatTick,
-					ElectionTick:      validOptions.ElectionTick,
+					HeartbeatTick:     validOptions.GetHeartbeatTick(),
+					ElectionTick:      validOptions.GetElectionTick(),
 					MaxInflightBlocks: 0,
 				},
 			},
@@ -242,7 +242,7 @@ func TestVerifyConfigMetadata(t *testing.T) {
 				Options: &etcdraftproto.Options{
 					HeartbeatTick:     10,
 					ElectionTick:      1,
-					MaxInflightBlocks: validOptions.MaxInflightBlocks,
+					MaxInflightBlocks: validOptions.GetMaxInflightBlocks(),
 				},
 			},
 			verifyOpts: goodVerifyingOpts,
@@ -252,9 +252,9 @@ func TestVerifyConfigMetadata(t *testing.T) {
 			description: "TickInterval is not parsable",
 			metadata: &etcdraftproto.ConfigMetadata{
 				Options: &etcdraftproto.Options{
-					HeartbeatTick:     validOptions.HeartbeatTick,
-					ElectionTick:      validOptions.ElectionTick,
-					MaxInflightBlocks: validOptions.MaxInflightBlocks,
+					HeartbeatTick:     validOptions.GetHeartbeatTick(),
+					ElectionTick:      validOptions.GetElectionTick(),
+					MaxInflightBlocks: validOptions.GetMaxInflightBlocks(),
 					TickInterval:      "abcd",
 				},
 			},
@@ -265,14 +265,27 @@ func TestVerifyConfigMetadata(t *testing.T) {
 			description: "TickInterval is 0",
 			metadata: &etcdraftproto.ConfigMetadata{
 				Options: &etcdraftproto.Options{
-					HeartbeatTick:     validOptions.HeartbeatTick,
-					ElectionTick:      validOptions.ElectionTick,
-					MaxInflightBlocks: validOptions.MaxInflightBlocks,
+					HeartbeatTick:     validOptions.GetHeartbeatTick(),
+					ElectionTick:      validOptions.GetElectionTick(),
+					MaxInflightBlocks: validOptions.GetMaxInflightBlocks(),
 					TickInterval:      "0s",
 				},
 			},
 			verifyOpts: goodVerifyingOpts,
-			errRegex:   "TickInterval cannot be zero",
+			errRegex:   "TickInterval \\(0s\\) must be positive",
+		},
+		{
+			description: "TickInterval is negative",
+			metadata: &etcdraftproto.ConfigMetadata{
+				Options: &etcdraftproto.Options{
+					HeartbeatTick:     validOptions.GetHeartbeatTick(),
+					ElectionTick:      validOptions.GetElectionTick(),
+					MaxInflightBlocks: validOptions.GetMaxInflightBlocks(),
+					TickInterval:      "-500ms",
+				},
+			},
+			verifyOpts: goodVerifyingOpts,
+			errRegex:   "TickInterval \\(-500ms\\) must be positive",
 		},
 		{
 			description: "consenter set is empty",
@@ -364,8 +377,8 @@ func TestVerifyConfigMetadata(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.description, func(t *testing.T) {
-			err := VerifyConfigMetadata(testCase.metadata, testCase.verifyOpts)
-			require.NotNil(t, err, testCase.description)
+			err = VerifyConfigMetadata(testCase.metadata, testCase.verifyOpts)
+			require.Error(t, err, testCase.description)
 			require.Regexp(t, testCase.errRegex, err)
 		})
 	}
@@ -376,7 +389,7 @@ func TestVerifyConfigMetadata(t *testing.T) {
 
 		clientCert := clientPair.TLSCert
 		clientCert.NotAfter = time.Now().Add(-24 * time.Hour)
-		clientCertBytes, err := x509.CreateCertificate(rand.Reader, clientCert, caRootCert, clientPair.Signer.Public(), tlsCA.Signer())
+		clientCertBytes, err := x509.CreateCertificate(rand.Reader, clientCert, caRootCert, clientPair.Public(), tlsCA.Signer())
 		require.NoError(t, err, "failed to create expired certificate")
 
 		clientCert, err = x509.ParseCertificate(clientCertBytes)
@@ -384,7 +397,7 @@ func TestVerifyConfigMetadata(t *testing.T) {
 
 		_, err = clientCert.Verify(goodVerifyingOpts)
 		require.Error(t, err, "expected certificate verification to fail")
-		cie, ok := err.(x509.CertificateInvalidError)
+		cie, ok := errors.AsType[x509.CertificateInvalidError](err)
 		require.True(t, ok, "expected an x509.CertificateInvalidError but got %T", err)
 		require.Equal(t, x509.Expired, cie.Reason)
 
@@ -408,7 +421,7 @@ func TestVerifyConfigMetadata(t *testing.T) {
 			},
 		}
 
-		require.Nil(t, VerifyConfigMetadata(metadataWithExpiredConsenter, goodVerifyingOpts))
+		require.NoError(t, VerifyConfigMetadata(metadataWithExpiredConsenter, goodVerifyingOpts))
 	})
 }
 
@@ -424,7 +437,7 @@ func TestMetadataFromConfigValue(t *testing.T) {
 
 	metadata, consensusType, err := MetadataFromConfigValue(configValue)
 	require.Nil(t, metadata)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.NotNil(t, consensusType)
-	require.Equal(t, consensusType.Type, "BFT")
+	require.Equal(t, "BFT", consensusType.GetType())
 }

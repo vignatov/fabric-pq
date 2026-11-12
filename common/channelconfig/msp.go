@@ -42,11 +42,11 @@ func (bh *MSPConfigHandler) ProposeMSP(mspConfig *mspprotos.MSPConfig) (msp.MSP,
 	var theMsp msp.MSP
 	var err error
 
-	switch mspConfig.Type {
+	switch mspConfig.GetType() {
 	case int32(msp.FABRIC):
 		// create the bccsp msp instance
 		mspInst, err := msp.New(
-			&msp.BCCSPNewOpts{NewBaseOpts: msp.NewBaseOpts{Version: bh.version}},
+			&msp.BCCSPNewOpts{Version: bh.version},
 			bh.bccsp,
 		)
 		if err != nil {
@@ -61,14 +61,14 @@ func (bh *MSPConfigHandler) ProposeMSP(mspConfig *mspprotos.MSPConfig) (msp.MSP,
 	case int32(msp.IDEMIX):
 		// create the idemix msp instance
 		theMsp, err = msp.New(
-			&msp.IdemixNewOpts{NewBaseOpts: msp.NewBaseOpts{Version: bh.version}},
+			&msp.IdemixNewOpts{Version: bh.version},
 			bh.bccsp,
 		)
 		if err != nil {
 			return nil, errors.WithMessage(err, "creating the MSP manager failed")
 		}
 	default:
-		return nil, errors.New(fmt.Sprintf("Setup error: unsupported msp type %d", mspConfig.Type))
+		return nil, errors.New(fmt.Sprintf("Setup error: unsupported msp type %d", mspConfig.GetType()))
 	}
 
 	// set it up
@@ -82,7 +82,7 @@ func (bh *MSPConfigHandler) ProposeMSP(mspConfig *mspprotos.MSPConfig) (msp.MSP,
 
 	existingPendingMSPConfig, ok := bh.idMap[mspID]
 	if ok && !proto.Equal(existingPendingMSPConfig.mspConfig, mspConfig) {
-		return nil, errors.New(fmt.Sprintf("Attempted to define two different versions of MSP: %s", mspID))
+		return nil, errors.New("Attempted to define two different versions of MSP: " + mspID)
 	}
 
 	if !ok {

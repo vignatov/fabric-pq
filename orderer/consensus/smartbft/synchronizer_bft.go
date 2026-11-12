@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/pkg/types"
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -98,7 +98,7 @@ func (s *BFTSynchronizer) synchronize() (*types.Decision, error) {
 	}
 
 	// === Create a buffer to accept the blocks delivered from the BFTDeliverer.
-	capacityBlocks := max(uint(s.LocalConfigCluster.ReplicationBufferSize)/uint(s.Support.SharedConfig().BatchSize().AbsoluteMaxBytes), 100)
+	capacityBlocks := max(uint(s.LocalConfigCluster.ReplicationBufferSize)/uint(s.Support.SharedConfig().BatchSize().GetAbsoluteMaxBytes()), 100)
 	s.mutex.Lock()
 	s.syncBuff = NewSyncBuffer(capacityBlocks)
 	s.mutex.Unlock()
@@ -275,7 +275,7 @@ func (s *BFTSynchronizer) getBlocksFromSyncBuffer(startHeight, targetHeight uint
 	}
 
 	s.Logger.Infof("Finished synchronizing with cluster, fetched %d blocks, starting from block [%d], up until and including block [%d]",
-		blocksFetched, startHeight, lastPulledBlock.Header.Number)
+		blocksFetched, startHeight, lastPulledBlock.GetHeader().GetNumber())
 
 	return lastPulledBlock, nil
 }

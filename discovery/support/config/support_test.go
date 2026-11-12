@@ -9,7 +9,6 @@ package config_test
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,7 +36,7 @@ func TestMSPIDMapping(t *testing.T) {
 		return hex.EncodeToString(buff)
 	}
 
-	dir := filepath.Join(os.TempDir(), fmt.Sprintf("TestMSPIDMapping_%s", randString()))
+	dir := filepath.Join(os.TempDir(), "TestMSPIDMapping_"+randString())
 	os.Mkdir(dir, 0o700)
 	defer os.RemoveAll(dir)
 
@@ -50,11 +49,11 @@ func TestMSPIDMapping(t *testing.T) {
 	defer os.Remove(idemixgen)
 
 	cryptoConfigDir := filepath.Join(dir, "crypto-config")
-	b, err := exec.Command(cryptogen, "generate", fmt.Sprintf("--output=%s", cryptoConfigDir)).CombinedOutput()
+	b, err := exec.Command(cryptogen, "generate", "--output="+cryptoConfigDir).CombinedOutput()
 	require.NoError(t, err, string(b))
 
 	idemixConfigDir := filepath.Join(dir, "crypto-config", "idemix")
-	b, err = exec.Command(idemixgen, "ca-keygen", fmt.Sprintf("--output=%s", idemixConfigDir)).CombinedOutput()
+	b, err = exec.Command(idemixgen, "ca-keygen", "--output="+idemixConfigDir).CombinedOutput()
 	require.NoError(t, err, string(b))
 
 	profileConfig := genesisconfig.Load("TwoOrgsChannel", "testdata/")
@@ -95,11 +94,11 @@ func TestMSPIDMapping(t *testing.T) {
 	require.NoError(t, err)
 
 	actualKeys := make(map[string]struct{})
-	for key := range res.Orderers {
+	for key := range res.GetOrderers() {
 		actualKeys[key] = struct{}{}
 	}
 
-	for key := range res.Msps {
+	for key := range res.GetMsps() {
 		actualKeys[key] = struct{}{}
 	}
 
@@ -244,7 +243,7 @@ func TestOrdererEndpoints(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, map[string]*discovery.Endpoints{
 			"SampleOrg": {Endpoint: []*discovery.Endpoint{{Host: "globalEndpoint", Port: 7050}}},
-		}, res.Orderers)
+		}, res.GetOrderers())
 	})
 
 	t.Run("Per org endpoints alongside global endpoints", func(t *testing.T) {
@@ -265,7 +264,7 @@ func TestOrdererEndpoints(t *testing.T) {
 			"SampleOrg":  {Endpoint: []*discovery.Endpoint{{Host: "127.0.0.1", Port: 7050}}},
 			"anotherOrg": {Endpoint: []*discovery.Endpoint{{Host: "perOrgEndpoint", Port: 7050}}},
 			"aBadOrg":    {},
-		}, res.Orderers)
+		}, res.GetOrderers())
 	})
 
 	t.Run("Per org endpoints without global endpoints", func(t *testing.T) {
@@ -286,13 +285,13 @@ func TestOrdererEndpoints(t *testing.T) {
 		require.Equal(t, map[string]*discovery.Endpoints{
 			"SampleOrg": {Endpoint: []*discovery.Endpoint{{Host: "perOrgEndpoint", Port: 7050}}},
 			"aBadOrg":   {},
-		}, res.Orderers)
+		}, res.GetOrderers())
 	})
 }
 
 func removeGlobalEndpoints(t *testing.T, config *common.Config) {
 	// Remove the orderer addresses
-	delete(config.ChannelGroup.Values, channelconfig.OrdererAddressesKey)
+	delete(config.GetChannelGroup().GetValues(), channelconfig.OrdererAddressesKey)
 }
 
 func injectGlobalOrdererEndpoint(t *testing.T, config *common.Config, endpoint string) {
@@ -303,9 +302,9 @@ func injectGlobalOrdererEndpoint(t *testing.T, config *common.Config, endpoint s
 		ModPolicy: "/Channel/Orderer/Admins",
 	}
 	// Remove the per org addresses, if applicable
-	ordererGrps := config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Groups
+	ordererGrps := config.GetChannelGroup().GetGroups()[channelconfig.OrdererGroupKey].GetGroups()
 	for _, grp := range ordererGrps {
-		if grp.Values[channelconfig.EndpointsKey] == nil {
+		if grp.GetValues()[channelconfig.EndpointsKey] == nil {
 			continue
 		}
 		grp.Values[channelconfig.EndpointsKey].Value = nil
@@ -313,7 +312,7 @@ func injectGlobalOrdererEndpoint(t *testing.T, config *common.Config, endpoint s
 }
 
 func injectAdditionalEndpointPair(t *testing.T, config *common.Config, endpoint string, orgName string) {
-	ordererGrp := config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Groups
+	ordererGrp := config.GetChannelGroup().GetGroups()[channelconfig.OrdererGroupKey].GetGroups()
 	// Get the first orderer org config
 	var firstOrdererConfig *common.ConfigGroup
 	for _, grp := range ordererGrp {
@@ -325,11 +324,11 @@ func injectAdditionalEndpointPair(t *testing.T, config *common.Config, endpoint 
 	ordererGrp[orgName] = secondOrdererConfig
 	// Reach the FabricMSPConfig buried in it.
 	mspConfig := &msp.MSPConfig{}
-	err := proto.Unmarshal(secondOrdererConfig.Values[channelconfig.MSPKey].Value, mspConfig)
+	err := proto.Unmarshal(secondOrdererConfig.GetValues()[channelconfig.MSPKey].GetValue(), mspConfig)
 	require.NoError(t, err)
 
 	fabricConfig := &msp.FabricMSPConfig{}
-	err = proto.Unmarshal(mspConfig.Config, fabricConfig)
+	err = proto.Unmarshal(mspConfig.GetConfig(), fabricConfig)
 	require.NoError(t, err)
 
 	// Rename it.
@@ -338,7 +337,7 @@ func injectAdditionalEndpointPair(t *testing.T, config *common.Config, endpoint 
 	// Pack the MSP config back into the config
 	secondOrdererConfig.Values[channelconfig.MSPKey].Value = protoutil.MarshalOrPanic(&msp.MSPConfig{
 		Config: protoutil.MarshalOrPanic(fabricConfig),
-		Type:   mspConfig.Type,
+		Type:   mspConfig.GetType(),
 	})
 
 	// Inject the endpoint

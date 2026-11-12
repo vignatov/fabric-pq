@@ -104,11 +104,11 @@ type policyAccessFactory struct {
 
 func (p *policyAccessFactory) AccessPolicy(config *peer.CollectionConfig, chainID string) (privdata.CollectionAccessPolicy, error) {
 	colAP := &privdata.SimpleCollection{}
-	switch cconf := config.Payload.(type) {
+	switch cconf := config.GetPayload().(type) {
 	case *peer.CollectionConfig_StaticCollectionConfig:
 		err := colAP.Setup(cconf.StaticCollectionConfig, p.GetIdentityDeserializer(chainID))
 		if err != nil {
-			return nil, errors.WithMessagef(err, "error setting up collection  %#v", cconf.StaticCollectionConfig.Name)
+			return nil, errors.WithMessagef(err, "error setting up collection  %#v", cconf.StaticCollectionConfig.GetName())
 		}
 	default:
 		return nil, errors.New("unexpected collection type")
@@ -126,7 +126,8 @@ func NewCollectionAccessFactory(factory IdentityDeserializerFactory) CollectionA
 // NewDistributor a constructor for private data distributor capable to send
 // private read write sets for underlying collection
 func NewDistributor(chainID string, gossip gossipAdapter, factory CollectionAccessFactory,
-	metrics *metrics.PrivdataMetrics, pushAckTimeout time.Duration) PvtDataDistributor {
+	metrics *metrics.PrivdataMetrics, pushAckTimeout time.Duration,
+) PvtDataDistributor {
 	return &distributorImpl{
 		chainID:                 chainID,
 		gossipAdapter:           gossip,
@@ -153,20 +154,21 @@ type dissemination struct {
 
 func (d *distributorImpl) computeDisseminationPlan(txID string,
 	privDataWithConfig *transientstore.TxPvtReadWriteSetWithConfigInfo,
-	blkHt uint64) ([]*dissemination, error) {
-	privData := privDataWithConfig.PvtRwset
+	blkHt uint64,
+) ([]*dissemination, error) {
+	privData := privDataWithConfig.GetPvtRwset()
 	var disseminationPlan []*dissemination
-	for _, pvtRwset := range privData.NsPvtRwset {
-		namespace := pvtRwset.Namespace
-		configPackage, found := privDataWithConfig.CollectionConfigs[namespace]
+	for _, pvtRwset := range privData.GetNsPvtRwset() {
+		namespace := pvtRwset.GetNamespace()
+		configPackage, found := privDataWithConfig.GetCollectionConfigs()[namespace]
 		if !found {
 			d.logger.Error("Collection config package for", namespace, "chaincode is not provided")
 			return nil, errors.New(fmt.Sprint("collection config package for", namespace, "chaincode is not provided"))
 		}
 
-		for _, collection := range pvtRwset.CollectionPvtRwset {
+		for _, collection := range pvtRwset.GetCollectionPvtRwset() {
 			colCP, err := d.getCollectionConfig(configPackage, collection)
-			collectionName := collection.CollectionName
+			collectionName := collection.GetCollectionName()
 			if err != nil {
 				d.logger.Error("Could not find collection access policy for", namespace, " and collection", collectionName, "error", err)
 				return nil, errors.WithMessage(err, fmt.Sprint("could not find collection access policy for", namespace, " and collection", collectionName, "error", err))
@@ -201,20 +203,20 @@ func (d *distributorImpl) computeDisseminationPlan(txID string,
 }
 
 func (d *distributorImpl) getCollectionConfig(config *peer.CollectionConfigPackage, collection *rwset.CollectionPvtReadWriteSet) (*peer.CollectionConfig, error) {
-	for _, c := range config.Config {
+	for _, c := range config.GetConfig() {
 		if staticConfig := c.GetStaticCollectionConfig(); staticConfig != nil {
-			if staticConfig.Name == collection.CollectionName {
+			if staticConfig.GetName() == collection.GetCollectionName() {
 				return c, nil
 			}
 		}
 	}
-	return nil, errors.New(fmt.Sprint("no configuration for collection", collection.CollectionName, "found"))
+	return nil, errors.New(fmt.Sprint("no configuration for collection", collection.GetCollectionName(), "found"))
 }
 
 func (d *distributorImpl) disseminationPlanForMsg(colAP privdata.CollectionAccessPolicy, colFilter privdata.Filter, pvtDataMsg *protoext.SignedGossipMessage) ([]*dissemination, error) {
 	var disseminationPlan []*dissemination
 
-	routingFilter, err := d.gossipAdapter.PeerFilter(gossipCommon.ChannelID(d.chainID), func(signature api.PeerSignature) bool {
+	routingFilter, err := d.PeerFilter(gossipCommon.ChannelID(d.chainID), func(signature api.PeerSignature) bool {
 		return colFilter(protoutil.SignedData{
 			Data:      signature.Message,
 			Signature: signature.Signature,
@@ -226,13 +228,13 @@ func (d *distributorImpl) disseminationPlanForMsg(colAP privdata.CollectionAcces
 		return nil, err
 	}
 
-	m := pvtDataMsg.GetPrivateData().Payload
+	m := pvtDataMsg.GetPrivateData().GetPayload()
 
 	eligiblePeers := d.eligiblePeersOfChannel(routingFilter)
 
 	// With the shift to per peer dissemination in FAB-15389, we must first check
 	// that there are enough eligible peers to satisfy RequiredPeerCount.
-	if (len(eligiblePeers)) < colAP.RequiredPeerCount() {
+	if len(eligiblePeers) < colAP.RequiredPeerCount() {
 		return nil, errors.Errorf("required to disseminate to at least %d peers, but know of only %d eligible peers", colAP.RequiredPeerCount(), len(eligiblePeers))
 	}
 
@@ -264,7 +266,6 @@ func (d *distributorImpl) disseminationPlanForMsg(colAP privdata.CollectionAcces
 	// PHASE 1 - Select one peer from each eligible org
 	if maximumPeerRemainingCount > 0 {
 		for _, selectionPeersForOrg := range identitySetsByOrg {
-
 			// Peers are tagged as a required peer (acksRequired=1) for RequiredPeerCount up front before dissemination.
 			// TODO It would be better to attempt dissemination to MaxPeerCount first, and then verify that enough sends were acknowledged to meet RequiredPeerCount.
 			acksRequired := 1
@@ -306,7 +307,7 @@ func (d *distributorImpl) disseminationPlanForMsg(colAP privdata.CollectionAcces
 			maximumPeerRemainingCount--
 			if maximumPeerRemainingCount == 0 {
 				d.logger.Debug("MaximumPeerCount satisfied")
-				d.logger.Debugf("Disseminating private RWSet for TxID [%s] namespace [%s] collection [%s] to peers: %v", m.TxId, m.Namespace, m.CollectionName, selectedPeerEndpointsForDebug)
+				d.logger.Debugf("Disseminating private RWSet for TxID [%s] namespace [%s] collection [%s] to peers: %v", m.GetTxId(), m.GetNamespace(), m.GetCollectionName(), selectedPeerEndpointsForDebug)
 				return disseminationPlan, nil
 			}
 		}
@@ -351,7 +352,7 @@ func (d *distributorImpl) disseminationPlanForMsg(colAP privdata.CollectionAcces
 		remainingPeersAcrossOrgs = append(remainingPeersAcrossOrgs[:selectedPeerIndex], remainingPeersAcrossOrgs[selectedPeerIndex+1:]...)
 	}
 
-	d.logger.Debugf("Disseminating private RWSet for TxID [%s] namespace [%s] collection [%s] to peers: %v", m.TxId, m.Namespace, m.CollectionName, selectedPeerEndpointsForDebug)
+	d.logger.Debugf("Disseminating private RWSet for TxID [%s] namespace [%s] collection [%s] to peers: %v", m.GetTxId(), m.GetNamespace(), m.GetCollectionName(), selectedPeerEndpointsForDebug)
 	return disseminationPlan, nil
 }
 
@@ -377,7 +378,7 @@ func (d *distributorImpl) identitiesOfEligiblePeersByOrg(eligiblePeers []discove
 
 func (d *distributorImpl) eligiblePeersOfChannel(routingFilter filter.RoutingFilter) []discovery.NetworkMember {
 	var eligiblePeers []discovery.NetworkMember
-	for _, peer := range d.gossipAdapter.PeersOfChannel(gossipCommon.ChannelID(d.chainID)) {
+	for _, peer := range d.PeersOfChannel(gossipCommon.ChannelID(d.chainID)) {
 		if routingFilter(peer) {
 			eligiblePeers = append(eligiblePeers, peer)
 		}
@@ -386,7 +387,7 @@ func (d *distributorImpl) eligiblePeersOfChannel(routingFilter filter.RoutingFil
 }
 
 func (d *distributorImpl) disseminate(disseminationPlan []*dissemination) error {
-	var failures uint32
+	var failures atomic.Uint32
 	var wg sync.WaitGroup
 	wg.Add(len(disseminationPlan))
 	start := time.Now()
@@ -396,14 +397,14 @@ func (d *distributorImpl) disseminate(disseminationPlan []*dissemination) error 
 			defer d.reportSendDuration(start)
 			err := d.SendByCriteria(dis.msg, dis.criteria)
 			if err != nil {
-				atomic.AddUint32(&failures, 1)
-				m := dis.msg.GetPrivateData().Payload
-				d.logger.Error("Failed disseminating private RWSet for TxID", m.TxId, ", namespace", m.Namespace, "collection", m.CollectionName, ":", err)
+				failures.Add(1)
+				m := dis.msg.GetPrivateData().GetPayload()
+				d.logger.Error("Failed disseminating private RWSet for TxID", m.GetTxId(), ", namespace", m.GetNamespace(), "collection", m.GetCollectionName(), ":", err)
 			}
 		}(dis)
 	}
 	wg.Wait()
-	failureCount := atomic.LoadUint32(&failures)
+	failureCount := failures.Load()
 	if failureCount != 0 {
 		return errors.Errorf("Failed disseminating %d out of %d private dissemination plans", failureCount, len(disseminationPlan))
 	}
@@ -417,7 +418,8 @@ func (d *distributorImpl) reportSendDuration(startTime time.Time) {
 func (d *distributorImpl) createPrivateDataMessage(txID, namespace string,
 	collection *rwset.CollectionPvtReadWriteSet,
 	ccp *peer.CollectionConfigPackage,
-	blkHt uint64) (*protoext.SignedGossipMessage, error) {
+	blkHt uint64,
+) (*protoext.SignedGossipMessage, error) {
 	msg := &protosgossip.GossipMessage{
 		Channel: []byte(d.chainID),
 		Nonce:   util.RandomUInt64(),
@@ -426,9 +428,9 @@ func (d *distributorImpl) createPrivateDataMessage(txID, namespace string,
 			PrivateData: &protosgossip.PrivateDataMessage{
 				Payload: &protosgossip.PrivatePayload{
 					Namespace:         namespace,
-					CollectionName:    collection.CollectionName,
+					CollectionName:    collection.GetCollectionName(),
 					TxId:              txID,
-					PrivateRwset:      collection.Rwset,
+					PrivateRwset:      collection.GetRwset(),
 					PrivateSimHeight:  blkHt,
 					CollectionConfigs: ccp,
 				},

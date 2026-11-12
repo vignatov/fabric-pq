@@ -12,7 +12,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
+	dbpkg "github.com/hyperledger/fabric/common/ledger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,14 +30,14 @@ func TestEncodeDecodeCompositeKey(t *testing.T) {
 }
 
 func TestCompareEncodedHeight(t *testing.T) {
-	require.Equal(t, bytes.Compare(encodeBlockNum(20), encodeBlockNum(40)), 1)
-	require.Equal(t, bytes.Compare(encodeBlockNum(40), encodeBlockNum(10)), -1)
+	require.Equal(t, 1, bytes.Compare(encodeBlockNum(20), encodeBlockNum(40)))
+	require.Equal(t, -1, bytes.Compare(encodeBlockNum(40), encodeBlockNum(10)))
 }
 
 func TestQueries(t *testing.T) {
 	testDBPath := "/tmp/fabric/core/ledger/confighistory"
 	deleteTestPath(t, testDBPath)
-	provider, err := newDBProvider(testDBPath)
+	provider, err := newDBProvider(testDBPath, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 	defer deleteTestPath(t, testDBPath)
 
@@ -81,7 +81,7 @@ func TestQueries(t *testing.T) {
 
 func TestGetNamespaceIterator(t *testing.T) {
 	testDBPath := "/tmp/fabric/core/ledger/confighistory"
-	provider, err := newDBProvider(testDBPath)
+	provider, err := newDBProvider(testDBPath, dbpkg.GoLevelDB)
 	require.NoError(t, err)
 	defer deleteTestPath(t, testDBPath)
 
@@ -119,7 +119,7 @@ func TestGetNamespaceIterator(t *testing.T) {
 	})
 }
 
-func verifyNsEntries(t *testing.T, nsItr *leveldbhelper.Iterator, expectedEntries []*compositeKV) {
+func verifyNsEntries(t *testing.T, nsItr dbpkg.Iterator, expectedEntries []*compositeKV) {
 	var retrievedEntries []*compositeKV
 	for nsItr.Next() {
 		require.NoError(t, nsItr.Error())

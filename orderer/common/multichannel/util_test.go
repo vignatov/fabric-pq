@@ -8,6 +8,7 @@ package multichannel
 
 import (
 	"fmt"
+	"strconv"
 
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/capabilities"
@@ -109,7 +110,7 @@ func (mch *mockChain) Halt() {
 func makeConfigTx(chainID string, i int) *cb.Envelope {
 	group := protoutil.NewConfigGroup()
 	group.Groups[channelconfig.OrdererGroupKey] = protoutil.NewConfigGroup()
-	group.Groups[channelconfig.OrdererGroupKey].Values[fmt.Sprintf("%d", i)] = &cb.ConfigValue{
+	group.Groups[channelconfig.OrdererGroupKey].Values[strconv.Itoa(i)] = &cb.ConfigValue{
 		Value: fmt.Appendf(nil, "%d", i),
 	}
 	return makeConfigTxFromConfigUpdateEnvelope(chainID, &cb.ConfigUpdateEnvelope{
@@ -163,7 +164,7 @@ func makeConfigTxFromConfigUpdateEnvelope(chainID string, configUpdateEnv *cb.Co
 		panic(err)
 	}
 	configTx, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG, chainID, mockCrypto(), &cb.ConfigEnvelope{
-		Config:     &cb.Config{Sequence: 1, ChannelGroup: configtx.UnmarshalConfigUpdateOrPanic(configUpdateEnv.ConfigUpdate).WriteSet},
+		Config:     &cb.Config{Sequence: 1, ChannelGroup: configtx.UnmarshalConfigUpdateOrPanic(configUpdateEnv.GetConfigUpdate()).GetWriteSet()},
 		LastUpdate: configUpdateTx,
 	},
 		msgVersion, epoch)

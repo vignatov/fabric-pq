@@ -10,7 +10,7 @@ import (
 	"encoding/asn1"
 	"math/big"
 
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/pkg/types"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/pkg/errors"
@@ -78,11 +78,11 @@ func ProposalToBlock(proposal types.Proposal) (*cb.Block, error) {
 		return nil, errors.Wrap(err, "bad payload and metadata tuple")
 	}
 
-	if err := proto.Unmarshal(tuple.A, block.Data); err != nil {
+	if err := proto.Unmarshal(tuple.A, block.GetData()); err != nil {
 		return nil, errors.Wrap(err, "bad payload")
 	}
 
-	if err := proto.Unmarshal(tuple.B, block.Metadata); err != nil {
+	if err := proto.Unmarshal(tuple.B, block.GetMetadata()); err != nil {
 		return nil, errors.Wrap(err, "bad metadata")
 	}
 	return block, nil

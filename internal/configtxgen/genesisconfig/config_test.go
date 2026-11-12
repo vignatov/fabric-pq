@@ -7,7 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 package genesisconfig
 
 import (
+	"encoding/json/v2"
 	"testing"
+	"time"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
 	"github.com/hyperledger/fabric/common/viperutil"
@@ -192,11 +194,11 @@ func TestConsensusSpecificInit(t *testing.T) {
 
 				// need not be tested in subsequent tests
 				require.NotNil(t, profile.Orderer.EtcdRaft, "EtcdRaft config settings should be set")
-				require.Equal(t, profile.Orderer.EtcdRaft.Consenters[0].ClientTlsCert, consenters[0].ClientTlsCert,
+				require.Equal(t, profile.Orderer.EtcdRaft.GetConsenters()[0].GetClientTlsCert(), consenters[0].GetClientTlsCert(),
 					"Client TLS cert path should be correctly set")
 
 				// specific assertion for this test context
-				require.Equal(t, profile.Orderer.EtcdRaft.Options, genesisDefaults.Orderer.EtcdRaft.Options,
+				require.Equal(t, profile.Orderer.EtcdRaft.GetOptions(), genesisDefaults.Orderer.EtcdRaft.GetOptions(),
 					"Options should be set to the default value")
 			})
 
@@ -209,9 +211,9 @@ func TestConsensusSpecificInit(t *testing.T) {
 				profile.completeInitialization(devConfigDir)
 
 				// specific assertions for this test context
-				require.Equal(t, profile.Orderer.EtcdRaft.Options.HeartbeatTick, heartbeatTick,
+				require.Equal(t, profile.Orderer.EtcdRaft.GetOptions().GetHeartbeatTick(), heartbeatTick,
 					"HeartbeatTick should be set to the specified value")
-				require.Equal(t, profile.Orderer.EtcdRaft.Options.ElectionTick, genesisDefaults.Orderer.EtcdRaft.Options.ElectionTick,
+				require.Equal(t, profile.Orderer.EtcdRaft.GetOptions().GetElectionTick(), genesisDefaults.Orderer.EtcdRaft.GetOptions().GetElectionTick(),
 					"ElectionTick should be set to the default value")
 			})
 
@@ -224,9 +226,9 @@ func TestConsensusSpecificInit(t *testing.T) {
 				profile.completeInitialization(devConfigDir)
 
 				// specific assertions for this test context
-				require.Equal(t, profile.Orderer.EtcdRaft.Options.ElectionTick, electionTick,
+				require.Equal(t, profile.Orderer.EtcdRaft.GetOptions().GetElectionTick(), electionTick,
 					"ElectionTick should be set to the specified value")
-				require.Equal(t, profile.Orderer.EtcdRaft.Options.HeartbeatTick, genesisDefaults.Orderer.EtcdRaft.Options.HeartbeatTick,
+				require.Equal(t, profile.Orderer.EtcdRaft.GetOptions().GetHeartbeatTick(), genesisDefaults.Orderer.EtcdRaft.GetOptions().GetHeartbeatTick(),
 					"HeartbeatTick should be set to the default value")
 			})
 
@@ -254,6 +256,28 @@ func TestConsensusSpecificInit(t *testing.T) {
 			})
 		})
 	})
+}
+
+// jsonOptions must keep FormatNilSliceAsNull/FormatNilMapAsNull and the
+// Duration marshalers: v2 would otherwise serialize nil slices as [] (breaking
+// the cache round-trip equality) and reject time.Duration values entirely.
+func TestJSONOptionsDurationAndNilSlice(t *testing.T) {
+	type probe struct {
+		Timeout time.Duration `json:"timeout"`
+		Names   []string      `json:"names"`
+		Attrs   map[string]string
+	}
+
+	b, err := json.Marshal(&probe{Timeout: 7 * time.Second}, jsonOptions...)
+	require.NoError(t, err)
+	require.Equal(t, `{"timeout":7000000000,"names":null,"Attrs":null}`, string(b))
+
+	var out probe
+	err = json.Unmarshal(b, &out, jsonOptions...)
+	require.NoError(t, err)
+	require.Equal(t, 7*time.Second, out.Timeout)
+	require.Nil(t, out.Names)
+	require.Nil(t, out.Attrs)
 }
 
 func TestLoadConfigCache(t *testing.T) {

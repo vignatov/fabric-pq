@@ -60,7 +60,7 @@ func ConfigBlockFromLedger(ledger ledger.PeerLedger) (*common.Block, error) {
 	if err != nil {
 		return nil, err
 	}
-	lastBlock, err := ledger.GetBlockByNumber(blockchainInfo.Height - 1)
+	lastBlock, err := ledger.GetBlockByNumber(blockchainInfo.GetHeight() - 1)
 	if err != nil {
 		return nil, err
 	}
@@ -490,7 +490,7 @@ func (p *Peer) Initialize(
 
 	ledgerIds, err := p.LedgerMgr.GetLedgerIDs()
 	if err != nil {
-		panic(fmt.Errorf("error in initializing ledgermgmt: %s", err))
+		panic(fmt.Errorf("error in initializing ledgermgmt: %w", err))
 	}
 
 	for _, cid := range ledgerIds {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
@@ -38,7 +39,7 @@ var (
 // - generate a snapshot from the block store
 // - bootstrap another block store from the snapshot
 func BootstrapBlockstoreFromSnapshot(t *testing.T, ledgerName string, blocks []*common.Block) (*blkstorage.BlockStore, func()) {
-	require.NotEqual(t, 0, len(blocks))
+	require.NotEmpty(t, blocks)
 
 	testDir := t.TempDir()
 	snapshotDir := filepath.Join(testDir, "snapshot")
@@ -46,7 +47,7 @@ func BootstrapBlockstoreFromSnapshot(t *testing.T, ledgerName string, blocks []*
 
 	conf := blkstorage.NewConf(testDir, 0)
 	indexConfig := &blkstorage.IndexConfig{AttrsToIndex: attrsToIndex}
-	provider, err := blkstorage.NewProvider(conf, indexConfig, &disabled.Provider{})
+	provider, err := blkstorage.NewProvider(conf, indexConfig, &disabled.Provider{}, db.GoLevelDB)
 	require.NoError(t, err)
 
 	// create an original store from the provided blocks so that we can create a snapshot
@@ -62,9 +63,9 @@ func BootstrapBlockstoreFromSnapshot(t *testing.T, ledgerName string, blocks []*
 
 	lastBlockInSnapshot := blocks[len(blocks)-1]
 	snapshotInfo := &blkstorage.SnapshotInfo{
-		LastBlockHash:     protoutil.BlockHeaderHash(lastBlockInSnapshot.Header),
-		LastBlockNum:      lastBlockInSnapshot.Header.Number,
-		PreviousBlockHash: lastBlockInSnapshot.Header.PreviousHash,
+		LastBlockHash:     protoutil.BlockHeaderHash(lastBlockInSnapshot.GetHeader()),
+		LastBlockNum:      lastBlockInSnapshot.GetHeader().GetNumber(),
+		PreviousBlockHash: lastBlockInSnapshot.GetHeader().GetPreviousHash(),
 	}
 
 	err = provider.ImportFromSnapshot(ledgerName, snapshotDir, snapshotInfo)

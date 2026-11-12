@@ -9,7 +9,7 @@ package experiments
 import (
 	"bytes"
 	crand "crypto/rand"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"math/rand/v2"
 	"strconv"
@@ -136,6 +136,6 @@ func constructRandomBytes(length int) []byte {
 
 func panicOnError(err error) {
 	if err != nil {
-		panic(fmt.Errorf("Error:%s", err))
+		panic(fmt.Errorf("Error:%w", err))
 	}
 }

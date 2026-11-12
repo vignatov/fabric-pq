@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/config/configtest"
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
 	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
 	"github.com/hyperledger/fabric/internal/configtxlator/update"
@@ -88,6 +90,7 @@ type signerSerializer interface {
 type consenter interface {
 	consensus.Consenter
 	consensus.ClusterConsenter
+	consensus.ChannelDataRemover
 }
 
 //go:generate counterfeiter -o mocks/channel_support.go --fake-name ChannelSupport . channelSupporter
@@ -101,7 +104,7 @@ func mockCrypto() *mocks.SignerSerializer {
 }
 
 func newFactory(dir string) blockledger.Factory {
-	rlf, err := fileledger.New(dir, &disabled.Provider{})
+	rlf, err := fileledger.New(dir, ledger.GoLevelDB, &disabled.Provider{})
 	if err != nil {
 		panic(err)
 	}
@@ -186,7 +189,7 @@ func TestNewRegistrar(t *testing.T) {
 	t.Run("No chains", func(t *testing.T) {
 		tmpdir := t.TempDir()
 
-		lf, err := fileledger.New(tmpdir, &disabled.Provider{})
+		lf, err := fileledger.New(tmpdir, ledger.GoLevelDB, &disabled.Provider{})
 		require.NoError(t, err)
 
 		consenters := map[string]consensus.Consenter{"etcdraft": &mocks.Consenter{}}
@@ -249,7 +252,8 @@ func TestNewRegistrar(t *testing.T) {
 
 		info, err := manager.ChannelInfo("my-raft-channel")
 		require.NoError(t, err)
-		require.Equal(t,
+		require.Equal(
+			t,
 			types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 1},
 			info,
 		)
@@ -333,7 +337,8 @@ func TestRegistrar_Initialize(t *testing.T) {
 
 		info, err := manager.ChannelInfo("my-raft-channel")
 		require.NoError(t, err)
-		require.Equal(t,
+		require.Equal(
+			t,
 			types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 1},
 			info,
 		)
@@ -367,7 +372,8 @@ func TestRegistrar_Initialize(t *testing.T) {
 
 		info, err := manager.ChannelInfo("my-raft-channel")
 		require.NoError(t, err)
-		require.Equal(t,
+		require.Equal(
+			t,
 			types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "follower", Status: "active", Height: 1},
 			info,
 		)
@@ -402,7 +408,8 @@ func TestRegistrar_Initialize(t *testing.T) {
 		list := manager.ChannelList()
 		require.Nil(t, list.SystemChannel)
 
-		require.Equal(t,
+		require.Equal(
+			t,
 			types.ChannelList{
 				SystemChannel: nil,
 				Channels:      []types.ChannelInfoShort{{Name: "my-raft-channel", URL: ""}},
@@ -412,7 +419,8 @@ func TestRegistrar_Initialize(t *testing.T) {
 
 		info, err := manager.ChannelInfo("my-raft-channel")
 		require.NoError(t, err)
-		require.Equal(t,
+		require.Equal(
+			t,
 			types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "follower", Status: "onboarding", Height: 1},
 			info,
 		)
@@ -515,7 +523,7 @@ func createJoinBlockFileRepoDirWithBlocks(t *testing.T, tmpdir string, joinBlock
 	for _, jb := range joinBlocks {
 		blockBytes, err := proto.Marshal(jb.block)
 		require.NoError(t, err)
-		err = os.WriteFile(filepath.Join(joinBlockRepoPath, fmt.Sprintf("%s.join", jb.channel)), blockBytes, 0o600)
+		err = os.WriteFile(filepath.Join(joinBlockRepoPath, jb.channel+".join"), blockBytes, 0o600)
 		require.NoError(t, err)
 	}
 }
@@ -828,7 +836,7 @@ func TestRegistrar_JoinChannel(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 0x1}, info)
 			channelList := registrar.ChannelList()
-			require.Equal(t, 1, len(channelList.Channels))
+			require.Len(t, channelList.Channels, 1)
 			require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 			require.Nil(t, channelList.SystemChannel)
 			joinBlockPath := filepath.Join(tmpdir, "pendingops", "join", "my-raft-channel.join")
@@ -862,7 +870,7 @@ func TestRegistrar_JoinChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "onboarding", Height: 0x0}, info)
 		channelList := registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 
@@ -896,7 +904,7 @@ func TestRegistrar_JoinChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "follower", Status: "onboarding", Height: 0x0}, info)
 		channelList := registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 
@@ -953,7 +961,7 @@ func TestRegistrar_JoinChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 0x1}, info)
 		channelList := registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 
@@ -989,13 +997,13 @@ func TestRegistrar_JoinChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 0x1}, info)
 		channelList := registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 		checkMetrics(t, fakeFields, []string{"channel", "my-raft-channel"}, 1, 1, 1)
 
 		// Let's assume the chain appended another config block
-		genesisBlockAppRaft.Header.PreviousHash = protoutil.BlockHeaderHash(genesisBlockAppRaft.Header)
+		genesisBlockAppRaft.Header.PreviousHash = protoutil.BlockHeaderHash(genesisBlockAppRaft.GetHeader())
 		genesisBlockAppRaft.Header.Number = 1
 		require.NoError(t, cs.Append(genesisBlockAppRaft))
 		consenter.IsChannelMemberReturns(false, nil)
@@ -1013,7 +1021,7 @@ func TestRegistrar_JoinChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "follower", Status: "active", Height: 0x2}, info)
 		channelList = registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 		fChain.Halt()
@@ -1091,6 +1099,11 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		ledgerFactory.Close()
 	}
 
+	requireUnlocked := func(t *testing.T, r *Registrar) {
+		require.True(t, r.lock.TryLock(), "registrar lock was not released")
+		r.lock.Unlock()
+	}
+
 	t.Run("Reject update when removal is occurring", func(t *testing.T) {
 		setup(t)
 		defer cleanup()
@@ -1103,6 +1116,7 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		info, err := registrar.UpdateChannel("some-app-channel", &cb.Envelope{})
 		require.Equal(t, err, types.ErrChannelPendingRemoval)
 		require.Equal(t, types.ChannelInfo{}, info)
+		requireUnlocked(t, registrar)
 	})
 
 	t.Run("Reject update when removal previously failed", func(t *testing.T) {
@@ -1117,6 +1131,7 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		info, err := registrar.UpdateChannel("some-app-channel", &cb.Envelope{})
 		require.Equal(t, types.ErrChannelRemovalFailure, err)
 		require.Equal(t, types.ChannelInfo{}, info)
+		requireUnlocked(t, registrar)
 	})
 
 	t.Run("Reject update when channel is follower", func(t *testing.T) {
@@ -1131,6 +1146,7 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		info, err := registrar.UpdateChannel("some-app-channel", &cb.Envelope{})
 		require.Equal(t, types.ErrChannelNotReady, err)
 		require.Equal(t, types.ChannelInfo{}, info)
+		requireUnlocked(t, registrar)
 	})
 
 	t.Run("Reject update when channel is not exist", func(t *testing.T) {
@@ -1143,6 +1159,7 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		info, err := registrar.UpdateChannel("some-app-channel", &cb.Envelope{})
 		require.Equal(t, types.ErrChannelNotExist, err)
 		require.Equal(t, types.ChannelInfo{}, info)
+		requireUnlocked(t, registrar)
 	})
 
 	t.Run("Update config channel failed ProcessConfigUpdateMsg", func(t *testing.T) {
@@ -1172,7 +1189,7 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 0x1}, info)
 		channelList := registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 		joinBlockPath := filepath.Join(tmpdir, "pendingops", "join", "my-raft-channel.join")
@@ -1218,7 +1235,7 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 0x1}, info)
 		channelList := registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 		joinBlockPath := filepath.Join(tmpdir, "pendingops", "join", "my-raft-channel.join")
@@ -1264,7 +1281,7 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 0x1}, info)
 		channelList := registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 		joinBlockPath := filepath.Join(tmpdir, "pendingops", "join", "my-raft-channel.join")
@@ -1310,7 +1327,7 @@ func TestRegistrar_UpdateChannel(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.ChannelInfo{Name: "my-raft-channel", URL: "", ConsensusRelation: "consenter", Status: "active", Height: 0x1}, info)
 		channelList := registrar.ChannelList()
-		require.Equal(t, 1, len(channelList.Channels))
+		require.Len(t, channelList.Channels, 1)
 		require.Equal(t, "my-raft-channel", channelList.Channels[0].Name)
 		require.Nil(t, channelList.SystemChannel)
 		joinBlockPath := filepath.Join(tmpdir, "pendingops", "join", "my-raft-channel.join")
@@ -1493,11 +1510,15 @@ func TestRegistrar_FetchBlock(t *testing.T) {
 		registrar.chains["some-app-channel"] = cs
 
 		block, err := registrar.FetchBlock("some-app-channel", "blabla")
-		require.EqualError(t, err, "strconv.Atoi: parsing \"blabla\": invalid syntax")
+		require.EqualError(t, err, "strconv.ParseUint: parsing \"blabla\": invalid syntax")
 		require.Nil(t, block)
 
 		block, err = registrar.FetchBlock("some-app-channel", "1q1")
-		require.EqualError(t, err, "strconv.Atoi: parsing \"1q1\": invalid syntax")
+		require.EqualError(t, err, "strconv.ParseUint: parsing \"1q1\": invalid syntax")
+		require.Nil(t, block)
+
+		block, err = registrar.FetchBlock("some-app-channel", "-1")
+		require.EqualError(t, err, "strconv.ParseUint: parsing \"-1\": invalid syntax")
 		require.Nil(t, block)
 	})
 
@@ -1542,38 +1563,38 @@ func TestRegistrar_FetchBlock(t *testing.T) {
 
 func checkMetrics(t *testing.T, fakeFields *fakeMetricsFields, expectedLabels []string, expectedRelation, expectedStatus, expectedCallCount int) {
 	require.Equal(t, expectedCallCount, fakeFields.fakeConsensusRelation.SetCallCount())
-	require.Equal(t, float64(expectedRelation), fakeFields.fakeConsensusRelation.SetArgsForCall(expectedCallCount-1))
+	require.InDelta(t, float64(expectedRelation), fakeFields.fakeConsensusRelation.SetArgsForCall(expectedCallCount-1), 0)
 	require.Equal(t, expectedCallCount, fakeFields.fakeConsensusRelation.WithCallCount())
 	require.Equal(t, expectedLabels, fakeFields.fakeConsensusRelation.WithArgsForCall(expectedCallCount-1))
 	require.Equal(t, expectedCallCount, fakeFields.fakeStatus.SetCallCount())
-	require.Equal(t, float64(expectedStatus), fakeFields.fakeStatus.SetArgsForCall(expectedCallCount-1))
+	require.InDelta(t, float64(expectedStatus), fakeFields.fakeStatus.SetArgsForCall(expectedCallCount-1), 0)
 	require.Equal(t, expectedCallCount, fakeFields.fakeStatus.WithCallCount())
 	require.Equal(t, expectedLabels, fakeFields.fakeStatus.WithArgsForCall(expectedCallCount-1))
 }
 
 func makeUpdateConfigEnvelope(t *testing.T, block *cb.Block, signer msp.SigningIdentity) *cb.Envelope {
 	// udate config block
-	envelope, err := protoutil.GetEnvelopeFromBlock(block.Data.Data[0])
+	envelope, err := protoutil.GetEnvelopeFromBlock(block.GetData().GetData()[0])
 	require.NoError(t, err)
 	// unmarshal the payload bytes
-	payload, err := protoutil.UnmarshalPayload(envelope.Payload)
+	payload, err := protoutil.UnmarshalPayload(envelope.GetPayload())
 	require.NoError(t, err)
 	// unmarshal the config envelope bytes
 	configEnv := &cb.ConfigEnvelope{}
-	err = proto.Unmarshal(payload.Data, configEnv)
+	err = proto.Unmarshal(payload.GetData(), configEnv)
 	require.NoError(t, err)
 	// clone the config
-	updatedConfig := proto.Clone(configEnv.Config).(*cb.Config)
-	batchSizeConfigValue := updatedConfig.ChannelGroup.Groups["Orderer"].Values["BatchSize"]
+	updatedConfig := proto.Clone(configEnv.GetConfig()).(*cb.Config)
+	batchSizeConfigValue := updatedConfig.GetChannelGroup().GetGroups()["Orderer"].GetValues()["BatchSize"]
 	batchSizeValue := &ab.BatchSize{}
-	err = proto.Unmarshal(batchSizeConfigValue.Value, batchSizeValue)
+	err = proto.Unmarshal(batchSizeConfigValue.GetValue(), batchSizeValue)
 	require.NoError(t, err)
-	batchSizeValue.AbsoluteMaxBytes = batchSizeValue.AbsoluteMaxBytes + 10
+	batchSizeValue.AbsoluteMaxBytes = batchSizeValue.GetAbsoluteMaxBytes() + 10
 	updatedConfig.ChannelGroup.Groups["Orderer"].Values["BatchSize"] = &cb.ConfigValue{
 		ModPolicy: "Admins",
 		Value:     protoutil.MarshalOrPanic(batchSizeValue),
 	}
-	configUpdate, err := update.Compute(configEnv.Config, updatedConfig)
+	configUpdate, err := update.Compute(configEnv.GetConfig(), updatedConfig)
 	require.NoError(t, err)
 	configUpdate.ChannelId = "my-raft-channel"
 
@@ -1585,7 +1606,7 @@ func makeUpdateConfigEnvelope(t *testing.T, block *cb.Block, signer msp.SigningI
 	configUpdateEnv := &cb.ConfigUpdateEnvelope{
 		ConfigUpdate: protoutil.MarshalOrPanic(configUpdate),
 	}
-	configSig.Signature, err = signer.Sign(util.ConcatenateBytes(configSig.SignatureHeader, configUpdateEnv.ConfigUpdate))
+	configSig.Signature, err = signer.Sign(util.ConcatenateBytes(configSig.GetSignatureHeader(), configUpdateEnv.GetConfigUpdate()))
 	require.NoError(t, err)
 	configUpdateEnv.Signatures = append(configUpdateEnv.Signatures, configSig)
 
@@ -1750,9 +1771,10 @@ func TestRegistrar_RemoveChannel(t *testing.T) {
 			require.Eventually(t, func() bool { return len(ledgerFactory.ChannelIDs()) == 0 }, time.Minute, time.Second)
 			require.NotContains(t, ledgerFactory.ChannelIDs(), "my-follower-raft-channel")
 
-			channelInfo, err := registrar.ChannelInfo("my-follower-raft-channel")
-			require.Equal(t, err, types.ErrChannelNotExist)
-			require.Equal(t, channelInfo, types.ChannelInfo{})
+			require.Eventually(t, func() bool {
+				channelInfo, err := registrar.ChannelInfo("my-follower-raft-channel")
+				return errors.Is(err, types.ErrChannelNotExist) && channelInfo == types.ChannelInfo{}
+			}, time.Minute, time.Second)
 		})
 	})
 
@@ -1803,7 +1825,9 @@ func TestRegistrar_RemoveChannel(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool { return len(ledgerFactory.ChannelIDs()) == 0 }, time.Minute, time.Second)
-		require.NotContains(t, registrar.ChannelList().Channels, types.ChannelInfoShort{Name: "my-raft-channel"})
+		require.Eventually(t, func() bool {
+			return assert.NotContains(t, registrar.ChannelList().Channels, types.ChannelInfoShort{Name: "my-raft-channel"})
+		}, time.Minute, time.Second)
 	})
 
 	t.Run("remove channel fails", func(t *testing.T) {
@@ -1833,19 +1857,123 @@ func TestRegistrar_RemoveChannel(t *testing.T) {
 		require.Contains(t, ledgerFactory.ChannelIDs(), "my-raft-channel")
 
 		// Confirm removal failure by checking channel status
-		channelInfo, err := registrar.ChannelInfo("my-raft-channel")
-		require.NoError(t, err)
-		require.Equal(t, channelInfo, types.ChannelInfo{
-			Name:              "my-raft-channel",
-			ConsensusRelation: types.ConsensusRelationConsenter,
-			Status:            types.StatusFailed,
+		require.Eventually(t, func() bool {
+			channelInfo, err := registrar.ChannelInfo("my-raft-channel")
+			require.NoError(t, err)
+			return types.ChannelInfo{
+				Name:              "my-raft-channel",
+				ConsensusRelation: types.ConsensusRelationConsenter,
+				Status:            types.StatusFailed,
+			} == channelInfo
+		}, time.Minute, time.Second)
+		require.Zero(t, consenter.RemoveChannelDataCallCount())
+	})
+
+	t.Run("consensus data is removed after the ledger", func(t *testing.T) {
+		setup(t)
+		defer cleanup()
+
+		type removal struct {
+			channelID string
+			ledgers   []string
+		}
+		removals := make(chan removal, 1)
+		release := make(chan struct{})
+		releaseRemoval := sync.OnceFunc(func() { close(release) })
+		defer releaseRemoval()
+		consenter.RemoveChannelDataCalls(func(channelID string) error {
+			removals <- removal{channelID: channelID, ledgers: ledgerFactory.ChannelIDs()}
+			<-release
+			return nil
 		})
+
+		consenter.IsChannelMemberReturns(true, nil)
+		registrar := NewRegistrar(config, ledgerFactory, mockCrypto(), &disabled.Provider{}, cryptoProvider, dialer)
+		registrar.Initialize(mockConsenters)
+
+		_, err := registrar.JoinChannel("my-raft-channel", genesisBlockAppRaft)
+		require.NoError(t, err)
+		err = registrar.RemoveChannel("my-raft-channel")
+		require.NoError(t, err)
+
+		var r removal
+		select {
+		case r = <-removals:
+		case <-time.After(time.Minute):
+			t.Fatal("consensus data was not removed")
+		}
+		require.Equal(t, "my-raft-channel", r.channelID)
+		require.NotContains(t, r.ledgers, "my-raft-channel")
+
+		// Until the consensus data is gone, the channel cannot be joined again.
+		_, err = registrar.JoinChannel("my-raft-channel", genesisBlockAppRaft)
+		require.Equal(t, types.ErrChannelPendingRemoval, err)
+
+		releaseRemoval()
+		require.Eventually(t, func() bool {
+			_, err := registrar.ChannelInfo("my-raft-channel")
+			return errors.Is(err, types.ErrChannelNotExist)
+		}, time.Minute, 10*time.Millisecond)
+		require.Equal(t, 1, consenter.RemoveChannelDataCallCount())
+	})
+
+	t.Run("consensus data of a follower is removed", func(t *testing.T) {
+		setup(t)
+		defer cleanup()
+
+		consenter.IsChannelMemberReturns(false, nil)
+		registrar := NewRegistrar(config, ledgerFactory, mockCrypto(), &disabled.Provider{}, cryptoProvider, dialer)
+		registrar.Initialize(mockConsenters)
+
+		genesisBlockAppRaftFollower := appBootstrapper.GenesisBlockForChannel("my-follower-raft-channel")
+		_, err := registrar.JoinChannel("my-follower-raft-channel", genesisBlockAppRaftFollower)
+		require.NoError(t, err)
+		require.NotNil(t, registrar.GetFollower("my-follower-raft-channel"))
+
+		err = registrar.RemoveChannel("my-follower-raft-channel")
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			_, err := registrar.ChannelInfo("my-follower-raft-channel")
+			return errors.Is(err, types.ErrChannelNotExist)
+		}, time.Minute, 10*time.Millisecond)
+		require.Equal(t, 1, consenter.RemoveChannelDataCallCount())
+		require.Equal(t, "my-follower-raft-channel", consenter.RemoveChannelDataArgsForCall(0))
+	})
+
+	t.Run("removing consensus data fails", func(t *testing.T) {
+		setup(t)
+		defer cleanup()
+
+		consenter.RemoveChannelDataReturns(errors.New("permission denied"))
+		consenter.IsChannelMemberReturns(true, nil)
+		registrar := NewRegistrar(config, ledgerFactory, mockCrypto(), &disabled.Provider{}, cryptoProvider, dialer)
+		registrar.Initialize(mockConsenters)
+
+		_, err := registrar.JoinChannel("my-raft-channel", genesisBlockAppRaft)
+		require.NoError(t, err)
+		err = registrar.RemoveChannel("my-raft-channel")
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			channelInfo, err := registrar.ChannelInfo("my-raft-channel")
+			require.NoError(t, err)
+			return types.ChannelInfo{
+				Name:              "my-raft-channel",
+				ConsensusRelation: types.ConsensusRelationConsenter,
+				Status:            types.StatusFailed,
+			} == channelInfo
+		}, time.Minute, 10*time.Millisecond)
+		require.NotContains(t, ledgerFactory.ChannelIDs(), "my-raft-channel")
+
+		_, err = registrar.JoinChannel("my-raft-channel", genesisBlockAppRaft)
+		require.Equal(t, types.ErrChannelRemovalFailure, err)
 	})
 }
 
 func generateCertificates(t *testing.T, confAppRaft *genesisconfig.Profile, tlsCA tlsgen.CA, certDir string) {
-	for i, c := range confAppRaft.Orderer.EtcdRaft.Consenters {
-		srvC, err := tlsCA.NewServerCertKeyPair(c.Host)
+	for i, c := range confAppRaft.Orderer.EtcdRaft.GetConsenters() {
+		srvC, err := tlsCA.NewServerCertKeyPair(c.GetHost())
 		require.NoError(t, err)
 		srvP := path.Join(certDir, fmt.Sprintf("server%d.crt", i))
 		err = os.WriteFile(srvP, srvC.Cert, 0o644)
@@ -1912,7 +2040,7 @@ func TestRegistrar_ConfigBlockOrPanic(t *testing.T) {
 		_, l := newLedgerAndFactory(tmpdir, "testchannelid", genesisBlockSys)
 
 		cBlock := ConfigBlockOrPanic(l)
-		assert.Equal(t, genesisBlockSys.Header, cBlock.Header)
-		assert.Equal(t, genesisBlockSys.Data, cBlock.Data)
+		require.Equal(t, genesisBlockSys.GetHeader(), cBlock.GetHeader())
+		require.Equal(t, genesisBlockSys.GetData(), cBlock.GetData())
 	})
 }

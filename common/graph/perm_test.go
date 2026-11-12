@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package graph
 
 import (
-	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -36,11 +36,11 @@ func TestPermute(t *testing.T) {
 	}
 
 	permutations := vR.ToTree().Permute(1000)
-	// For a sub-tree with r-(D,E) we have 9 combinations (3 combinations of each sub-tree where D and E are the roots)
-	// For a sub-tree with r-(D,F) we have 9 combinations from the same logic
-	// For a sub-tree with r-(E,F) we have 9 combinations too
+	// For a subtree with r-(D,E) we have 9 combinations (3 combinations of each subtree where D and E are the roots)
+	// For a subtree with r-(D,F) we have 9 combinations from the same logic
+	// For a subtree with r-(E,F) we have 9 combinations too
 	// Total 27 combinations
-	require.Equal(t, 27, len(permutations))
+	require.Len(t, permutations, 27)
 
 	listCombination := func(i Iterator) []string {
 		var traversal []string
@@ -67,7 +67,7 @@ func TestPermuteTooManyCombinations(t *testing.T) {
 	root := NewTreeVertex("r", nil)
 	root.Threshold = 500
 	for i := range 1000 {
-		root.AddDescendant(NewTreeVertex(fmt.Sprintf("%d", i), nil))
+		root.AddDescendant(NewTreeVertex(strconv.Itoa(i), nil))
 	}
 	permutations := root.ToTree().Permute(501)
 	require.Len(t, permutations, 501)

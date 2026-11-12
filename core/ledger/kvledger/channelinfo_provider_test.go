@@ -8,7 +8,6 @@ package kvledger
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"testing"
 
@@ -43,7 +42,7 @@ func TestNamespacesAndCollections(t *testing.T) {
 	config.ChannelGroup.Groups[channelconfig.ApplicationGroupKey].Groups["org1"] = orgGroups["org1"]
 	config.ChannelGroup.Groups[channelconfig.ApplicationGroupKey].Groups["org2"] = orgGroups["org2"]
 	configEnv := getEnvelopeFromConfig(channelName, config)
-	configBlock := newBlock([]*cb.Envelope{configEnv}, 1, 1, protoutil.BlockHeaderHash(genesisBlock.Header))
+	configBlock := newBlock([]*cb.Envelope{configEnv}, 1, 1, protoutil.BlockHeaderHash(genesisBlock.GetHeader()))
 	require.NoError(t, blkStore.AddBlock(configBlock))
 
 	// prepare fakeDeployedCCInfoProvider to create mocked test data
@@ -65,7 +64,7 @@ func TestNamespacesAndCollections(t *testing.T) {
 	fakeDeployedCCInfoProvider.AllChaincodesInfoReturns(deployedccInfo, nil)
 	fakeDeployedCCInfoProvider.GenerateImplicitCollectionForOrgStub = func(mspID string) *pb.StaticCollectionConfig {
 		return &pb.StaticCollectionConfig{
-			Name: fmt.Sprintf("_implicit_org_%s", mspID),
+			Name: "_implicit_org_" + mspID,
 		}
 	}
 
@@ -80,7 +79,7 @@ func TestNamespacesAndCollections(t *testing.T) {
 	}
 	namespacesAndColls, err := channelInfoProvider.NamespacesAndCollections(nil)
 	require.NoError(t, err)
-	require.Equal(t, len(expectedNamespacesAndColls), len(namespacesAndColls))
+	require.Len(t, namespacesAndColls, len(expectedNamespacesAndColls))
 	for ns, colls := range expectedNamespacesAndColls {
 		require.ElementsMatch(t, colls, namespacesAndColls[ns])
 	}
@@ -114,7 +113,7 @@ func TestGetAllMSPIDs(t *testing.T) {
 	block = configBlock
 	for range 3 {
 		lastBlockNum++
-		block = newBlock([]*cb.Envelope{}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(block.Header))
+		block = newBlock([]*cb.Envelope{}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(block.GetHeader()))
 		require.NoError(t, blkStore.AddBlock(block))
 	}
 	verifyGetAllMSPIDs(t, channelInfoProvider, []string{"SampleOrg"})
@@ -129,19 +128,19 @@ func TestGetAllMSPIDs(t *testing.T) {
 	lastBlockNum++
 	lastConfigBlockNum = lastBlockNum
 	configEnv := getEnvelopeFromConfig(channelName, config)
-	configBlock = newBlock([]*cb.Envelope{configEnv}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(block.Header))
+	configBlock = newBlock([]*cb.Envelope{configEnv}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(block.GetHeader()))
 	require.NoError(t, blkStore.AddBlock(configBlock))
 	verifyGetAllMSPIDs(t, channelInfoProvider, []string{"Org1MSP", "Org2MSP", "SampleOrg"})
 
 	// update the config by removing "org1"
 	config = getConfigFromBlock(configBlock)
-	delete(config.ChannelGroup.Groups[channelconfig.ApplicationGroupKey].Groups, "org1")
+	delete(config.GetChannelGroup().GetGroups()[channelconfig.ApplicationGroupKey].GetGroups(), "org1")
 
 	// add the config block and verify GetAllMSPIDs
 	lastBlockNum++
 	lastConfigBlockNum = lastBlockNum
 	configEnv = getEnvelopeFromConfig(channelName, config)
-	configBlock = newBlock([]*cb.Envelope{configEnv}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(configBlock.Header))
+	configBlock = newBlock([]*cb.Envelope{configEnv}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(configBlock.GetHeader()))
 	require.NoError(t, blkStore.AddBlock(configBlock))
 	verifyGetAllMSPIDs(t, channelInfoProvider, []string{"Org1MSP", "Org2MSP", "SampleOrg"})
 
@@ -149,7 +148,7 @@ func TestGetAllMSPIDs(t *testing.T) {
 	block = configBlock
 	for range 2 {
 		lastBlockNum++
-		block = newBlock([]*cb.Envelope{}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(block.Header))
+		block = newBlock([]*cb.Envelope{}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(block.GetHeader()))
 		require.NoError(t, blkStore.AddBlock(block))
 	}
 	verifyGetAllMSPIDs(t, channelInfoProvider, []string{"Org1MSP", "Org2MSP", "SampleOrg"})
@@ -158,9 +157,9 @@ func TestGetAllMSPIDs(t *testing.T) {
 	lastConfigBlock, err := channelInfoProvider.mostRecentConfigBlockAsOf(lastBlockNum)
 	require.NoError(t, err)
 	config = getConfigFromBlock(lastConfigBlock)
-	require.Equal(t, 2, len(config.ChannelGroup.Groups[channelconfig.ApplicationGroupKey].Groups))
-	require.Contains(t, config.ChannelGroup.Groups[channelconfig.ApplicationGroupKey].Groups, "SampleOrg")
-	require.Contains(t, config.ChannelGroup.Groups[channelconfig.ApplicationGroupKey].Groups, "org2")
+	require.Len(t, config.GetChannelGroup().GetGroups()[channelconfig.ApplicationGroupKey].GetGroups(), 2)
+	require.Contains(t, config.GetChannelGroup().GetGroups()[channelconfig.ApplicationGroupKey].GetGroups(), "SampleOrg")
+	require.Contains(t, config.GetChannelGroup().GetGroups()[channelconfig.ApplicationGroupKey].GetGroups(), "org2")
 }
 
 func TestGetAllMSPIDs_NegativeTests(t *testing.T) {
@@ -183,7 +182,7 @@ func TestGetAllMSPIDs_NegativeTests(t *testing.T) {
 	// test ExtractMSPIDsForApplicationOrgs error by having a malformed config block
 	lastBlockNum++
 	lastConfigBlockNum++
-	configBlock = newBlock([]*cb.Envelope{}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(configBlock.Header))
+	configBlock = newBlock([]*cb.Envelope{}, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(configBlock.GetHeader()))
 	require.NoError(t, blkStore.AddBlock(configBlock))
 	_, err = channelInfoProvider.getAllMSPIDs()
 	require.EqualError(t, err, "malformed configuration block: envelope index out of bounds")
@@ -191,7 +190,7 @@ func TestGetAllMSPIDs_NegativeTests(t *testing.T) {
 	// test RetrieveBlockByNumber error by using a non-existent block num for config block index
 	lastBlockNum++
 	lastConfigBlockNum++
-	configBlock = newBlock(nil, lastBlockNum, lastBlockNum+1, protoutil.BlockHeaderHash(configBlock.Header))
+	configBlock = newBlock(nil, lastBlockNum, lastBlockNum+1, protoutil.BlockHeaderHash(configBlock.GetHeader()))
 	require.NoError(t, blkStore.AddBlock(configBlock))
 	_, err = channelInfoProvider.getAllMSPIDs()
 	require.EqualError(t, err, "no such block number [3] in index")
@@ -199,7 +198,7 @@ func TestGetAllMSPIDs_NegativeTests(t *testing.T) {
 	// test GetLastConfigIndexFromBlock error by using invalid bytes for LastConfig metadata value
 	lastBlockNum++
 	lastConfigBlockNum++
-	configBlock = newBlock(nil, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(configBlock.Header))
+	configBlock = newBlock(nil, lastBlockNum, lastConfigBlockNum, protoutil.BlockHeaderHash(configBlock.GetHeader()))
 	configBlock.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES] = []byte("invalid_bytes")
 	require.NoError(t, blkStore.AddBlock(configBlock))
 	_, err = channelInfoProvider.getAllMSPIDs()
@@ -216,6 +215,7 @@ func openBlockStorage(t *testing.T, channelName string, basePath string) (*blkst
 		blkstorage.NewConf(basePath, maxBlockFileSize),
 		&blkstorage.IndexConfig{AttrsToIndex: attrsToIndex},
 		&disabled.Provider{},
+		ledger.GoLevelDB,
 	)
 	require.NoError(t, err)
 	blkStore, err := blkStoreProvider.Open(channelName)
@@ -241,24 +241,24 @@ func newBlock(env []*cb.Envelope, blockNum uint64, lastConfigBlockNum uint64, pr
 
 func getConfigFromBlock(block *cb.Block) *cb.Config {
 	blockDataEnvelope := &cb.Envelope{}
-	err := proto.Unmarshal(block.Data.Data[0], blockDataEnvelope)
+	err := proto.Unmarshal(block.GetData().GetData()[0], blockDataEnvelope)
 	if err != nil {
 		panic(err)
 	}
 
 	blockDataPayload := &cb.Payload{}
-	err = proto.Unmarshal(blockDataEnvelope.Payload, blockDataPayload)
+	err = proto.Unmarshal(blockDataEnvelope.GetPayload(), blockDataPayload)
 	if err != nil {
 		panic(err)
 	}
 
 	config := &cb.ConfigEnvelope{}
-	err = proto.Unmarshal(blockDataPayload.Data, config)
+	err = proto.Unmarshal(blockDataPayload.GetData(), config)
 	if err != nil {
 		panic(err)
 	}
 
-	return config.Config
+	return config.GetConfig()
 }
 
 func getEnvelopeFromConfig(channelName string, config *cb.Config) *cb.Envelope {
@@ -285,7 +285,7 @@ func createTestOrgGroups(t *testing.T) map[string]*cb.ConfigGroup {
 	block := &cb.Block{}
 	require.NoError(t, protolator.DeepUnmarshalJSON(bytes.NewBuffer(blockData), block))
 	config := getConfigFromBlock(block)
-	return config.ChannelGroup.Groups[channelconfig.ApplicationGroupKey].Groups
+	return config.GetChannelGroup().GetGroups()[channelconfig.ApplicationGroupKey].GetGroups()
 }
 
 func prepareCollectionConfigPackage(collNames []string) *pb.CollectionConfigPackage {

@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package chaincode_test
 
 import (
-	"fmt"
+	"errors"
 	"unicode/utf8"
 
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
@@ -15,7 +15,6 @@ import (
 	"github.com/hyperledger/fabric/core/chaincode/lifecycle"
 	"github.com/hyperledger/fabric/core/chaincode/mock"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -120,7 +119,7 @@ var _ = Describe("CheckInvocation", func() {
 
 			Context("when the txsimulator cannot get state", func() {
 				BeforeEach(func() {
-					fakeSimulator.GetStateReturns(nil, fmt.Errorf("get-state-error"))
+					fakeSimulator.GetStateReturns(nil, errors.New("get-state-error"))
 				})
 
 				It("wraps and returns the error", func() {
@@ -131,7 +130,7 @@ var _ = Describe("CheckInvocation", func() {
 
 			Context("when the txsimulator cannot set state", func() {
 				BeforeEach(func() {
-					fakeSimulator.SetStateReturns(fmt.Errorf("set-state-error"))
+					fakeSimulator.SetStateReturns(errors.New("set-state-error"))
 				})
 
 				It("wraps and returns the error", func() {
@@ -144,7 +143,7 @@ var _ = Describe("CheckInvocation", func() {
 
 	Context("when lifecycle returns an error", func() {
 		BeforeEach(func() {
-			fakeLifecycle.ChaincodeEndorsementInfoReturns(nil, fmt.Errorf("fake-lifecycle-error"))
+			fakeLifecycle.ChaincodeEndorsementInfoReturns(nil, errors.New("fake-lifecycle-error"))
 		})
 
 		It("wraps and returns the error", func() {

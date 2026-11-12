@@ -61,13 +61,13 @@ func createIdemixIdentity(t *testing.T) []byte {
 func createSignedProposal(t *testing.T, serializedIdentity []byte, corruptSigHdr mutator, corruptHdr mutator) *peer.SignedProposal {
 	sHdr := protoutil.MakeSignatureHeader(serializedIdentity, nil)
 	hdr := protoutil.MakePayloadHeader(&common.ChannelHeader{}, sHdr)
-	hdr.SignatureHeader = corruptSigHdr(hdr.SignatureHeader)
+	hdr.SignatureHeader = corruptSigHdr(hdr.GetSignatureHeader())
 	hdrBytes, err := proto.Marshal(hdr)
 	require.NoError(t, err)
 	prop := &peer.Proposal{
 		Header: hdrBytes,
 	}
-	prop.Header = corruptHdr(prop.Header)
+	prop.Header = corruptHdr(prop.GetHeader())
 	propBytes, err := proto.Marshal(prop)
 	require.NoError(t, err)
 	return &peer.SignedProposal{
@@ -95,7 +95,7 @@ func TestExpirationCheckFilter(t *testing.T) {
 	// Scenario I: Expired x509 identity
 	sp := createValidSignedProposal(t, createX509Identity(t, "expiredCert.pem"))
 	_, err := auth.ProcessProposal(context.Background(), sp)
-	require.Equal(t, err.Error(), "proposal client identity expired")
+	require.Equal(t, "proposal client identity expired", err.Error())
 	require.False(t, nextEndorser.invoked)
 
 	// Scenario II: Not expired x509 identity

@@ -25,7 +25,7 @@ func TestPauseAndResume(t *testing.T) {
 	numLedgers := 10
 	activeLedgerIDs, err := provider.List()
 	require.NoError(t, err)
-	require.Len(t, activeLedgerIDs, 0)
+	require.Empty(t, activeLedgerIDs)
 	genesisBlocks := make([]*common.Block, numLedgers)
 	for i := range numLedgers {
 		genesisBlock, _ := configtxtest.MakeGenesisBlock(constructTestLedgerID(i))
@@ -41,11 +41,11 @@ func TestPauseAndResume(t *testing.T) {
 	// pause channels
 	pausedLedgers := []int{1, 3, 5}
 	for _, i := range pausedLedgers {
-		err = PauseChannel(conf.RootFSPath, constructTestLedgerID(i))
+		err = PauseChannel(conf.RootFSPath, conf.StateDatabase, constructTestLedgerID(i))
 		require.NoError(t, err)
 	}
 	// pause again should not fail
-	err = PauseChannel(conf.RootFSPath, constructTestLedgerID(1))
+	err = PauseChannel(conf.RootFSPath, conf.StateDatabase, constructTestLedgerID(1))
 	require.NoError(t, err)
 	// verify ledger status after pause
 	provider = testutilNewProvider(conf, t, &mock.DeployedChaincodeInfoProvider{})
@@ -55,11 +55,11 @@ func TestPauseAndResume(t *testing.T) {
 	// resume channels
 	resumedLedgers := []int{1, 5}
 	for _, i := range resumedLedgers {
-		err = ResumeChannel(conf.RootFSPath, constructTestLedgerID(i))
+		err = ResumeChannel(conf.RootFSPath, conf.StateDatabase, constructTestLedgerID(i))
 		require.NoError(t, err)
 	}
 	// resume again should not fail
-	err = ResumeChannel(conf.RootFSPath, constructTestLedgerID(1))
+	err = ResumeChannel(conf.RootFSPath, conf.StateDatabase, constructTestLedgerID(1))
 	require.NoError(t, err)
 	// verify ledger status after resume
 	pausedLedgersAfterResume := []int{3}
@@ -85,26 +85,26 @@ func TestPauseAndResumeErrors(t *testing.T) {
 	require.NoError(t, provider.idStore.db.Put(metadataKey(ledgerID), []byte("invalid"), true))
 
 	// fail if provider is open (e.g., peer is up running)
-	err = PauseChannel(conf.RootFSPath, constructTestLedgerID(0))
+	err = PauseChannel(conf.RootFSPath, conf.StateDatabase, constructTestLedgerID(0))
 	require.Error(t, err, "as another peer node command is executing, wait for that command to complete its execution or terminate it before retrying")
 
-	err = ResumeChannel(conf.RootFSPath, constructTestLedgerID(0))
+	err = ResumeChannel(conf.RootFSPath, conf.StateDatabase, constructTestLedgerID(0))
 	require.Error(t, err, "as another peer node command is executing, wait for that command to complete its execution or terminate it before retrying")
 
 	provider.Close()
 
 	// fail if ledgerID does not exists
-	err = PauseChannel(conf.RootFSPath, "dummy")
+	err = PauseChannel(conf.RootFSPath, conf.StateDatabase, "dummy")
 	require.Error(t, err, "LedgerID does not exist")
 
-	err = ResumeChannel(conf.RootFSPath, "dummy")
+	err = ResumeChannel(conf.RootFSPath, conf.StateDatabase, "dummy")
 	require.Error(t, err, "LedgerID does not exist")
 
 	// error if metadata cannot be unmarshaled
-	err = PauseChannel(conf.RootFSPath, ledgerID)
+	err = PauseChannel(conf.RootFSPath, conf.StateDatabase, ledgerID)
 	require.ErrorContains(t, err, "error unmarshalling ledger metadata")
 
-	err = ResumeChannel(conf.RootFSPath, ledgerID)
+	err = ResumeChannel(conf.RootFSPath, conf.StateDatabase, ledgerID)
 	require.ErrorContains(t, err, "error unmarshalling ledger metadata")
 }
 
@@ -116,7 +116,7 @@ func assertLedgerStatus(t *testing.T, provider *Provider, genesisBlocks []*commo
 	require.NoError(t, err)
 	require.Len(t, activeLedgerIDs, numLedgers-len(pausedLedgers))
 	for i := range numLedgers {
-		if !contains(pausedLedgers, i) {
+		if !slices.Contains(pausedLedgers, i) {
 			require.Contains(t, activeLedgerIDs, constructTestLedgerID(i))
 		}
 	}
@@ -125,14 +125,10 @@ func assertLedgerStatus(t *testing.T, provider *Provider, genesisBlocks []*commo
 		m, err := s.getLedgerMetadata(constructTestLedgerID(i))
 		require.NoError(t, err)
 		require.NotNil(t, m)
-		if contains(pausedLedgers, i) {
+		if slices.Contains(pausedLedgers, i) {
 			require.Equal(t, msgs.Status_INACTIVE, m.GetStatus())
 		} else {
 			require.Equal(t, msgs.Status_ACTIVE, m.GetStatus())
 		}
 	}
-}
-
-func contains(slice []int, val int) bool {
-	return slices.Contains(slice, val)
 }

@@ -4,7 +4,7 @@
 package localconfig
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -12,12 +12,29 @@ import (
 
 	bccsp "github.com/hyperledger/fabric-lib-go/bccsp/factory"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	db "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/viperutil"
 	coreconfig "github.com/hyperledger/fabric/core/config"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 )
 
 var logger = flogging.MustGetLogger("localconfig")
+
+var jsonOptions = []json.Options{
+	json.FormatNilSliceAsNull(true),
+	json.FormatNilMapAsNull(true),
+	json.WithMarshalers(json.MarshalFunc(func(d time.Duration) ([]byte, error) {
+		return json.Marshal(int64(d))
+	})),
+	json.WithUnmarshalers(json.UnmarshalFunc(func(b []byte, d *time.Duration) error {
+		var v int64
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		*d = time.Duration(v)
+		return nil
+	})),
+}
 
 // TopLevel directly corresponds to the orderer config YAML.
 type TopLevel struct {
@@ -115,7 +132,11 @@ type Profile struct {
 // FileLedger contains configuration for the file-based ledger.
 type FileLedger struct {
 	Location string
-	Prefix   string // For compatibility only. This setting is no longer supported.
+	// StateDatabase is the type of the KV store backing the file ledger. It is
+	// not read from the configuration file: the store cannot be chosen, so the
+	// type is set while the configuration is initialized.
+	StateDatabase string `mapstructure:"-"`
+	Prefix        string // For compatibility only. This setting is no longer supported.
 }
 
 // Debug contains configuration for the orderer's debug parameters.
@@ -204,7 +225,8 @@ var Defaults = TopLevel{
 		},
 	},
 	FileLedger: FileLedger{
-		Location: "/var/hyperledger/production/orderer",
+		Location:      "/var/hyperledger/production/orderer",
+		StateDatabase: db.GoLevelDB,
 	},
 	Debug: Debug{
 		BroadcastTraceDir: "",
@@ -249,7 +271,7 @@ func (c *configCache) load() (*TopLevel, error) {
 	config.SetConfigName("orderer")
 
 	if err := config.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("Error reading configuration: %s", err)
+		return nil, fmt.Errorf("Error reading configuration: %w", err)
 	}
 
 	c.mutex.Lock()
@@ -258,10 +280,10 @@ func (c *configCache) load() (*TopLevel, error) {
 	if !ok {
 		err := config.EnhancedExactUnmarshal(&uconf)
 		if err != nil {
-			return nil, fmt.Errorf("Error unmarshalling config into struct: %s", err)
+			return nil, fmt.Errorf("Error unmarshalling config into struct: %w", err)
 		}
 
-		serializedConf, err = json.Marshal(uconf)
+		serializedConf, err = json.Marshal(uconf, jsonOptions...)
 		if err != nil {
 			return nil, err
 		}
@@ -272,7 +294,7 @@ func (c *configCache) load() (*TopLevel, error) {
 		c.cache[config.ConfigFileUsed()] = serializedConf
 	}
 
-	err := json.Unmarshal(serializedConf, &uconf)
+	err := json.Unmarshal(serializedConf, &uconf, jsonOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -369,6 +391,8 @@ func (c *TopLevel) completeInitialization(configDir string) {
 		case c.General.Throttling.InactivityTimeout == 0:
 			logger.Infof("General.Throttling.InactivityTimeout is unset, setting to %v", Defaults.General.Throttling.InactivityTimeout)
 			c.General.Throttling.InactivityTimeout = Defaults.General.Throttling.InactivityTimeout
+		case c.FileLedger.StateDatabase == "":
+			c.FileLedger.StateDatabase = Defaults.FileLedger.StateDatabase
 		default:
 			return
 		}

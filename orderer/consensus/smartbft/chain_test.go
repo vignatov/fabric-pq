@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -163,7 +164,7 @@ func TestSyncNode(t *testing.T) {
 	// send 5 txs to all available nodes and wait the tx will be added to each ledger except the ledger of the old leader
 	numberTxs := 5
 	for i := range numberTxs {
-		message := "TEST_MESSAGE #" + fmt.Sprintf("%d", i+2)
+		message := "TEST_MESSAGE #" + strconv.Itoa(i+2)
 		env = createEndorserTxEnvelope(message, channelId)
 		err = networkSetupInfo.SendTxToAllAvailableNodes(env)
 		require.NoError(t, err)
@@ -230,8 +231,8 @@ func TestAddAndRemoveNode(t *testing.T) {
 	// add new node to the network
 	nodesMap, newNode := networkSetupInfo.AddNewNode()
 	newNode.Start()
-	require.Equal(t, len(nodesMap), 5)
-	require.Equal(t, len(networkSetupInfo.nodeIdToNode), 5)
+	require.Len(t, nodesMap, 5)
+	require.Len(t, networkSetupInfo.nodeIdToNode, 5)
 
 	// send a tx to all nodes again and wait the tx will be added to each ledger
 	env = createEndorserTxEnvelope("TEST_ADDITION_OF_NODE", channelId)
@@ -262,8 +263,8 @@ func TestAddAndRemoveNode(t *testing.T) {
 
 	// remove node from the network
 	nodesMap = networkSetupInfo.RemoveNode(uint64(5))
-	require.Equal(t, len(nodesMap), 4)
-	require.Equal(t, len(networkSetupInfo.nodeIdToNode), 4)
+	require.Len(t, nodesMap, 4)
+	require.Len(t, networkSetupInfo.nodeIdToNode, 4)
 
 	// send a tx to all nodes again and wait the tx will be added to each ledger
 	env = createEndorserTxEnvelope("TEST_REMOVAL_OF_NODE", channelId)
@@ -329,8 +330,8 @@ func TestAddNodeWhileAnotherNodeIsDown(t *testing.T) {
 	// add new node to the network
 	nodesMap, newNode := networkSetupInfo.AddNewNode()
 	newNode.Start()
-	require.Equal(t, len(nodesMap), 5)
-	require.Equal(t, len(networkSetupInfo.nodeIdToNode), 5)
+	require.Len(t, nodesMap, 5)
+	require.Len(t, networkSetupInfo.nodeIdToNode, 5)
 
 	// restart the old leader
 	nodeMap[leaderId].Restart(networkSetupInfo.configInfo)
@@ -392,8 +393,8 @@ func TestAddAndRemoveNodeWithoutStop(t *testing.T) {
 	// add new node to the network
 	nodesMap, newNode := networkSetupInfo.AddNewNode()
 	newNode.Start()
-	require.Equal(t, len(nodesMap), 5)
-	require.Equal(t, len(networkSetupInfo.nodeIdToNode), 5)
+	require.Len(t, nodesMap, 5)
+	require.Len(t, networkSetupInfo.nodeIdToNode, 5)
 
 	// send a tx to all nodes again and wait the tx will be added to each ledger
 	env = createEndorserTxEnvelope("TEST_ADDITION_OF_NODE", channelId)
@@ -422,8 +423,8 @@ func TestAddAndRemoveNodeWithoutStop(t *testing.T) {
 
 	// remove node from the network
 	nodesMap = networkSetupInfo.RemoveNode(uint64(5))
-	require.Equal(t, len(nodesMap), 4)
-	require.Equal(t, len(networkSetupInfo.nodeIdToNode), 4)
+	require.Len(t, nodesMap, 4)
+	require.Len(t, networkSetupInfo.nodeIdToNode, 4)
 
 	// send a tx to all nodes again and wait the tx will be added to each ledger
 	env = createEndorserTxEnvelope("TEST_REMOVAL_OF_NODE", channelId)
@@ -472,9 +473,9 @@ func addNodeToConfig(t *testing.T, lastConfigBlock *cb.Block, nodeId uint32, tls
 	clonedLastConfigBlock := proto.Clone(lastConfigBlock).(*cb.Block)
 
 	// fetch the ConfigEnvelope from the block
-	env := protoutil.UnmarshalEnvelopeOrPanic(clonedLastConfigBlock.Data.Data[0])
-	payload := protoutil.UnmarshalPayloadOrPanic(env.Payload)
-	configEnv, err := protoutil.UnmarshalConfigEnvelope(payload.Data)
+	env := protoutil.UnmarshalEnvelopeOrPanic(clonedLastConfigBlock.GetData().GetData()[0])
+	payload := protoutil.UnmarshalPayloadOrPanic(env.GetPayload())
+	configEnv, err := protoutil.UnmarshalConfigEnvelope(payload.GetData())
 	require.NoError(t, err)
 	originalConfigEnv := proto.Clone(configEnv).(*cb.ConfigEnvelope)
 
@@ -498,41 +499,43 @@ func addNodeToConfig(t *testing.T, lastConfigBlock *cb.Block, nodeId uint32, tls
 	}
 
 	currentOrderers := &cb.Orderers{}
-	err = proto.Unmarshal(configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Values[channelconfig.OrderersKey].Value, currentOrderers)
+	err = proto.Unmarshal(configEnv.GetConfig().GetChannelGroup().GetGroups()[channelconfig.OrdererGroupKey].GetValues()[channelconfig.OrderersKey].GetValue(), currentOrderers)
 	require.NoError(t, err)
 	currentOrderers.ConsenterMapping = append(currentOrderers.ConsenterMapping, newOrderer)
 	configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Values[channelconfig.OrderersKey] = &cb.ConfigValue{
-		Version:   configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Values[channelconfig.OrderersKey].Version + 1,
+		Version:   configEnv.GetConfig().GetChannelGroup().GetGroups()[channelconfig.OrdererGroupKey].GetValues()[channelconfig.OrderersKey].GetVersion() + 1,
 		Value:     protoutil.MarshalOrPanic(currentOrderers),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 
 	// update organization endpoints
-	ordererEndpoints := configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Groups["SampleOrg"].Values["Endpoints"].Value
+	ordererEndpoints := configEnv.GetConfig().GetChannelGroup().GetGroups()[channelconfig.OrdererGroupKey].GetGroups()["SampleOrg"].GetValues()["Endpoints"].GetValue()
 	ordererEndpointsVal := &cb.OrdererAddresses{}
 	err = proto.Unmarshal(ordererEndpoints, ordererEndpointsVal)
 	require.NoError(t, err)
-	ordererAddresses := ordererEndpointsVal.Addresses
-	ordererAddresses = append(ordererAddresses, fmt.Sprintf("%s:%d", newOrderer.Host, newOrderer.Port))
+	ordererAddresses := ordererEndpointsVal.GetAddresses()
+	ordererAddresses = append(ordererAddresses, fmt.Sprintf("%s:%d", newOrderer.GetHost(), newOrderer.GetPort()))
 	configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Groups["SampleOrg"].Values["Endpoints"].Value = protoutil.MarshalOrPanic(&cb.OrdererAddresses{
 		Addresses: ordererAddresses,
 	})
 
 	// increase the sequence
-	configEnv.Config.Sequence = configEnv.Config.Sequence + 1
+	configEnv.Config.Sequence = configEnv.GetConfig().GetSequence() + 1
 
 	// calculate config update tx
-	configUpdate, err := update.Compute(originalConfigEnv.Config, configEnv.Config)
+	configUpdate, err := update.Compute(originalConfigEnv.GetConfig(), configEnv.GetConfig())
 	require.NoError(t, err)
 	signerSerializer := smartBFTMocks.NewSignerSerializer(t)
 	signerSerializer.EXPECT().Serialize().RunAndReturn(
 		func() ([]byte, error) {
 			return []byte{1, 2, 3}, nil
-		}).Maybe()
+		},
+	).Maybe()
 	signerSerializer.EXPECT().Sign(mock.Anything).RunAndReturn(
 		func(message []byte) ([]byte, error) {
 			return message, nil
-		}).Maybe()
+		},
+	).Maybe()
 	configUpdateTx, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG_UPDATE, channelId, signerSerializer, configUpdate, 0, 0)
 	require.NoError(t, err)
 
@@ -540,7 +543,7 @@ func addNodeToConfig(t *testing.T, lastConfigBlock *cb.Block, nodeId uint32, tls
 	return &cb.Envelope{
 		Payload: protoutil.MarshalOrPanic(&cb.Payload{
 			Data: protoutil.MarshalOrPanic(&cb.ConfigEnvelope{
-				Config:     configEnv.Config,
+				Config:     configEnv.GetConfig(),
 				LastUpdate: configUpdateTx,
 			}),
 			Header: &cb.Header{
@@ -559,39 +562,39 @@ func removeNodeFromConfig(t *testing.T, lastConfigBlock *cb.Block, nodeId uint32
 	clonedLastConfigBlock := proto.Clone(lastConfigBlock).(*cb.Block)
 
 	// fetch the ConfigEnvelope from the block
-	env := protoutil.UnmarshalEnvelopeOrPanic(clonedLastConfigBlock.Data.Data[0])
-	payload := protoutil.UnmarshalPayloadOrPanic(env.Payload)
-	configEnv, err := protoutil.UnmarshalConfigEnvelope(payload.Data)
+	env := protoutil.UnmarshalEnvelopeOrPanic(clonedLastConfigBlock.GetData().GetData()[0])
+	payload := protoutil.UnmarshalPayloadOrPanic(env.GetPayload())
+	configEnv, err := protoutil.UnmarshalConfigEnvelope(payload.GetData())
 	require.NoError(t, err)
 	originalConfigEnv := proto.Clone(configEnv).(*cb.ConfigEnvelope)
 
 	// update the consenter mapping to exclude the new node
 	currentOrderers := &cb.Orderers{}
-	err = proto.Unmarshal(configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Values[channelconfig.OrderersKey].Value, currentOrderers)
+	err = proto.Unmarshal(configEnv.GetConfig().GetChannelGroup().GetGroups()[channelconfig.OrdererGroupKey].GetValues()[channelconfig.OrderersKey].GetValue(), currentOrderers)
 	require.NoError(t, err)
 	var newConsenterMapping []*cb.Consenter
 	var ordererAddress string
-	for i, consenter := range currentOrderers.ConsenterMapping {
-		if consenter.Id == nodeId {
-			newConsenterMapping = append(currentOrderers.ConsenterMapping[:i], currentOrderers.ConsenterMapping[i+1:]...)
-			ordererAddress = fmt.Sprintf("%s:%d", consenter.Host, consenter.Port)
+	for i, consenter := range currentOrderers.GetConsenterMapping() {
+		if consenter.GetId() == nodeId {
+			newConsenterMapping = append(currentOrderers.ConsenterMapping[:i], currentOrderers.GetConsenterMapping()[i+1:]...)
+			ordererAddress = fmt.Sprintf("%s:%d", consenter.GetHost(), consenter.GetPort())
 			break
 		}
 	}
 
 	currentOrderers.ConsenterMapping = newConsenterMapping
 	configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Values[channelconfig.OrderersKey] = &cb.ConfigValue{
-		Version:   configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Values[channelconfig.OrderersKey].Version + 1,
+		Version:   configEnv.GetConfig().GetChannelGroup().GetGroups()[channelconfig.OrdererGroupKey].GetValues()[channelconfig.OrderersKey].GetVersion() + 1,
 		Value:     protoutil.MarshalOrPanic(currentOrderers),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 
 	// update organization endpoints to exclude the node's endpoint
-	ordererEndpoints := configEnv.Config.ChannelGroup.Groups[channelconfig.OrdererGroupKey].Groups["SampleOrg"].Values["Endpoints"].Value
+	ordererEndpoints := configEnv.GetConfig().GetChannelGroup().GetGroups()[channelconfig.OrdererGroupKey].GetGroups()["SampleOrg"].GetValues()["Endpoints"].GetValue()
 	ordererEndpointsVal := &cb.OrdererAddresses{}
 	err = proto.Unmarshal(ordererEndpoints, ordererEndpointsVal)
 	require.NoError(t, err)
-	ordererAddresses := ordererEndpointsVal.Addresses
+	ordererAddresses := ordererEndpointsVal.GetAddresses()
 	var newOrdererAddresses []string
 	for i, address := range ordererAddresses {
 		if address == ordererAddress {
@@ -603,20 +606,22 @@ func removeNodeFromConfig(t *testing.T, lastConfigBlock *cb.Block, nodeId uint32
 	})
 
 	// increase the sequence
-	configEnv.Config.Sequence = configEnv.Config.Sequence + 1
+	configEnv.Config.Sequence = configEnv.GetConfig().GetSequence() + 1
 
 	// calculate config update tx
-	configUpdate, err := update.Compute(originalConfigEnv.Config, configEnv.Config)
+	configUpdate, err := update.Compute(originalConfigEnv.GetConfig(), configEnv.GetConfig())
 	require.NoError(t, err)
 	signerSerializer := smartBFTMocks.NewSignerSerializer(t)
 	signerSerializer.EXPECT().Serialize().RunAndReturn(
 		func() ([]byte, error) {
 			return []byte{1, 2, 3}, nil
-		}).Maybe()
+		},
+	).Maybe()
 	signerSerializer.EXPECT().Sign(mock.Anything).RunAndReturn(
 		func(message []byte) ([]byte, error) {
 			return message, nil
-		}).Maybe()
+		},
+	).Maybe()
 	configUpdateTx, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG_UPDATE, channelId, signerSerializer, configUpdate, 0, 0)
 	require.NoError(t, err)
 
@@ -624,7 +629,7 @@ func removeNodeFromConfig(t *testing.T, lastConfigBlock *cb.Block, nodeId uint32
 	return &cb.Envelope{
 		Payload: protoutil.MarshalOrPanic(&cb.Payload{
 			Data: protoutil.MarshalOrPanic(&cb.ConfigEnvelope{
-				Config:     configEnv.Config,
+				Config:     configEnv.GetConfig(),
 				LastUpdate: configUpdateTx,
 			}),
 			Header: &cb.Header{
@@ -634,5 +639,51 @@ func removeNodeFromConfig(t *testing.T, lastConfigBlock *cb.Block, nodeId uint32
 				}),
 			},
 		}),
+	}
+}
+
+// TestErrored verifies Errored() returns an open channel before Halt and a closed one after; double-Halt is safe.
+func TestErrored(t *testing.T) {
+	dir := t.TempDir()
+	channelId := "testchannel"
+
+	networkSetupInfo := NewNetworkSetupInfo(t, channelId, dir)
+	nodeMap := networkSetupInfo.CreateNodes(1)
+	node := nodeMap[1]
+
+	chain := node.Chain
+
+	// before Halt: Errored() must return a non-nil, open channel.
+	errC := chain.Errored()
+	require.NotNil(t, errC)
+	select {
+	case <-errC:
+		t.Fatal("Errored channel should not be closed before Halt")
+	default:
+	}
+
+	node.Start()
+	node.State.WaitLedgerHeightToBe(1)
+
+	chain.Halt()
+
+	// after Halt: the channel returned before Halt must now be closed.
+	select {
+	case <-errC:
+		// expected
+	default:
+		t.Fatal("Errored channel should be closed after Halt")
+	}
+
+	// calling Halt a second time must not panic.
+	require.NotPanics(t, chain.Halt)
+
+	// Errored() after Halt must still return a closed channel.
+	require.NotNil(t, chain.Errored())
+	select {
+	case <-chain.Errored():
+		// expected
+	default:
+		t.Fatal("Errored channel should be closed after repeated Halt")
 	}
 }

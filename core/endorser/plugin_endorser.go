@@ -64,7 +64,7 @@ type Context struct {
 
 // String returns a text representation of this context
 func (c Context) String() string {
-	return fmt.Sprintf("{plugin: %s, channel: %s, tx: %s, chaincode: %s}", c.PluginName, c.Channel, c.TxID, c.ChaincodeID.Name)
+	return fmt.Sprintf("{plugin: %s, channel: %s, tx: %s, chaincode: %s}", c.PluginName, c.Channel, c.TxID, c.ChaincodeID.GetName())
 }
 
 // PluginSupport aggregates the support interfaces
@@ -130,7 +130,7 @@ func (pbc *pluginsByChannel) initPlugin(plugin endorsement.Plugin, channel strin
 		if err != nil {
 			return nil, errors.Wrap(err, "failed obtaining channel state")
 		}
-		store := pbc.pe.TransientStoreRetriever.StoreForChannel(channel)
+		store := pbc.pe.StoreForChannel(channel)
 		if store == nil {
 			return nil, errors.Errorf("transient store for channel %s was not initialized", channel)
 		}

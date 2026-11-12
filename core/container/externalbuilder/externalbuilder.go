@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package externalbuilder
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -411,13 +411,9 @@ func (b *Builder) NewCommand(name string, args ...string) *exec.Cmd {
 
 func appendDefaultPropagateEnvironment(propagateEnvironment []string) []string {
 	for _, variable := range DefaultPropagateEnvironment {
-		if !contains(propagateEnvironment, variable) {
+		if !slices.Contains(propagateEnvironment, variable) {
 			propagateEnvironment = append(propagateEnvironment, variable)
 		}
 	}
 	return propagateEnvironment
-}
-
-func contains(propagateEnvironment []string, key string) bool {
-	return slices.Contains(propagateEnvironment, key)
 }

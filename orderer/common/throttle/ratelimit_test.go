@@ -13,7 +13,7 @@ import (
 	"time"
 
 	clock "code.cloudfoundry.org/clock/fakeclock"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRateLimitSingleClient(t *testing.T) {
@@ -48,8 +48,8 @@ func TestRateLimitSingleClient(t *testing.T) {
 	max := float64(500) * 1.3
 	min := float64(500) * 0.7
 
-	assert.Less(t, TPS, max)
-	assert.Less(t, min, TPS)
+	require.Less(t, TPS, max)
+	require.Less(t, min, TPS)
 }
 
 func TestRateLimitMultipleClients(t *testing.T) {
@@ -80,11 +80,10 @@ func TestRateLimitMultipleClients(t *testing.T) {
 		client := fmt.Sprintf("client%d", clientID)
 		go func(client string) {
 			defer wg.Done()
-			for i := 0; i < transactions/10; i++ {
+			for range transactions / 10 {
 				rl.LimitRate(client)
 			}
 		}(client)
-
 	}
 
 	wg.Wait()
@@ -96,8 +95,8 @@ func TestRateLimitMultipleClients(t *testing.T) {
 	max := float64(500) * 1.3
 	min := float64(500) * 0.7
 
-	assert.Less(t, TPS, max)
-	assert.Less(t, min, TPS)
+	require.Less(t, TPS, max)
+	require.Less(t, min, TPS)
 }
 
 func TestRateLimitSameClient(t *testing.T) {
@@ -127,7 +126,7 @@ func TestRateLimitSameClient(t *testing.T) {
 	for range 10 {
 		go func() {
 			defer wg.Done()
-			for i := 0; i < transactions/10; i++ {
+			for range transactions / 10 {
 				rl.LimitRate("alice")
 			}
 		}()
@@ -142,17 +141,19 @@ func TestRateLimitSameClient(t *testing.T) {
 	max := float64(500) * 1.3
 	min := float64(500) * 0.7
 
-	assert.Less(t, TPS, max)
-	assert.Less(t, min, TPS)
+	require.Less(t, TPS, max)
+	require.Less(t, min, TPS)
 }
 
-func TestRateLimitClientNumChange(t *testing.T) {
+func TestRateLimitClientNumChange(t *testing.T) { //nolint:tparallel
 	t.Parallel()
 
 	clock := clock.NewFakeClock(time.Now())
 
 	stop := make(chan struct{})
-	defer close(stop)
+	t.Cleanup(func() {
+		close(stop)
+	})
 
 	go advanceTime(stop, clock)
 
@@ -161,10 +162,12 @@ func TestRateLimitClientNumChange(t *testing.T) {
 		Limit:             500,
 		InactivityTimeout: time.Second * 10,
 	}
-	defer rl.Stop()
+	t.Cleanup(func() {
+		rl.Stop()
+	})
 
-	t.Run("", func(t *testing.T) {
-		start := time.Now()
+	t.Run("client", func(t *testing.T) {
+		start := clock.Now()
 
 		var wg sync.WaitGroup
 		wg.Add(10)
@@ -175,11 +178,10 @@ func TestRateLimitClientNumChange(t *testing.T) {
 			client := fmt.Sprintf("client%d", clientID)
 			go func(client string) {
 				defer wg.Done()
-				for i := 0; i < transactions/10; i++ {
+				for range transactions / 10 {
 					rl.LimitRate(client)
 				}
 			}(client)
-
 		}
 
 		wg.Wait()
@@ -191,15 +193,15 @@ func TestRateLimitClientNumChange(t *testing.T) {
 		max := float64(500) * 1.3
 		min := float64(500) * 0.7
 
-		assert.Less(t, TPS, max)
-		assert.Less(t, min, TPS)
+		require.Less(t, TPS, max)
+		require.Less(t, min, TPS)
 	})
 
 	// Next, wait two seconds and then run only a single client.
 	// should have all the quota available to itself.
 	clock.Sleep(time.Second * 2)
 
-	t.Run("", func(t *testing.T) {
+	t.Run("alice", func(t *testing.T) {
 		transactions := 10000
 
 		start := clock.Now()
@@ -214,8 +216,8 @@ func TestRateLimitClientNumChange(t *testing.T) {
 		max := float64(500) * 1.3
 		min := float64(500) * 0.7
 
-		assert.Less(t, TPS, max)
-		assert.Less(t, min, TPS)
+		require.Less(t, TPS, max)
+		require.Less(t, min, TPS)
 	})
 }
 

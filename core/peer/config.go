@@ -396,11 +396,11 @@ func GetServerConfig() (comm.ServerConfig, error) {
 		// get the certs from the file system
 		serverKey, err := os.ReadFile(config.GetPath("peer.tls.key.file"))
 		if err != nil {
-			return serverConfig, fmt.Errorf("error loading TLS key (%s)", err)
+			return serverConfig, fmt.Errorf("error loading TLS key (%w)", err)
 		}
 		serverCert, err := os.ReadFile(config.GetPath("peer.tls.cert.file"))
 		if err != nil {
-			return serverConfig, fmt.Errorf("error loading TLS certificate (%s)", err)
+			return serverConfig, fmt.Errorf("error loading TLS certificate (%w)", err)
 		}
 		serverConfig.SecOpts.Certificate = serverCert
 		serverConfig.SecOpts.Key = serverKey
@@ -409,10 +409,11 @@ func GetServerConfig() (comm.ServerConfig, error) {
 			var clientRoots [][]byte
 			for _, file := range viper.GetStringSlice("peer.tls.clientRootCAs.files") {
 				clientRoot, err := os.ReadFile(
-					config.TranslatePath(filepath.Dir(viper.ConfigFileUsed()), file))
+					config.TranslatePath(filepath.Dir(viper.ConfigFileUsed()), file),
+				)
 				if err != nil {
 					return serverConfig,
-						fmt.Errorf("error loading client root CAs (%s)", err)
+						fmt.Errorf("error loading client root CAs (%w)", err)
 				}
 				clientRoots = append(clientRoots, clientRoot)
 			}
@@ -422,7 +423,7 @@ func GetServerConfig() (comm.ServerConfig, error) {
 		if config.GetPath("peer.tls.rootcert.file") != "" {
 			rootCert, err := os.ReadFile(config.GetPath("peer.tls.rootcert.file"))
 			if err != nil {
-				return serverConfig, fmt.Errorf("error loading TLS root certificate (%s)", err)
+				return serverConfig, fmt.Errorf("error loading TLS root certificate (%w)", err)
 			}
 			serverConfig.SecOpts.ServerRootCAs = [][]byte{rootCert}
 		}
@@ -470,7 +471,6 @@ func GetClientCertificate() (tls.Certificate, error) {
 		}
 		keyPath = config.GetPath("peer.tls.clientKey.file")
 		certPath = config.GetPath("peer.tls.clientCert.file")
-
 	} else {
 		// use the TLS server keypair
 		keyPath = viper.GetString("peer.tls.key.file")

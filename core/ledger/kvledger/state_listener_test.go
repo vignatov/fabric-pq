@@ -86,7 +86,7 @@ func TestStateListener(t *testing.T) {
 	require.NoError(t, err)
 	blk2 := bg.NextBlock([][]byte{sim2ResBytes})
 	require.NoError(t, lgr.CommitLegacy(&ledger.BlockAndPvtData{Block: blk2}, &ledger.CommitOptions{}))
-	require.Equal(t, "", mockListener.channelName)
+	require.Empty(t, mockListener.channelName)
 	require.Nil(t, mockListener.kvWrites)
 
 	// commit tx3 and this should cause mock listener to receive changes made by tx3
@@ -120,7 +120,8 @@ func TestStateListener(t *testing.T) {
 	require.NoError(t, err)
 	defer lgr.Close()
 	require.NoError(t, err)
-	require.Equal(t,
+	require.Equal(
+		t,
 		[]*queryresult.KV{
 			{
 				Namespace: namespace,
@@ -172,7 +173,8 @@ func (l *mockStateListener) Initialize(ledgerID string, qe ledger.SimpleQueryExe
 			break
 		}
 		kv := res.(*queryresult.KV)
-		l.queryResultsInInitializeFunc = append(l.queryResultsInInitializeFunc,
+		l.queryResultsInInitializeFunc = append(
+			l.queryResultsInInitializeFunc,
 			kv,
 		)
 	}

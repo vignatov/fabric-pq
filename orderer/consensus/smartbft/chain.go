@@ -15,11 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hyperledger-labs/SmartBFT/pkg/api"
-	smartbft "github.com/hyperledger-labs/SmartBFT/pkg/consensus"
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
-	"github.com/hyperledger-labs/SmartBFT/pkg/wal"
-	"github.com/hyperledger-labs/SmartBFT/smartbftprotos"
+	"github.com/hyperledger/SmartBFT/pkg/api"
+	smartbft "github.com/hyperledger/SmartBFT/pkg/consensus"
+	"github.com/hyperledger/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/pkg/wal"
+	"github.com/hyperledger/SmartBFT/smartbftprotos"
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -84,6 +84,9 @@ type BFTChain struct {
 	statusReportMutex sync.Mutex
 	consensusRelation types2.ConsensusRelation
 	status            types2.Status
+
+	exitCLock sync.RWMutex
+	exitC     chan struct{}
 }
 
 // NewChain creates new BFT Smart chain
@@ -128,6 +131,7 @@ func NewChain(
 		Logger:             logger,
 		consensusRelation:  types2.ConsensusRelationConsenter,
 		status:             types2.StatusActive,
+		exitC:              make(chan struct{}),
 		Metrics: &Metrics{
 			ClusterSize:          metrics.ClusterSize.With("channel", support.ChannelID()),
 			CommittedBlockNumber: metrics.CommittedBlockNumber.With("channel", support.ChannelID()),
@@ -234,19 +238,19 @@ func bftSmartConsensusBuild(
 			SignerSerializer: c.SignerSerializer,
 			LastConfigBlockNum: func(block *cb.Block) uint64 {
 				if protoutil.IsConfigBlock(block) {
-					return block.Header.Number
+					return block.GetHeader().GetNumber()
 				}
 
-				return c.RuntimeConfig.Load().(RuntimeConfig).LastConfigBlock.Header.Number
+				return c.RuntimeConfig.Load().(RuntimeConfig).LastConfigBlock.GetHeader().GetNumber()
 			},
 		},
 		Metrics: c.MetricsBFT,
 		Metadata: &smartbftprotos.ViewMetadata{
-			ViewId:                    latestMetadata.ViewId,
-			LatestSequence:            latestMetadata.LatestSequence,
-			DecisionsInView:           latestMetadata.DecisionsInView,
-			BlackList:                 latestMetadata.BlackList,
-			PrevCommitSignatureDigest: latestMetadata.PrevCommitSignatureDigest,
+			ViewId:                    latestMetadata.GetViewId(),
+			LatestSequence:            latestMetadata.GetLatestSequence(),
+			DecisionsInView:           latestMetadata.GetDecisionsInView(),
+			BlackList:                 latestMetadata.GetBlackList(),
+			PrevCommitSignatureDigest: latestMetadata.GetPrevCommitSignatureDigest(),
 		},
 		WAL:               consensusWAL,
 		WALInitialContent: walInitState, // Read from WAL entries
@@ -276,7 +280,7 @@ func (c *BFTChain) pruneCommittedRequests(block *cb.Block) {
 	for i := range workerNum {
 		workers = append(workers, &worker{
 			id:        i,
-			work:      block.Data.Data,
+			work:      block.GetData().GetData(),
 			workerNum: workerNum,
 			f: func(tx []byte) {
 				ri := c.verifier.ReqInspector.RequestID(tx)
@@ -288,7 +292,7 @@ func (c *BFTChain) pruneCommittedRequests(block *cb.Block) {
 	var wg sync.WaitGroup
 	wg.Add(len(workers))
 
-	for i := 0; i < len(workers); i++ {
+	for i := range workers {
 		go func(w *worker) {
 			defer wg.Done()
 			w.doWork()
@@ -407,18 +411,18 @@ func (c *BFTChain) Deliver(proposal types.Proposal, signatures []types.Signature
 	})
 
 	var mdTotalSize int
-	for _, md := range block.Metadata.Metadata {
+	for _, md := range block.GetMetadata().GetMetadata() {
 		mdTotalSize += len(md)
 	}
 
 	c.Logger.Infof("Delivering proposal, writing block %d with %d transactions and metadata of total size %d with signatures from %v to the ledger, node id %d",
-		block.Header.Number,
-		len(block.Data.Data),
+		block.GetHeader().GetNumber(),
+		len(block.GetData().GetData()),
 		mdTotalSize,
 		signers,
 		c.Config.SelfID)
-	c.Metrics.CommittedBlockNumber.Set(float64(block.Header.Number)) // report the committed block number
-	c.reportIsLeader()                                               // report the leader
+	c.Metrics.CommittedBlockNumber.Set(float64(block.GetHeader().GetNumber())) // report the committed block number
+	c.reportIsLeader()                                                         // report the leader
 	if protoutil.IsConfigBlock(block) {
 		c.support.WriteConfigBlock(block, nil)
 	} else {
@@ -445,8 +449,9 @@ func (c *BFTChain) WaitReady() error {
 // This is especially useful for the Deliver client, who must terminate waiting
 // clients when the consenter is not up to date.
 func (c *BFTChain) Errored() <-chan struct{} {
-	// TODO: Implement Errored
-	return nil
+	c.exitCLock.RLock()
+	defer c.exitCLock.RUnlock()
+	return c.exitC
 }
 
 // Start should allocate whatever resources are needed for staying up to date with the chain.
@@ -462,15 +467,23 @@ func (c *BFTChain) Start() {
 // Halt frees the resources which were allocated for this Chain.
 func (c *BFTChain) Halt() {
 	c.Logger.Infof("Shutting down chain")
+	c.exitCLock.Lock()
+	select {
+	case <-c.exitC:
+		// already closed
+	default:
+		close(c.exitC)
+	}
+	c.exitCLock.Unlock()
 	c.consensus.Stop()
 }
 
 func (c *BFTChain) blockToProposalWithoutSignaturesInMetadata(block *cb.Block) types.Proposal {
 	blockClone := proto.Clone(block).(*cb.Block)
-	if len(blockClone.Metadata.Metadata) > int(cb.BlockMetadataIndex_SIGNATURES) {
+	if len(blockClone.GetMetadata().GetMetadata()) > int(cb.BlockMetadataIndex_SIGNATURES) {
 		signatureMetadata := &cb.Metadata{}
 		// Nil out signatures because we carry them around separately in the library format.
-		if err := proto.Unmarshal(blockClone.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES], signatureMetadata); err != nil {
+		if err := proto.Unmarshal(blockClone.GetMetadata().GetMetadata()[cb.BlockMetadataIndex_SIGNATURES], signatureMetadata); err != nil {
 			// nothing to do
 			c.Logger.Errorf("Error unmarshalling signature metadata from block: %s", err)
 		}
@@ -478,10 +491,10 @@ func (c *BFTChain) blockToProposalWithoutSignaturesInMetadata(block *cb.Block) t
 		blockClone.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES] = protoutil.MarshalOrPanic(signatureMetadata)
 	}
 	prop := types.Proposal{
-		Header: protoutil.BlockHeaderBytes(blockClone.Header),
+		Header: protoutil.BlockHeaderBytes(blockClone.GetHeader()),
 		Payload: (&ByteBufferTuple{
-			A: protoutil.MarshalOrPanic(blockClone.Data),
-			B: protoutil.MarshalOrPanic(blockClone.Metadata),
+			A: protoutil.MarshalOrPanic(blockClone.GetData()),
+			B: protoutil.MarshalOrPanic(blockClone.GetMetadata()),
 		}).ToBytes(),
 		VerificationSequence: int64(c.verifier.VerificationSequence()),
 	}
@@ -495,39 +508,39 @@ func (c *BFTChain) blockToProposalWithoutSignaturesInMetadata(block *cb.Block) t
 
 func (c *BFTChain) BlockToDecision(block *cb.Block) *types.Decision {
 	proposal := c.blockToProposalWithoutSignaturesInMetadata(block)
-	if block.Header.Number == 0 {
+	if block.GetHeader().GetNumber() == 0 {
 		return &types.Decision{
 			Proposal: proposal,
 		}
 	}
 
 	signatureMetadata := &cb.Metadata{}
-	if err := proto.Unmarshal(block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES], signatureMetadata); err != nil {
+	if err := proto.Unmarshal(block.GetMetadata().GetMetadata()[cb.BlockMetadataIndex_SIGNATURES], signatureMetadata); err != nil {
 		c.Logger.Panicf("Failed unmarshaling signatures from block metadata: %v", err)
 	}
 
 	ordererMDFromBlock := &cb.OrdererBlockMetadata{}
-	if err := proto.Unmarshal(signatureMetadata.Value, ordererMDFromBlock); err != nil {
+	if err := proto.Unmarshal(signatureMetadata.GetValue(), ordererMDFromBlock); err != nil {
 		c.Logger.Panicf("Failed unmarshaling OrdererBlockMetadata from block signature metadata: %v", err)
 	}
 
-	proposal.Metadata = ordererMDFromBlock.ConsenterMetadata
+	proposal.Metadata = ordererMDFromBlock.GetConsenterMetadata()
 
 	var signatures []types.Signature
-	for _, sigMD := range signatureMetadata.Signatures {
+	for _, sigMD := range signatureMetadata.GetSignatures() {
 		idHdr := &cb.IdentifierHeader{}
-		if err := proto.Unmarshal(sigMD.IdentifierHeader, idHdr); err != nil {
-			c.Logger.Panicf("Failed unmarshaling identifier header for %s", base64.StdEncoding.EncodeToString(sigMD.IdentifierHeader))
+		if err := proto.Unmarshal(sigMD.GetIdentifierHeader(), idHdr); err != nil {
+			c.Logger.Panicf("Failed unmarshaling identifier header for %s", base64.StdEncoding.EncodeToString(sigMD.GetIdentifierHeader()))
 		}
 		sig := &Signature{
-			IdentifierHeader:     sigMD.IdentifierHeader,
-			BlockHeader:          protoutil.BlockHeaderBytes(block.Header),
-			OrdererBlockMetadata: signatureMetadata.Value,
+			IdentifierHeader:     sigMD.GetIdentifierHeader(),
+			BlockHeader:          protoutil.BlockHeaderBytes(block.GetHeader()),
+			OrdererBlockMetadata: signatureMetadata.GetValue(),
 		}
 		signatures = append(signatures, types.Signature{
 			Msg:   sig.Marshal(),
-			Value: sigMD.Signature,
-			ID:    uint64(idHdr.Identifier),
+			Value: sigMD.GetSignature(),
+			ID:    uint64(idHdr.GetIdentifier()),
 		})
 	}
 
@@ -553,7 +566,7 @@ func (c *BFTChain) updateRuntimeConfig(block *cb.Block) types.Reconfig {
 	prevRTC := c.RuntimeConfig.Load().(RuntimeConfig)
 	newRTC, err := prevRTC.BlockCommitted(block, c.bccsp)
 	if err != nil {
-		c.Logger.Errorf("Failed constructing RuntimeConfig from block %d, halting chain", block.Header.Number)
+		c.Logger.Errorf("Failed constructing RuntimeConfig from block %d, halting chain", block.GetHeader().GetNumber())
 		c.Halt()
 		return types.Reconfig{}
 	}
@@ -577,7 +590,7 @@ func (c *BFTChain) updateRuntimeConfig(block *cb.Block) types.Reconfig {
 func (c *BFTChain) lastPersistedProposalAndSignatures() (*types.Proposal, []types.Signature) {
 	lastBlock := LastBlockFromLedgerOrPanic(c.support, c.Logger)
 	// initial report of the last committed block number
-	c.Metrics.CommittedBlockNumber.Set(float64(lastBlock.Header.Number))
+	c.Metrics.CommittedBlockNumber.Set(float64(lastBlock.GetHeader().GetNumber()))
 	decision := c.BlockToDecision(lastBlock)
 	return &decision.Proposal, decision.Signatures
 }

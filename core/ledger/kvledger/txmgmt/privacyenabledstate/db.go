@@ -20,7 +20,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/bookkeeping"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/statecouchdb"
-	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/stateleveldb"
+	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/statekvdb"
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/pkg/errors"
 )
@@ -67,7 +67,7 @@ func NewDBProvider(
 			return nil, err
 		}
 	} else {
-		if vdbProvider, err = stateleveldb.NewVersionedDBProvider(stateDBConf.LevelDBPath); err != nil {
+		if vdbProvider, err = statekvdb.NewVersionedDBProvider(stateDBConf.LevelDBPath, stateDBConf.StateDatabase); err != nil {
 			return nil, err
 		}
 	}
@@ -140,7 +140,8 @@ func (s *DB) IsBulkOptimizable() bool {
 
 // LoadCommittedVersionsOfPubAndHashedKeys loads committed version of given public and hashed states
 func (s *DB) LoadCommittedVersionsOfPubAndHashedKeys(pubKeys []*statedb.CompositeKey,
-	hashedKeys []*HashedCompositeKey) error {
+	hashedKeys []*HashedCompositeKey,
+) error {
 	bulkOptimizable, ok := s.VersionedDB.(statedb.BulkOptimizable)
 	if !ok {
 		return nil
@@ -399,12 +400,12 @@ func extractCollectionNames(chaincodeDefinition *cceventmgmt.ChaincodeDefinition
 	collectionConfigs := chaincodeDefinition.CollectionConfigs
 	collectionConfigsMap := make(map[string]bool)
 	if collectionConfigs != nil {
-		for _, config := range collectionConfigs.Config {
+		for _, config := range collectionConfigs.GetConfig() {
 			sConfig := config.GetStaticCollectionConfig()
 			if sConfig == nil {
 				continue
 			}
-			collectionConfigsMap[sConfig.Name] = true
+			collectionConfigsMap[sConfig.GetName()] = true
 		}
 	}
 	return collectionConfigsMap

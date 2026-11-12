@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package lscc_test
 
 import (
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/queryresult"
@@ -90,7 +90,7 @@ func TestAllChaincodesInfo(t *testing.T) {
 	ccInfoProvider := &lscc.DeployedCCInfoProvider{}
 	deployedChaincodesInfo, err := ccInfoProvider.AllChaincodesInfo("testchannel", mockQE)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(deployedChaincodesInfo))
+	require.Len(t, deployedChaincodesInfo, 2)
 	require.Equal(t, cc1, deployedChaincodesInfo["cc1"])
 
 	// because ExplicitCollectionConfigPkg is a protobuf object, we have to compare individual fields for cc2
@@ -101,7 +101,7 @@ func TestAllChaincodesInfo(t *testing.T) {
 	require.Equal(t, cc2.Hash, ccInfo.Hash)
 	require.Equal(t, cc2.IsLegacy, ccInfo.IsLegacy)
 
-	mockQE.GetStateRangeScanIteratorReturns(nil, fmt.Errorf("fake-rangescan-error"))
+	mockQE.GetStateRangeScanIteratorReturns(nil, errors.New("fake-rangescan-error"))
 	_, err = ccInfoProvider.AllChaincodesInfo("testchannel", mockQE)
 	require.EqualError(t, err, "fake-rangescan-error")
 }
@@ -129,7 +129,7 @@ func TestCollectionInfo(t *testing.T) {
 
 	collInfo2, err := ccInfoProvdier.CollectionInfo("", "cc2", "cc2_coll1", mockQE)
 	require.NoError(t, err)
-	require.Equal(t, "cc2_coll1", collInfo2.Name)
+	require.Equal(t, "cc2_coll1", collInfo2.GetName())
 
 	collInfo3, err := ccInfoProvdier.CollectionInfo("", "cc2", "non-existing-coll-in-cc2", mockQE)
 	require.NoError(t, err)

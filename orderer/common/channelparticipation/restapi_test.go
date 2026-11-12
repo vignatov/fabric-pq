@@ -8,8 +8,7 @@ package channelparticipation_test
 
 import (
 	"bytes"
-	"encoding/json"
-	"fmt"
+	"encoding/json/v2"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +40,7 @@ func TestHTTPHandler_ServeHTTP_Disabled(t *testing.T) {
 	_, h := setup(config, t)
 
 	resp := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", channelparticipation.URLBaseV1, nil)
+	req := httptest.NewRequest(http.MethodGet, channelparticipation.URLBaseV1, nil)
 	h.ServeHTTP(resp, req)
 	checkErrorResponse(t, http.StatusServiceUnavailable, "channel participation API is disabled", resp)
 }
@@ -57,7 +56,7 @@ func TestHTTPHandler_ServeHTTP_InvalidMethods(t *testing.T) {
 			resp := httptest.NewRecorder()
 			req := httptest.NewRequest(method, path.Join(channelparticipation.URLBaseV1Channels, "ch-id", "blocks", "b-id"), nil)
 			h.ServeHTTP(resp, req)
-			checkErrorResponse(t, http.StatusMethodNotAllowed, fmt.Sprintf("invalid request method: %s", method), resp)
+			checkErrorResponse(t, http.StatusMethodNotAllowed, "invalid request method: "+method, resp)
 			require.Equal(t, "GET", resp.Result().Header.Get("Allow"), "%s", method)
 		}
 	})
@@ -68,7 +67,7 @@ func TestHTTPHandler_ServeHTTP_InvalidMethods(t *testing.T) {
 			resp := httptest.NewRecorder()
 			req := httptest.NewRequest(method, path.Join(channelparticipation.URLBaseV1Channels, "ch-id"), nil)
 			h.ServeHTTP(resp, req)
-			checkErrorResponse(t, http.StatusMethodNotAllowed, fmt.Sprintf("invalid request method: %s", method), resp)
+			checkErrorResponse(t, http.StatusMethodNotAllowed, "invalid request method: "+method, resp)
 			require.Equal(t, "GET, DELETE", resp.Result().Header.Get("Allow"), "%s", method)
 		}
 	})
@@ -79,7 +78,7 @@ func TestHTTPHandler_ServeHTTP_InvalidMethods(t *testing.T) {
 			resp := httptest.NewRecorder()
 			req := httptest.NewRequest(method, channelparticipation.URLBaseV1Channels, nil)
 			h.ServeHTTP(resp, req)
-			checkErrorResponse(t, http.StatusMethodNotAllowed, fmt.Sprintf("invalid request method: %s", method), resp)
+			checkErrorResponse(t, http.StatusMethodNotAllowed, "invalid request method: "+method, resp)
 			require.Equal(t, "GET, POST, PUT", resp.Result().Header.Get("Allow"), "%s", method)
 		}
 	})
@@ -192,7 +191,7 @@ func TestHTTPHandler_ServeHTTP_ListAll(t *testing.T) {
 		listAll := &types.ChannelList{}
 		err := json.Unmarshal(resp.Body.Bytes(), listAll)
 		require.NoError(t, err, "cannot be unmarshaled")
-		require.Equal(t, 2, len(listAll.Channels))
+		require.Len(t, listAll.Channels, 2)
 		require.Equal(t, list.SystemChannel, listAll.SystemChannel)
 		m := make(map[string]bool)
 		for _, item := range listAll.Channels {
@@ -218,7 +217,7 @@ func TestHTTPHandler_ServeHTTP_ListAll(t *testing.T) {
 		listAll := &types.ChannelList{}
 		err := json.Unmarshal(resp.Body.Bytes(), listAll)
 		require.NoError(t, err, "cannot be unmarshaled")
-		require.Equal(t, 0, len(listAll.Channels))
+		require.Empty(t, listAll.Channels)
 		require.NotNil(t, listAll.Channels)
 		require.Nil(t, listAll.SystemChannel)
 	})
@@ -239,7 +238,7 @@ func TestHTTPHandler_ServeHTTP_ListAll(t *testing.T) {
 			listAll := &types.ChannelList{}
 			err := json.Unmarshal(resp.Body.Bytes(), listAll)
 			require.NoError(t, err, "cannot be unmarshaled")
-			require.Equal(t, 0, len(listAll.Channels))
+			require.Empty(t, listAll.Channels)
 			require.Nil(t, listAll.Channels)
 			require.Nil(t, listAll.SystemChannel)
 		}
@@ -750,6 +749,9 @@ func TestHTTPHandler_ServeHTTP_Fetch(t *testing.T) {
 		checkErrorResponse(t, http.StatusNotFound, "channel pending removal", resp)
 	})
 
+	// writeJSON uses plain json.Marshal with no options; v2 does not escape
+	// HTML by default (v1 did). The error message contains <newest|oldest|...>
+	// angle brackets and must remain unescaped in the JSON error body.
 	t.Run("Error: block ID is bad", func(t *testing.T) {
 		fakeManager, h := setup(config, t)
 		fakeManager.FetchBlockReturns(nil, types.ErrChannelPendingRemoval)
@@ -757,6 +759,7 @@ func TestHTTPHandler_ServeHTTP_Fetch(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, channelparticipation.URLBaseV1Channels+"/app-channel/blocks/blabla", nil)
 		h.ServeHTTP(resp, req)
 		checkErrorResponse(t, http.StatusBadRequest, "invalid block ID: 'blabla' not equal <newest|oldest|config|(number)>", resp)
+		require.Contains(t, resp.Body.String(), `\u003cnewest`)
 	})
 }
 
@@ -775,9 +778,8 @@ func checkErrorResponse(t *testing.T, expectedCode int, expectedErrMsg string, r
 	require.Len(t, headerArray, 1)
 	require.Equal(t, "application/json", headerArray[0])
 
-	decoder := json.NewDecoder(resp.Body)
 	respErr := &types.ErrorResponse{}
-	err := decoder.Decode(respErr)
+	err := json.Unmarshal(resp.Body.Bytes(), respErr)
 	require.NoError(t, err, "body: %s", resp.Body.String())
 	require.Contains(t, respErr.Error, expectedErrMsg)
 }

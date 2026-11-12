@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/pkg/types"
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
@@ -456,7 +456,8 @@ func makeConfigEnvelope(t *testing.T, current, next consensusTypeInfo) *common.E
 				Type:     current.ordererType,
 				Metadata: current.metadata,
 				State:    current.state,
-			}),
+			},
+		),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 
@@ -466,7 +467,8 @@ func makeConfigEnvelope(t *testing.T, current, next consensusTypeInfo) *common.E
 				Type:     next.ordererType,
 				Metadata: next.metadata,
 				State:    next.state,
-			}),
+			},
+		),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 
@@ -485,7 +487,8 @@ func makeConfigEnvelopeWithExtraStuff(t *testing.T, current, next consensusTypeI
 				Type:     current.ordererType,
 				Metadata: current.metadata,
 				State:    current.state,
-			}),
+			},
+		),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 
@@ -495,7 +498,8 @@ func makeConfigEnvelopeWithExtraStuff(t *testing.T, current, next consensusTypeI
 				Type:     next.ordererType,
 				Metadata: next.metadata,
 				State:    next.state,
-			}),
+			},
+		),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 
@@ -515,7 +519,8 @@ func makeConfigEnvelopeWithExtraStuff(t *testing.T, current, next consensusTypeI
 					AbsoluteMaxBytes:  10241024,
 					MaxMessageCount:   1024,
 					PreferredMaxBytes: 10241024,
-				}),
+				},
+			),
 			ModPolicy: channelconfig.AdminsPolicyKey,
 		}
 	}
@@ -560,7 +565,8 @@ func makeConfigTx(original, updated *common.Config, t *testing.T) *common.Envelo
 			LastUpdate: configUpdateTx,
 		},
 		0,
-		0)
+		0,
+	)
 	require.NoError(t, err)
 	return configTx
 }
@@ -587,8 +593,8 @@ func makeBaseConfig(t *testing.T) *common.Config {
 }
 
 func generateCertificates(t *testing.T, confAppRaft *genesisconfig.Profile, tlsCA tlsgen.CA, certDir string) {
-	for i, c := range confAppRaft.Orderer.EtcdRaft.Consenters {
-		srvC, err := tlsCA.NewServerCertKeyPair(c.Host)
+	for i, c := range confAppRaft.Orderer.EtcdRaft.GetConsenters() {
+		srvC, err := tlsCA.NewServerCertKeyPair(c.GetHost())
 		require.NoError(t, err)
 		srvP := path.Join(certDir, fmt.Sprintf("server%d.crt", i))
 		err = os.WriteFile(srvP, srvC.Cert, 0o644)

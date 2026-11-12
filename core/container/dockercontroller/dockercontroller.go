@@ -117,7 +117,7 @@ func (vm *DockerVM) buildImage(ccid string, reader io.Reader) error {
 	startTime := time.Now()
 	res, err := vm.Client.ImageBuild(context.Background(), reader, dcli.ImageBuildOptions{
 		Tags:        []string{id},
-		PullParent:  true,
+		PullParent:  vm.ChaincodePull,
 		NetworkMode: vm.NetworkMode,
 	})
 
@@ -190,7 +190,7 @@ func (vm *DockerVM) GetArgs(ccType string, peerAddress string) ([]string, error)
 	// ported from the container_runtime chaincode component
 	switch ccType {
 	case pb.ChaincodeSpec_GOLANG.String(), pb.ChaincodeSpec_CAR.String():
-		return []string{"chaincode", fmt.Sprintf("-peer.address=%s", peerAddress)}, nil
+		return []string{"chaincode", "-peer.address=" + peerAddress}, nil
 	case pb.ChaincodeSpec_JAVA.String():
 		return []string{"/root/chaincode-java/start", "--peerAddress", peerAddress}, nil
 	case pb.ChaincodeSpec_NODE.String():
@@ -216,22 +216,22 @@ func (vm *DockerVM) GetEnv(ccid string, tlsConfig *ccintf.TLSConfig) []string {
 	// same but now they are not, so we should use a different env
 	// variable. However chaincodes built by older versions of the
 	// peer still adopt this broken convention. (FAB-14630)
-	envs := []string{fmt.Sprintf("CORE_CHAINCODE_ID_NAME=%s", ccid)}
+	envs := []string{"CORE_CHAINCODE_ID_NAME=" + ccid}
 	envs = append(envs, vm.LoggingEnv...)
 
 	// Pass TLS options to chaincode
 	if tlsConfig != nil {
 		envs = append(envs, "CORE_PEER_TLS_ENABLED=true")
-		envs = append(envs, fmt.Sprintf("CORE_TLS_CLIENT_KEY_PATH=%s", TLSClientKeyPath))
-		envs = append(envs, fmt.Sprintf("CORE_TLS_CLIENT_CERT_PATH=%s", TLSClientCertPath))
-		envs = append(envs, fmt.Sprintf("CORE_TLS_CLIENT_KEY_FILE=%s", TLSClientKeyFile))
-		envs = append(envs, fmt.Sprintf("CORE_TLS_CLIENT_CERT_FILE=%s", TLSClientCertFile))
-		envs = append(envs, fmt.Sprintf("CORE_PEER_TLS_ROOTCERT_FILE=%s", TLSClientRootCertFile))
+		envs = append(envs, "CORE_TLS_CLIENT_KEY_PATH="+TLSClientKeyPath)
+		envs = append(envs, "CORE_TLS_CLIENT_CERT_PATH="+TLSClientCertPath)
+		envs = append(envs, "CORE_TLS_CLIENT_KEY_FILE="+TLSClientKeyFile)
+		envs = append(envs, "CORE_TLS_CLIENT_CERT_FILE="+TLSClientCertFile)
+		envs = append(envs, "CORE_PEER_TLS_ROOTCERT_FILE="+TLSClientRootCertFile)
 	} else {
 		envs = append(envs, "CORE_PEER_TLS_ENABLED=false")
 	}
 
-	envs = append(envs, fmt.Sprintf("CORE_PEER_LOCALMSPID=%s", vm.MSPID))
+	envs = append(envs, "CORE_PEER_LOCALMSPID="+vm.MSPID)
 
 	return envs
 }
@@ -286,12 +286,12 @@ func (vm *DockerVM) Start(ccid string, ccType string, peerConnection *ccintf.Pee
 			TLSClientRootCertFile: peerConnection.TLSConfig.RootCert,
 		})
 		if err != nil {
-			return fmt.Errorf("error writing files to upload to Docker instance into a temporary tar blob: %s", err)
+			return fmt.Errorf("error writing files to upload to Docker instance into a temporary tar blob: %w", err)
 		}
 
 		// Write the tar file out
 		if err = tw.Close(); err != nil {
-			return fmt.Errorf("error writing files to upload to Docker instance into a temporary tar blob: %s", err)
+			return fmt.Errorf("error writing files to upload to Docker instance into a temporary tar blob: %w", err)
 		}
 
 		gw.Close()
@@ -302,7 +302,7 @@ func (vm *DockerVM) Start(ccid string, ccType string, peerConnection *ccintf.Pee
 			AllowOverwriteDirWithFile: true,
 		})
 		if err != nil {
-			return fmt.Errorf("Error uploading files to the container instance %s: %s", containerName, err)
+			return fmt.Errorf("Error uploading files to the container instance %s: %w", containerName, err)
 		}
 	}
 
@@ -393,7 +393,7 @@ func (vm *DockerVM) Wait(ccid string) (int, error) {
 }
 
 func (vm *DockerVM) ccidToContainerID(ccid string) string {
-	return strings.Replace(vm.GetVMName(ccid), ":", "_", -1)
+	return strings.ReplaceAll(vm.GetVMName(ccid), ":", "_")
 }
 
 func (vm *DockerVM) stopInternal(id string) error {

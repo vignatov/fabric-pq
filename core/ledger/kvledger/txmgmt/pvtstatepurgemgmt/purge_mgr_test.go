@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/bookkeeping"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/privacyenabledstate"
@@ -226,7 +227,8 @@ func TestOnlyHashUpdateInExpiryBlock(t *testing.T) {
 	noPvtdataUpdates := privacyenabledstate.NewUpdateBatch()
 	helper.commitUpdatesForTesting(2, noPvtdataUpdates)
 	helper.checkPvtdataExists(
-		"ns", "coll", "pvtkey", []byte("pvtvalue-1"))
+		"ns", "coll", "pvtkey", []byte("pvtvalue-1"),
+	)
 	helper.checkExpiryEntryExistsForBlockNum(3, 1)
 
 	// block-3 update: Update hash only
@@ -291,7 +293,7 @@ type testHelper struct {
 
 func (h *testHelper) init(t *testing.T, ledgerid string, btlPolicy pvtdatapolicy.BTLPolicy, dbEnv privacyenabledstate.TestEnv) {
 	h.t = t
-	h.bookkeepingEnv = bookkeeping.NewTestEnv(t)
+	h.bookkeepingEnv = bookkeeping.NewTestEnv(t, ledger.GoLevelDB)
 	dbEnv.Init(t)
 	h.dbEnv = dbEnv
 	h.db = h.dbEnv.GetDBHandle(ledgerid)
@@ -342,7 +344,7 @@ func (h *testHelper) checkOnlyPvtKeyExists(ns, coll, key string, value []byte) {
 
 func (h *testHelper) checkOnlyPvtKeyDoesNotExist(ns, coll, key string) {
 	kv, err := h.db.GetPrivateData(ns, coll, key)
-	require.Nil(h.t, err)
+	require.NoError(h.t, err)
 	require.Nil(h.t, kv)
 }
 
@@ -370,5 +372,5 @@ func (h *testHelper) checkExpiryEntryExistsForBlockNum(expiringBlk uint64, expec
 func (h *testHelper) checkNoExpiryEntryExistsForBlockNum(expiringBlk uint64) {
 	expInfo, err := h.purgeMgr.expKeeper.retrieve(expiringBlk)
 	require.NoError(h.t, err)
-	require.Len(h.t, expInfo, 0)
+	require.Empty(h.t, expInfo)
 }

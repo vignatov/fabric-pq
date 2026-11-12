@@ -46,7 +46,7 @@ func TestResetAllLedgers(t *testing.T) {
 
 	// Reset All kv ledgers
 	rootFSPath := env.initializer.Config.RootFSPath
-	err := kvledger.ResetAllKVLedgers(rootFSPath)
+	err := kvledger.ResetAllKVLedgers(rootFSPath, ledger.GoLevelDB)
 	require.NoError(t, err)
 	rebuildable := rebuildableStatedb | rebuildableBookkeeper | rebuildableConfigHistory | rebuildableHistoryDB | rebuildableBlockIndex
 	env.verifyRebuilableDirEmpty(rebuildable)
@@ -63,7 +63,7 @@ func TestResetAllLedgers(t *testing.T) {
 		ledgerID := fmt.Sprintf("ledger-%d", i)
 		l := env.openTestLedger(ledgerID)
 		l.verifyLedgerHeight(1)
-		require.Equal(t, blockchainsInfo[i].Height, preResetHt[ledgerID])
+		require.Equal(t, blockchainsInfo[i].GetHeight(), preResetHt[ledgerID])
 		gb, err := l.lgr.GetBlockByNumber(0)
 		require.NoError(t, err)
 		require.Equal(t, genesisBlocks[i], gb)
@@ -79,19 +79,19 @@ func TestResetAllLedgers(t *testing.T) {
 	require.NoError(t, kvledger.ClearPreResetHeight(env.initializer.Config.RootFSPath, ledgerIDs))
 	preResetHt, err = kvledger.LoadPreResetHeight(env.initializer.Config.RootFSPath, ledgerIDs)
 	require.NoError(t, err)
-	require.Len(t, preResetHt, 0)
+	require.Empty(t, preResetHt)
 
 	// reset again to test ClearPreResetHeight with different ledgerIDs
 	env.closeLedgerMgmt()
-	err = kvledger.ResetAllKVLedgers(rootFSPath)
+	err = kvledger.ResetAllKVLedgers(rootFSPath, ledger.GoLevelDB)
 	require.NoError(t, err)
 	env.initLedgerMgmt()
 	// verify LoadPreResetHeight with different ledgerIDs
 	newLedgerIDs := ledgerIDs[:len(ledgerIDs)-3]
 	preResetHt, err = kvledger.LoadPreResetHeight(env.initializer.Config.RootFSPath, newLedgerIDs)
 	require.NoError(t, err)
-	require.Equal(t, numLedgers-3, len(preResetHt))
-	for i := 0; i < len(preResetHt); i++ {
+	require.Len(t, preResetHt, numLedgers-3)
+	for i := range len(preResetHt) {
 		require.Contains(t, preResetHt, fmt.Sprintf("ledger-%d", i))
 	}
 	// verify preResetHt after ClearPreResetHeight
@@ -152,7 +152,7 @@ func TestResetAllLedgersWithBTL(t *testing.T) {
 	env.closeLedgerMgmt()
 
 	// reset ledgers to genesis block
-	err := kvledger.ResetAllKVLedgers(env.initializer.Config.RootFSPath)
+	err := kvledger.ResetAllKVLedgers(env.initializer.Config.RootFSPath, ledger.GoLevelDB)
 	require.NoError(t, err)
 	rebuildable := rebuildableStatedb | rebuildableBookkeeper | rebuildableConfigHistory | rebuildableHistoryDB | rebuildableBlockIndex
 	env.verifyRebuilableDirEmpty(rebuildable)

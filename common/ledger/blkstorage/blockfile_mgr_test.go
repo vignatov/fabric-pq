@@ -62,7 +62,8 @@ func TestBlockfileMgrCrashDuringWriting(t *testing.T) {
 
 func testBlockfileMgrCrashDuringWriting(t *testing.T, numBlksBeforeSavingBlkfilesInfo int,
 	numBlksAfterSavingBlkfilesInfo int, numLastBlockBytes int, numPartialBytesToWrite int,
-	deleteBFInfo bool) {
+	deleteBFInfo bool,
+) {
 	env := newTestEnv(t, NewConf(t.TempDir(), 0))
 	defer env.Cleanup()
 	ledgerid := "testLedger"
@@ -137,7 +138,8 @@ func TestBlockfileMgrBlockIterator(t *testing.T) {
 }
 
 func testBlockfileMgrBlockIterator(t *testing.T, blockfileMgr *blockfileMgr,
-	firstBlockNum int, lastBlockNum int, expectedBlocks []*common.Block) {
+	firstBlockNum int, lastBlockNum int, expectedBlocks []*common.Block,
+) {
 	itr, err := blockfileMgr.retrieveBlocks(uint64(firstBlockNum))
 	require.NoError(t, err, "Error while getting blocks iterator")
 	defer itr.Close()
@@ -166,7 +168,7 @@ func TestBlockfileMgrBlockchainInfo(t *testing.T) {
 	blocks := testutil.ConstructTestBlocks(t, 10)
 	blkfileMgrWrapper.addBlocks(blocks)
 	bcInfo = blkfileMgrWrapper.blockfileMgr.getBlockchainInfo()
-	require.Equal(t, uint64(10), bcInfo.Height)
+	require.Equal(t, uint64(10), bcInfo.GetHeight())
 }
 
 func TestTxIDExists(t *testing.T) {
@@ -184,8 +186,8 @@ func TestTxIDExists(t *testing.T) {
 		}
 
 		for _, blk := range blocks {
-			for i := range blk.Data.Data {
-				txID, err := protoutil.GetOrComputeTxIDFromEnvelope(blk.Data.Data[i])
+			for i := range blk.GetData().GetData() {
+				txID, err := protoutil.GetOrComputeTxIDFromEnvelope(blk.GetData().GetData()[i])
 				require.NoError(t, err)
 				exists, err := blkStore.TxIDExists(txID)
 				require.NoError(t, err)
@@ -220,9 +222,9 @@ func TestBlockfileMgrGetTxById(t *testing.T) {
 	blocks := testutil.ConstructTestBlocks(t, 2)
 	blkfileMgrWrapper.addBlocks(blocks)
 	for _, blk := range blocks {
-		for j, txEnvelopeBytes := range blk.Data.Data {
+		for j, txEnvelopeBytes := range blk.GetData().GetData() {
 			// blockNum starts with 0
-			txID, err := protoutil.GetOrComputeTxIDFromEnvelope(blk.Data.Data[j])
+			txID, err := protoutil.GetOrComputeTxIDFromEnvelope(blk.GetData().GetData()[j])
 			require.NoError(t, err)
 			txEnvelopeFromFileMgr, err := blkfileMgrWrapper.blockfileMgr.retrieveTransactionByID(txID)
 			require.NoError(t, err, "Error while retrieving tx from blkfileMgr")
@@ -272,11 +274,11 @@ func TestBlockfileMgrGetTxByIdDuplicateTxid(t *testing.T) {
 	block2.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txValidationFlags
 	require.NoError(t, blkFileMgr.addBlock(block2))
 
-	txenvp1, err := protoutil.GetEnvelopeFromBlock(block1.Data.Data[0])
+	txenvp1, err := protoutil.GetEnvelopeFromBlock(block1.GetData().GetData()[0])
 	require.NoError(t, err)
-	txenvp2, err := protoutil.GetEnvelopeFromBlock(block1.Data.Data[1])
+	txenvp2, err := protoutil.GetEnvelopeFromBlock(block1.GetData().GetData()[1])
 	require.NoError(t, err)
-	txenvp3, err := protoutil.GetEnvelopeFromBlock(block2.Data.Data[0])
+	txenvp3, err := protoutil.GetEnvelopeFromBlock(block2.GetData().GetData()[0])
 	require.NoError(t, err)
 
 	indexedTxenvp, _ := blkFileMgr.retrieveTransactionByID("txid-1")
@@ -361,7 +363,7 @@ func TestBlockfileMgrGetTxByBlockNumTranNum(t *testing.T) {
 	blocks := testutil.ConstructTestBlocks(t, 10)
 	blkfileMgrWrapper.addBlocks(blocks)
 	for blockIndex, blk := range blocks {
-		for tranIndex, txEnvelopeBytes := range blk.Data.Data {
+		for tranIndex, txEnvelopeBytes := range blk.GetData().GetData() {
 			// blockNum and tranNum both start with 0
 			txEnvelopeFromFileMgr, err := blkfileMgrWrapper.blockfileMgr.retrieveTransactionByBlockNumTranNum(uint64(blockIndex), uint64(tranIndex))
 			require.NoError(t, err, "Error while retrieving tx from blkfileMgr")
@@ -380,14 +382,14 @@ func TestBlockfileMgrRestart(t *testing.T) {
 	blocks := testutil.ConstructTestBlocks(t, 10)
 	blkfileMgrWrapper.addBlocks(blocks)
 	expectedHeight := uint64(10)
-	require.Equal(t, expectedHeight, blkfileMgrWrapper.blockfileMgr.getBlockchainInfo().Height)
+	require.Equal(t, expectedHeight, blkfileMgrWrapper.blockfileMgr.getBlockchainInfo().GetHeight())
 	blkfileMgrWrapper.close()
 
 	blkfileMgrWrapper = newTestBlockfileWrapper(env, ledgerid)
 	defer blkfileMgrWrapper.close()
 	require.Equal(t, 9, int(blkfileMgrWrapper.blockfileMgr.blockfilesInfo.lastPersistedBlock))
 	blkfileMgrWrapper.testGetBlockByHash(blocks)
-	require.Equal(t, expectedHeight, blkfileMgrWrapper.blockfileMgr.getBlockchainInfo().Height)
+	require.Equal(t, expectedHeight, blkfileMgrWrapper.blockfileMgr.getBlockchainInfo().GetHeight())
 }
 
 func TestBlockfileMgrFileRolling(t *testing.T) {
@@ -425,9 +427,9 @@ func TestBlockfileMgrGetBlockByTxID(t *testing.T) {
 	blocks := testutil.ConstructTestBlocks(t, 10)
 	blkfileMgrWrapper.addBlocks(blocks)
 	for _, blk := range blocks {
-		for j := range blk.Data.Data {
+		for j := range blk.GetData().GetData() {
 			// blockNum starts with 1
-			txID, err := protoutil.GetOrComputeTxIDFromEnvelope(blk.Data.Data[j])
+			txID, err := protoutil.GetOrComputeTxIDFromEnvelope(blk.GetData().GetData()[j])
 			require.NoError(t, err)
 
 			blockFromFileMgr, err := blkfileMgrWrapper.blockfileMgr.retrieveBlockByTxID(txID)
@@ -456,7 +458,7 @@ func testBlockfileMgrSimulateCrashAtFirstBlockInFile(t *testing.T, deleteBlkfile
 	blockfileMgr := blkfileMgrWrapper.blockfileMgr
 	blocks := testutil.ConstructTestBlocks(t, 10)
 	for i := range 10 {
-		fmt.Printf("blocks[i].Header.Number = %d\n", blocks[i].Header.Number)
+		fmt.Printf("blocks[i].Header.Number = %d\n", blocks[i].GetHeader().GetNumber())
 	}
 	blkfileMgrWrapper.addBlocks(blocks[:5])
 	firstFilePath := blockfileMgr.currentFileWriter.filePath
@@ -487,7 +489,8 @@ func testBlockfileMgrSimulateCrashAtFirstBlockInFile(t *testing.T, deleteBlkfile
 
 	// last block file (block file number 1) should have been truncated to zero length and concluded as the next file to append to
 	require.Equal(t, 0, testutilGetFileSize(t, lastFilePath))
-	require.Equal(t,
+	require.Equal(
+		t,
 		&blockfilesInfo{
 			latestFileNumber:   1,
 			latestFileSize:     0,
@@ -499,7 +502,7 @@ func testBlockfileMgrSimulateCrashAtFirstBlockInFile(t *testing.T, deleteBlkfile
 
 	// Add 5 more blocks and assert that they are added to last file (block file number 1) and full scanning across two files works as expected
 	blkfileMgrWrapper.addBlocks(blocks[5:])
-	require.True(t, testutilGetFileSize(t, lastFilePath) > 0)
+	require.Positive(t, testutilGetFileSize(t, lastFilePath))
 	require.Equal(t, firstBlkFileSize, testutilGetFileSize(t, firstFilePath))
 	blkfileMgrWrapper.testGetBlockByNumber(blocks)
 	testBlockfileMgrBlockIterator(t, blkfileMgrWrapper.blockfileMgr, 0, len(blocks)-1, blocks)

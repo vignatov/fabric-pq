@@ -22,10 +22,9 @@ import (
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	"github.com/hyperledger/fabric-lib-go/bccsp/utils"
 	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
-	"google.golang.org/protobuf/proto"
-
 	"github.com/onsi/gomega"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -142,14 +141,16 @@ func TestSignatureAlgorithms(t *testing.T) {
 			ed25519FabricPubKey,
 			nil,
 			ed25519Signer,
-			mspImpl.(*bccspmsp))
+			mspImpl.(*bccspmsp),
+		)
 
 		ecdsaSigningIdentity, _ := newSigningIdentity(
 			ecdsaCert,
 			ecdsaFabricPubKey,
 			nil,
 			ecdsaSigner,
-			mspImpl.(*bccspmsp))
+			mspImpl.(*bccspmsp),
+		)
 
 		sigEd25519, _ := ed25519SigningIdentity.Sign([]byte("TEST"))
 		sigEcdsa, _ := ecdsaSigningIdentity.Sign([]byte("TEST"))

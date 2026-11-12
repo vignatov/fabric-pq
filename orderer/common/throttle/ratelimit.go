@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package throttle
 
 import (
-	"fmt"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,7 +37,7 @@ type clientState struct {
 	lock       sync.Mutex
 	lastSeen   atomic.Value
 	budget     chan struct{}
-	budgetUsed uint32
+	budgetUsed atomic.Uint32
 }
 
 func (srl *SharedRateLimiter) LimitRate(client string) {
@@ -53,7 +53,7 @@ func (srl *SharedRateLimiter) LimitRate(client string) {
 
 	budget := srl.Limit / numClients
 
-	budgetWeUsedSoFar := atomic.AddUint32(&cs.budgetUsed, 1)
+	budgetWeUsedSoFar := cs.budgetUsed.Add(1)
 
 	if budgetWeUsedSoFar <= uint32(budget) {
 		// We still haven't used up all our budget for the time unit
@@ -69,7 +69,7 @@ func (srl *SharedRateLimiter) LimitRate(client string) {
 	defer cs.lock.Unlock()
 
 	// Check again, maybe we visited this section from another goroutine?
-	if atomic.LoadUint32(&cs.budgetUsed) <= uint32(budget) {
+	if cs.budgetUsed.Load() <= uint32(budget) {
 		// Some other goroutine already visited this section,
 		// nothing left for us to do.
 		return
@@ -82,8 +82,8 @@ func (srl *SharedRateLimiter) LimitRate(client string) {
 		return
 	}
 	// Mark budget as allocated and exit
-	cs.lastSeen.Store(time.Now())
-	atomic.StoreUint32(&cs.budgetUsed, 0)
+	cs.lastSeen.Store(srl.Time.Now())
+	cs.budgetUsed.Store(0)
 }
 
 func (srl *SharedRateLimiter) clientNum() int {
@@ -114,7 +114,7 @@ func (srl *SharedRateLimiter) getOrCreateState(client string) *clientState {
 		budget: make(chan struct{}, 1),
 	}
 
-	cs.lastSeen.Store(time.Now())
+	cs.lastSeen.Store(srl.Time.Now())
 
 	srl.clients[client] = cs
 
@@ -126,7 +126,7 @@ func (srl *SharedRateLimiter) getOrCreateState(client string) *clientState {
 func (srl *SharedRateLimiter) Stop() error {
 	select {
 	case <-srl.stop:
-		return fmt.Errorf("stop must be called only once")
+		return errors.New("stop must be called only once")
 	default:
 		close(srl.stop)
 		return nil

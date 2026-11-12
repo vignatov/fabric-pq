@@ -81,7 +81,7 @@ package marbles
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"strconv"
 	"strings"
@@ -122,32 +122,33 @@ func (t *SimpleChaincode) Invoke(stub shim.ChaincodeStubInterface) *pb.Response 
 	fmt.Println("invoke is running " + function)
 
 	// Handle different functions
-	if function == "initMarble" { // create a new marble
+	switch function {
+	case "initMarble": // create a new marble
 		return t.initMarble(stub, args)
-	} else if function == "transferMarble" { // change owner of a specific marble
+	case "transferMarble": // change owner of a specific marble
 		return t.transferMarble(stub, args)
-	} else if function == "transferMarblesBasedOnColor" { // transfer all marbles of a certain color
+	case "transferMarblesBasedOnColor": // transfer all marbles of a certain color
 		return t.transferMarblesBasedOnColor(stub, args)
-	} else if function == "delete" { // delete a marble
+	case "delete": // delete a marble
 		return t.delete(stub, args)
-	} else if function == "readMarble" { // read a marble
+	case "readMarble": // read a marble
 		return t.readMarble(stub, args)
-	} else if function == "queryMarblesByOwner" { // find marbles for owner X using rich query
+	case "queryMarblesByOwner": // find marbles for owner X using rich query
 		return t.queryMarblesByOwner(stub, args)
-	} else if function == "queryMarbles" { // find marbles based on an ad hoc rich query
+	case "queryMarbles": // find marbles based on an ad hoc rich query
 		return t.queryMarbles(stub, args)
-	} else if function == "getHistoryForMarble" { // get history of values for a marble
+	case "getHistoryForMarble": // get history of values for a marble
 		return t.getHistoryForMarble(stub, args)
-	} else if function == "getMarblesByRange" { // get marbles based on range query
+	case "getMarblesByRange": // get marbles based on range query
 		return t.getMarblesByRange(stub, args)
-	} else if function == "getMarblesByRangeWithPagination" {
+	case "getMarblesByRangeWithPagination":
 		return t.getMarblesByRangeWithPagination(stub, args)
-	} else if function == "queryMarblesWithPagination" {
+	case "queryMarblesWithPagination":
 		return t.queryMarblesWithPagination(stub, args)
+	default:
+		fmt.Println("invoke did not find func: " + function) // error
+		return shim.Error("Received unknown function invocation")
 	}
-
-	fmt.Println("invoke did not find func: " + function) // error
-	return shim.Error("Received unknown function invocation")
 }
 
 // ============================================================
@@ -363,12 +364,12 @@ func constructQueryResponseFromIterator(resultsIterator shim.StateQueryIteratorI
 		}
 		buffer.WriteString("{\"Key\":")
 		buffer.WriteString("\"")
-		buffer.WriteString(queryResponse.Key)
+		buffer.WriteString(queryResponse.GetKey())
 		buffer.WriteString("\"")
 
 		buffer.WriteString(", \"Record\":")
 		// Record is a JSON object, so we write as-is
-		buffer.WriteString(string(queryResponse.Value))
+		buffer.WriteString(string(queryResponse.GetValue()))
 		buffer.WriteString("}")
 		bArrayMemberAlreadyWritten = true
 	}
@@ -384,11 +385,11 @@ func constructQueryResponseFromIterator(resultsIterator shim.StateQueryIteratorI
 func addPaginationMetadataToQueryResults(buffer *bytes.Buffer, responseMetadata *pb.QueryResponseMetadata) *bytes.Buffer {
 	buffer.WriteString("[{\"ResponseMetadata\":{\"RecordsCount\":")
 	buffer.WriteString("\"")
-	buffer.WriteString(fmt.Sprintf("%v", responseMetadata.FetchedRecordsCount))
+	fmt.Fprintf(buffer, "%v", responseMetadata.GetFetchedRecordsCount())
 	buffer.WriteString("\"")
 	buffer.WriteString(", \"Bookmark\":")
 	buffer.WriteString("\"")
-	buffer.WriteString(responseMetadata.Bookmark)
+	buffer.WriteString(responseMetadata.GetBookmark())
 	buffer.WriteString("\"}}]")
 
 	return buffer
@@ -466,7 +467,7 @@ func (t *SimpleChaincode) transferMarblesBasedOnColor(stub shim.ChaincodeStubInt
 		}
 
 		// get the color and name from color~name composite key
-		objectType, compositeKeyParts, err := stub.SplitCompositeKey(responseRange.Key)
+		objectType, compositeKeyParts, err := stub.SplitCompositeKey(responseRange.GetKey())
 		if err != nil {
 			return shim.Error(err.Error())
 		}
@@ -478,8 +479,8 @@ func (t *SimpleChaincode) transferMarblesBasedOnColor(stub shim.ChaincodeStubInt
 		// Re-use the same function that is used to transfer individual marbles
 		response := t.transferMarble(stub, []string{returnedMarbleName, newOwner})
 		// if the transfer failed break out of loop and return error
-		if response.Status != shim.OK {
-			return shim.Error("Transfer failed: " + response.Message)
+		if response.GetStatus() != shim.OK {
+			return shim.Error("Transfer failed: " + response.GetMessage())
 		}
 	}
 
@@ -702,19 +703,19 @@ func (t *SimpleChaincode) getHistoryForMarble(stub shim.ChaincodeStubInterface, 
 		}
 
 		var value *marble = nil
-		if !response.IsDelete {
+		if !response.GetIsDelete() {
 			value = &marble{}
-			err = json.Unmarshal(response.Value, value)
+			err = json.Unmarshal(response.GetValue(), value)
 			if err != nil {
 				return shim.Error(err.Error())
 			}
 		}
 
 		history := &marbleHistory{
-			TxId:      response.TxId,
+			TxId:      response.GetTxId(),
 			Value:     value,
-			Timestamp: time.Unix(response.Timestamp.Seconds, int64(response.Timestamp.Nanos)).String(),
-			IsDelete:  strconv.FormatBool(response.IsDelete),
+			Timestamp: time.Unix(response.GetTimestamp().GetSeconds(), int64(response.GetTimestamp().GetNanos())).String(),
+			IsDelete:  strconv.FormatBool(response.GetIsDelete()),
 		}
 		result = append(result, history)
 	}

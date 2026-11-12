@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package statebased
 
 import (
+	errors2 "errors"
 	"sync"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -40,20 +41,30 @@ func (p *baseEvaluator) checkSBAndCCEP(cc, coll, key string, blockNum, txNum uin
 	vp, err := p.vpmgr.GetValidationParameterForKey(cc, coll, key, blockNum, txNum)
 	if err != nil {
 		// error handling for GetValidationParameterForKey follows this rationale:
-		switch err := errors.Cause(err).(type) {
+		var validationParameterUpdatedError *ValidationParameterUpdatedError
+		var invalidValidationParameterError *InvalidValidationParameterError
+		var collConfigNotDefinedError *ledger.CollConfigNotDefinedError
+		var invalidCollNameError *ledger.InvalidCollNameError
+		switch err := errors.Cause(err); {
 		// 1) if there is a conflict because validation params have been updated
 		//    by another transaction in this block, we will get ValidationParameterUpdatedError.
 		//    This should lead to invalidating the transaction by calling policyErr
-		case *ValidationParameterUpdatedError:
+		case errors2.As(err, &validationParameterUpdatedError):
 			return policyErr(err)
-		// 2) if the ledger returns "determinstic" errors, that is, errors that
+			// 2) if the validation parameter stored for the key cannot be translated
+		//    into a policy, we will get InvalidValidationParameterError. Every peer
+		//    gets the same error for the same ledger state, so this should lead to
+		//    invalidating the transaction by calling policyErr
+		case errors2.As(err, &invalidValidationParameterError):
+			return policyErr(err)
+			// 3) if the ledger returns "determinstic" errors, that is, errors that
 		//    every peer in the channel will also return (such as errors linked to
 		//    an attempt to retrieve metadata from a non-defined collection) should be
 		//    logged and ignored. The ledger will take the most appropriate action
 		//    when performing its side of the validation.
-		case *ledger.CollConfigNotDefinedError, *ledger.InvalidCollNameError:
+		case errors2.As(err, &collConfigNotDefinedError), errors2.As(err, &invalidCollNameError):
 			logger.Warning(errors.WithMessage(err, "skipping key-level validation").Error())
-		// 3) any other type of error should return an execution failure which will
+			// 4) any other type of error should return an execution failure which will
 		//    lead to halting the processing on this channel. Note that any non-categorized
 		//    deterministic error would be caught by the default and would lead to
 		//    a processing halt. This would certainly be a bug, but - in the absence of a
@@ -95,8 +106,8 @@ func (p *baseEvaluator) Evaluate(blockNum, txNum uint64, NsRwSets []*rwsetutil.N
 		// public writes
 		// we validate writes against key-level validation parameters
 		// if any are present or the chaincode-wide endorsement policy
-		for _, pubWrite := range nsRWSet.KvRwSet.Writes {
-			err := p.checkSBAndCCEP(ns, "", pubWrite.Key, blockNum, txNum, sd)
+		for _, pubWrite := range nsRWSet.KvRwSet.GetWrites() {
+			err := p.checkSBAndCCEP(ns, "", pubWrite.GetKey(), blockNum, txNum, sd)
 			if err != nil {
 				return err
 			}
@@ -104,8 +115,8 @@ func (p *baseEvaluator) Evaluate(blockNum, txNum uint64, NsRwSets []*rwsetutil.N
 		// public metadata writes
 		// we validate writes against key-level validation parameters
 		// if any are present or the chaincode-wide endorsement policy
-		for _, pubMdWrite := range nsRWSet.KvRwSet.MetadataWrites {
-			err := p.checkSBAndCCEP(ns, "", pubMdWrite.Key, blockNum, txNum, sd)
+		for _, pubMdWrite := range nsRWSet.KvRwSet.GetMetadataWrites() {
+			err := p.checkSBAndCCEP(ns, "", pubMdWrite.GetKey(), blockNum, txNum, sd)
 			if err != nil {
 				return err
 			}
@@ -115,8 +126,8 @@ func (p *baseEvaluator) Evaluate(blockNum, txNum uint64, NsRwSets []*rwsetutil.N
 		// if any are present or the chaincode-wide endorsement policy
 		for _, collRWSet := range nsRWSet.CollHashedRwSets {
 			coll := collRWSet.CollectionName
-			for _, hashedWrite := range collRWSet.HashedRwSet.HashedWrites {
-				key := string(hashedWrite.KeyHash)
+			for _, hashedWrite := range collRWSet.HashedRwSet.GetHashedWrites() {
+				key := string(hashedWrite.GetKeyHash())
 				err := p.checkSBAndCCEP(ns, coll, key, blockNum, txNum, sd)
 				if err != nil {
 					return err
@@ -128,8 +139,8 @@ func (p *baseEvaluator) Evaluate(blockNum, txNum uint64, NsRwSets []*rwsetutil.N
 		// if any are present or the chaincode-wide endorsement policy
 		for _, collRWSet := range nsRWSet.CollHashedRwSets {
 			coll := collRWSet.CollectionName
-			for _, hashedMdWrite := range collRWSet.HashedRwSet.MetadataWrites {
-				key := string(hashedMdWrite.KeyHash)
+			for _, hashedMdWrite := range collRWSet.HashedRwSet.GetMetadataWrites() {
+				key := string(hashedMdWrite.GetKeyHash())
 				err := p.checkSBAndCCEP(ns, coll, key, blockNum, txNum, sd)
 				if err != nil {
 					return err
@@ -188,45 +199,45 @@ func (klv *KeyLevelValidator) extractDependenciesForTx(blockNum, txNum uint64, e
 		return
 	}
 
-	payl, err := protoutil.UnmarshalPayload(env.Payload)
+	payl, err := protoutil.UnmarshalPayload(env.GetPayload())
 	if err != nil {
 		logger.Warningf("while executing GetPayload got error '%s', skipping tx at height (%d,%d)", err, blockNum, txNum)
 		return
 	}
 
-	tx, err := protoutil.UnmarshalTransaction(payl.Data)
+	tx, err := protoutil.UnmarshalTransaction(payl.GetData())
 	if err != nil {
 		logger.Warningf("while executing GetTransaction got error '%s', skipping tx at height (%d,%d)", err, blockNum, txNum)
 		return
 	}
 
-	cap, err := protoutil.UnmarshalChaincodeActionPayload(tx.Actions[0].Payload)
+	cap, err := protoutil.UnmarshalChaincodeActionPayload(tx.GetActions()[0].GetPayload())
 	if err != nil {
 		logger.Warningf("while executing GetChaincodeActionPayload got error '%s', skipping tx at height (%d,%d)", err, blockNum, txNum)
 		return
 	}
 
-	pRespPayload, err := protoutil.UnmarshalProposalResponsePayload(cap.Action.ProposalResponsePayload)
+	pRespPayload, err := protoutil.UnmarshalProposalResponsePayload(cap.GetAction().GetProposalResponsePayload())
 	if err != nil {
 		logger.Warningf("while executing GetProposalResponsePayload got error '%s', skipping tx at height (%d,%d)", err, blockNum, txNum)
 		return
 	}
 
-	respPayload, err := protoutil.UnmarshalChaincodeAction(pRespPayload.Extension)
+	respPayload, err := protoutil.UnmarshalChaincodeAction(pRespPayload.GetExtension())
 	if err != nil {
 		logger.Warningf("while executing GetChaincodeAction got error '%s', skipping tx at height (%d,%d)", err, blockNum, txNum)
 		return
 	}
 
-	klv.vpmgr.ExtractValidationParameterDependency(blockNum, txNum, respPayload.Results)
+	klv.vpmgr.ExtractValidationParameterDependency(blockNum, txNum, respPayload.GetResults())
 }
 
 // PreValidate implements the function of the StateBasedValidator interface
 func (klv *KeyLevelValidator) PreValidate(txNum uint64, block *common.Block) {
 	klv.blockDep.mutex.Lock()
-	if klv.blockDep.blockNum != block.Header.Number {
-		klv.blockDep.blockNum = block.Header.Number
-		klv.blockDep.txDepOnce = make([]sync.Once, len(block.Data.Data))
+	if klv.blockDep.blockNum != block.GetHeader().GetNumber() {
+		klv.blockDep.blockNum = block.GetHeader().GetNumber()
+		klv.blockDep.txDepOnce = make([]sync.Once, len(block.GetData().GetData()))
 	}
 	klv.blockDep.mutex.Unlock()
 
@@ -235,8 +246,9 @@ func (klv *KeyLevelValidator) PreValidate(txNum uint64, block *common.Block) {
 
 		klv.blockDep.txDepOnce[i].Do(
 			func() {
-				klv.extractDependenciesForTx(block.Header.Number, txPosition, block.Data.Data[txPosition])
-			})
+				klv.extractDependenciesForTx(block.GetHeader().GetNumber(), txPosition, block.GetData().GetData()[txPosition])
+			},
+		)
 	}
 }
 
@@ -245,17 +257,17 @@ func (klv *KeyLevelValidator) Validate(cc string, blockNum, txNum uint64, rwsetB
 	// construct signature set
 	signatureSet := []*protoutil.SignedData{}
 	for _, endorsement := range endorsements {
-		data := make([]byte, len(prp)+len(endorsement.Endorser))
+		data := make([]byte, len(prp)+len(endorsement.GetEndorser()))
 		copy(data, prp)
-		copy(data[len(prp):], endorsement.Endorser)
+		copy(data[len(prp):], endorsement.GetEndorser())
 
 		signatureSet = append(signatureSet, &protoutil.SignedData{
 			// set the data that is signed; concatenation of proposal response bytes and endorser ID
 			Data: data,
 			// set the identity that signs the message: it's the endorser
-			Identity: endorsement.Endorser,
+			Identity: endorsement.GetEndorser(),
 			// set the signature
-			Signature: endorsement.Signature,
+			Signature: endorsement.GetSignature(),
 		})
 	}
 
@@ -276,7 +288,6 @@ func (klv *KeyLevelValidator) Validate(cc string, blockNum, txNum uint64, rwsetB
 		endorsementPolicy := &peer.ApplicationPolicy{}
 		proto.Unmarshal(ccEP, endorsementPolicy)
 		logger.Warnw("Endorsment policy failure", "error", err, "chaincode", cc, "endorsementPolicy", endorsementPolicy, "endorsingIdentities", protoutil.LogMessageForSerializedIdentities(signatureSet))
-
 	}
 	return err
 }

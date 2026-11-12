@@ -95,8 +95,8 @@ func addBlocksToStore(t *testing.T, store *BlockStore, numBlocks int) []*common.
 
 func checkBlocks(t *testing.T, expectedBlocks []*common.Block, store *BlockStore) {
 	bcInfo, _ := store.GetBlockchainInfo()
-	require.Equal(t, uint64(len(expectedBlocks)), bcInfo.Height)
-	require.Equal(t, protoutil.BlockHeaderHash(expectedBlocks[len(expectedBlocks)-1].GetHeader()), bcInfo.CurrentBlockHash)
+	require.Equal(t, uint64(len(expectedBlocks)), bcInfo.GetHeight())
+	require.Equal(t, protoutil.BlockHeaderHash(expectedBlocks[len(expectedBlocks)-1].GetHeader()), bcInfo.GetCurrentBlockHash())
 
 	itr, _ := store.RetrieveBlocks(0)
 	for i := range expectedBlocks {
@@ -106,15 +106,15 @@ func checkBlocks(t *testing.T, expectedBlocks []*common.Block, store *BlockStore
 
 	for blockNum := range expectedBlocks {
 		block := expectedBlocks[blockNum]
-		flags := txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+		flags := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 		retrievedBlock, _ := store.RetrieveBlockByNumber(uint64(blockNum))
 		require.Equal(t, block, retrievedBlock)
 
-		retrievedBlock, _ = store.RetrieveBlockByHash(protoutil.BlockHeaderHash(block.Header))
+		retrievedBlock, _ = store.RetrieveBlockByHash(protoutil.BlockHeaderHash(block.GetHeader()))
 		require.Equal(t, block, retrievedBlock)
 
-		for txNum := 0; txNum < len(block.Data.Data); txNum++ {
-			txEnvBytes := block.Data.Data[txNum]
+		for txNum := range len(block.GetData().GetData()) {
+			txEnvBytes := block.GetData().GetData()[txNum]
 			txEnv, _ := protoutil.GetEnvelopeFromBlock(txEnvBytes)
 			txid, err := protoutil.GetOrComputeTxIDFromEnvelope(txEnvBytes)
 			require.NoError(t, err)
@@ -175,21 +175,21 @@ func TestBlockStoreProvider(t *testing.T) {
 		defer store.Shutdown()
 		stores = append(stores, store)
 	}
-	require.Equal(t, numStores, len(stores))
+	require.Len(t, stores, numStores)
 
 	storeNames, err = provider.List()
 	require.NoError(t, err)
-	require.Equal(t, numStores, len(storeNames))
+	require.Len(t, storeNames, numStores)
 
 	for i := range numStores {
 		exists, err := provider.Exists(constructLedgerid(i))
 		require.NoError(t, err)
-		require.Equal(t, true, exists)
+		require.True(t, exists)
 	}
 
 	exists, err := provider.Exists(constructLedgerid(numStores + 1))
 	require.NoError(t, err)
-	require.Equal(t, false, exists)
+	require.False(t, exists)
 }
 
 func TestDrop(t *testing.T) {
@@ -220,7 +220,7 @@ func TestDrop(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists)
 
-	empty, err := provider.leveldbProvider.GetDBHandle("ledger1").IsEmpty()
+	empty, err := provider.dbProvider.GetDBHandle("ledger1").IsEmpty()
 	require.NoError(t, err)
 	require.True(t, empty)
 

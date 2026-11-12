@@ -107,8 +107,8 @@ func (m *LedgerMgr) CreateLedger(id string, genesisBlock *common.Block) (ledger.
 	m.creationLock.Lock()
 	defer m.creationLock.Unlock()
 
-	if m.joinBySnapshotStatus.InProgress {
-		return nil, errors.Errorf("a ledger is being created from a snapshot at %s. Call ledger creation again after it is done.", m.joinBySnapshotStatus.BootstrappingSnapshotDir)
+	if m.joinBySnapshotStatus.GetInProgress() {
+		return nil, errors.Errorf("a ledger is being created from a snapshot at %s. Call ledger creation again after it is done.", m.joinBySnapshotStatus.GetBootstrappingSnapshotDir())
 	}
 
 	m.lock.Lock()
@@ -182,8 +182,8 @@ func (m *LedgerMgr) createFromSnapshot(snapshotDir string) (ledger.PeerLedger, s
 func (m *LedgerMgr) setJoinBySnapshotStatus(snapshotDir string) error {
 	m.creationLock.Lock()
 	defer m.creationLock.Unlock()
-	if m.joinBySnapshotStatus.InProgress {
-		return errors.Errorf("a ledger is being created from a snapshot at %s. Call ledger creation again after it is done.", m.joinBySnapshotStatus.BootstrappingSnapshotDir)
+	if m.joinBySnapshotStatus.GetInProgress() {
+		return errors.Errorf("a ledger is being created from a snapshot at %s. Call ledger creation again after it is done.", m.joinBySnapshotStatus.GetBootstrappingSnapshotDir())
 	}
 	m.joinBySnapshotStatus.InProgress = true
 	m.joinBySnapshotStatus.BootstrappingSnapshotDir = snapshotDir
@@ -235,8 +235,8 @@ func (m *LedgerMgr) JoinBySnapshotStatus() *pb.JoinBySnapshotStatus {
 	defer m.creationLock.Unlock()
 	// return a copy of joinBySnapshotStatus to the caller
 	return &pb.JoinBySnapshotStatus{
-		InProgress:               m.joinBySnapshotStatus.InProgress,
-		BootstrappingSnapshotDir: m.joinBySnapshotStatus.BootstrappingSnapshotDir,
+		InProgress:               m.joinBySnapshotStatus.GetInProgress(),
+		BootstrappingSnapshotDir: m.joinBySnapshotStatus.GetBootstrappingSnapshotDir(),
 	}
 }
 
@@ -289,7 +289,8 @@ func (l *closableLedger) Close() {
 // this code should be later moved to peer and passed via `Initialize` function of ledgermgmt
 func addListenerForCCEventsHandler(
 	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
-	stateListeners []ledger.StateListener) []ledger.StateListener {
+	stateListeners []ledger.StateListener,
+) []ledger.StateListener {
 	return append(stateListeners, &cceventmgmt.KVLedgerLSCCStateListener{DeployedChaincodeInfoProvider: deployedCCInfoProvider})
 }
 
@@ -301,7 +302,8 @@ type chaincodeInfoProviderImpl struct {
 
 // GetDeployedChaincodeInfo implements function in the interface cceventmgmt.ChaincodeInfoProvider
 func (p *chaincodeInfoProviderImpl) GetDeployedChaincodeInfo(chainid string,
-	chaincodeDefinition *cceventmgmt.ChaincodeDefinition) (*ledger.DeployedChaincodeInfo, error) {
+	chaincodeDefinition *cceventmgmt.ChaincodeDefinition,
+) (*ledger.DeployedChaincodeInfo, error) {
 	ledger, err := p.ledgerMgr.getOpenedLedger(chainid)
 	if err != nil {
 		return nil, err

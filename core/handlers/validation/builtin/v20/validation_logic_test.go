@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package v20
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	validation "github.com/hyperledger/fabric/core/handlers/validation/api/capabilities"
 	vs "github.com/hyperledger/fabric/core/handlers/validation/api/state"
 	"github.com/hyperledger/fabric/core/handlers/validation/builtin/v20/mocks"
+	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
 	"github.com/hyperledger/fabric/msp"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
 	msptesttools "github.com/hyperledger/fabric/msp/mgmt/testtools"
@@ -56,7 +58,7 @@ func createTx(endorsedByDuplicatedIdentity bool) (*common.Envelope, error) {
 		return nil, err
 	}
 
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, &peer.Response{Status: 200}, []byte("res"), nil, ccid, id)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), &peer.Response{Status: 200}, []byte("res"), nil, ccid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +80,7 @@ func getSignedByMSPMemberPolicy(mspID string) ([]byte, error) {
 
 	b, err := protoutil.Marshal(p)
 	if err != nil {
-		return nil, fmt.Errorf("Could not marshal policy, err %s", err)
+		return nil, fmt.Errorf("Could not marshal policy, err %w", err)
 	}
 
 	return b, err
@@ -151,21 +153,59 @@ func TestStateBasedValidationFailure(t *testing.T) {
 	b := &common.Block{Data: &common.BlockData{Data: [][]byte{envBytes}}, Header: &common.BlockHeader{}}
 
 	// bad path: policy validation error
-	sbvm.On("Validate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&commonerrors.VSCCEndorsementPolicyError{Err: fmt.Errorf("some sbe validation err")}).Once()
+	sbvm.On("Validate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&commonerrors.VSCCEndorsementPolicyError{Err: errors.New("some sbe validation err")}).Once()
 	err = v.Validate(b, "foo", 0, 0, policy)
 	require.Error(t, err)
-	require.IsType(t, &commonerrors.VSCCEndorsementPolicyError{}, err)
+	var target *commonerrors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
 
 	// bad path: execution error
-	sbvm.On("Validate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&commonerrors.VSCCExecutionFailureError{Err: fmt.Errorf("some sbe validation err")}).Once()
+	sbvm.On("Validate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&commonerrors.VSCCExecutionFailureError{Err: errors.New("some sbe validation err")}).Once()
 	err = v.Validate(b, "foo", 0, 0, policy)
 	require.Error(t, err)
-	require.IsType(t, &commonerrors.VSCCExecutionFailureError{}, err)
+	var target1 *commonerrors.VSCCExecutionFailureError
+	require.ErrorAs(t, err, &target1)
 
 	// good path: signed by the right MSP
 	sbvm.On("Validate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 	err = v.Validate(b, "foo", 0, 0, policy)
 	require.NoError(t, err)
+}
+
+func TestInvalidKeyLevelValidationParameter(t *testing.T) {
+	rwsb := rwsetutil.NewRWSetBuilder()
+	rwsb.AddToWriteSet("foo", "key", []byte("value"))
+	rwsetBytes, err := rwsb.GetTxReadWriteSet().ToProtoBytes()
+	require.NoError(t, err)
+
+	ccid := &peer.ChaincodeID{Name: "foo", Version: "v1"}
+	cis := &peer.ChaincodeInvocationSpec{ChaincodeSpec: &peer.ChaincodeSpec{ChaincodeId: ccid}}
+	prop, _, err := protoutil.CreateProposalFromCIS(common.HeaderType_ENDORSER_TRANSACTION, "testchannelid", cis, sid)
+	require.NoError(t, err)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), &peer.Response{Status: 200}, rwsetBytes, nil, ccid, id)
+	require.NoError(t, err)
+	tx, err := protoutil.CreateSignedTx(prop, id, presp)
+	require.NoError(t, err)
+	envBytes, err := protoutil.GetBytesEnvelope(tx)
+	require.NoError(t, err)
+
+	state := &mocks.State{}
+	state.GetStateMetadataReturns(map[string][]byte{peer.MetaDataKeys_VALIDATION_PARAMETER.String(): []byte("barf")}, nil)
+	sf := &mocks.StateFetcher{}
+	sf.FetchStateReturns(state, nil)
+	pe := &txvalidator.PolicyEvaluator{
+		IdentityDeserializer: mspmgmt.GetManagerForChain("testchannelid"),
+	}
+	v := New(&mocks.Capabilities{}, sf, &mocks.IdentityDeserializer{}, pe, &mocks.CollectionResources{})
+
+	policy, err := getSignedByMSPMemberPolicy(mspid)
+	require.NoError(t, err)
+
+	b := &common.Block{Data: &common.BlockData{Data: [][]byte{envBytes}}, Header: &common.BlockHeader{Number: 1}}
+	err = v.Validate(b, "foo", 0, 0, policy)
+	var target *commonerrors.VSCCEndorsementPolicyError
+	require.ErrorAs(t, err, &target)
+	require.Contains(t, err.Error(), "could not translate policy for foo:key")
 }
 
 func TestInvoke(t *testing.T) {

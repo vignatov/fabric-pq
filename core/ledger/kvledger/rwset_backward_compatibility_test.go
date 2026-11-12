@@ -44,7 +44,7 @@ func testGenerateSampleRWSet(t *testing.T) []byte {
 	defer provider.Close()
 
 	bg, gb := testutil.NewBlockGenerator(t, "testLedger", false)
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	ledger, err := provider.CreateFromGenesisBlock(gb)
 	require.NoError(t, err)
 	defer ledger.Close()
@@ -57,7 +57,7 @@ func testGenerateSampleRWSet(t *testing.T) []byte {
 
 	txid := util.GenerateUUID()
 
-	// perform a range query for significant larger scan so that the merkle tree building kicks in
+	// perform a range query for significantly larger scan so that the merkle tree building kicks in
 	// each level contains max 50 nodes per the current configuration
 	simulator, err := ledger.NewTxSimulator(txid)
 	require.NoError(t, err)

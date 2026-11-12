@@ -138,11 +138,12 @@ func (*naiveSecProvider) VerifyByChannel(_ common.ChannelID, _ api.PeerIdentityT
 
 func newCommInstanceOnlyWithMetrics(t *testing.T, commMetrics *metrics.CommMetrics, sec *naiveSecProvider,
 	gRPCServer *comm.GRPCServer, certs *common.TLSCertificates,
-	secureDialOpts api.PeerSecureDialOpts, dialOpts ...grpc.DialOption) Comm {
+	secureDialOpts api.PeerSecureDialOpts, dialOpts ...grpc.DialOption,
+) Comm {
 	_, portString, err := net.SplitHostPort(gRPCServer.Address())
 	require.NoError(t, err)
 
-	endpoint := fmt.Sprintf("127.0.0.1:%s", portString)
+	endpoint := "127.0.0.1:" + portString
 	id := []byte(endpoint)
 	identityMapper := identity.NewIdentityMapper(sec, id, noopPurgeIdentity, sec)
 
@@ -152,7 +153,7 @@ func newCommInstanceOnlyWithMetrics(t *testing.T, commMetrics *metrics.CommMetri
 
 	go func() {
 		err := gRPCServer.Start()
-		require.NoError(t, err)
+		require.NoError(t, err) //nolint:testifylint
 	}()
 
 	return &commGRPC{commInst.(*commImpl), gRPCServer}
@@ -165,13 +166,14 @@ type commGRPC struct {
 
 func (c *commGRPC) Stop() {
 	c.commImpl.Stop()
-	c.commImpl.idMapper.Stop()
+	c.idMapper.Stop()
 	c.gRPCServer.Stop()
 }
 
 func newCommInstanceOnly(t *testing.T, sec *naiveSecProvider,
 	gRPCServer *comm.GRPCServer, certs *common.TLSCertificates,
-	secureDialOpts api.PeerSecureDialOpts, dialOpts ...grpc.DialOption) Comm {
+	secureDialOpts api.PeerSecureDialOpts, dialOpts ...grpc.DialOption,
+) Comm {
 	return newCommInstanceOnlyWithMetrics(t, disabledMetrics, sec, gRPCServer, certs, secureDialOpts, dialOpts...)
 }
 
@@ -245,8 +247,8 @@ func handshaker(port int, endpoint string, comm Comm, t *testing.T, connMutator 
 	require.NoError(t, err, "%v", err)
 	msg, err = protoext.EnvelopeToGossipMessage(envelope)
 	require.NoError(t, err, "%v", err)
-	require.Equal(t, []byte(target), msg.GetConn().PkiId)
-	require.Equal(t, extractCertificateHashFromContext(stream.Context()), msg.GetConn().TlsCertHash)
+	require.Equal(t, []byte(target), msg.GetConn().GetPkiId())
+	require.Equal(t, extractCertificateHashFromContext(stream.Context()), msg.GetConn().GetTlsCertHash())
 	msg2Send := createGossipMsg()
 	nonce := uint64(r.Int())
 	msg2Send.Nonce = nonce
@@ -374,7 +376,7 @@ func TestHandshake(t *testing.T) {
 	_, tempEndpoint, tempL = getAvailablePort(t)
 	acceptChan = handshaker(port, tempEndpoint, comm, t, mutator, oneWayTLS)
 	time.Sleep(time.Second)
-	require.Equal(t, 0, len(acceptChan))
+	require.Empty(t, acceptChan)
 	tempL.Close()
 
 	// Negative path, signature is wrong
@@ -385,7 +387,7 @@ func TestHandshake(t *testing.T) {
 	}
 	acceptChan = handshaker(port, tempEndpoint, comm, t, mutator, mutualTLS)
 	time.Sleep(time.Second)
-	require.Equal(t, 0, len(acceptChan))
+	require.Empty(t, acceptChan)
 	tempL.Close()
 
 	// Negative path, the PKIid doesn't match the identity
@@ -399,7 +401,7 @@ func TestHandshake(t *testing.T) {
 	_, tempEndpoint2, tempL2 := getAvailablePort(t)
 	acceptChan = handshaker(port, tempEndpoint2, comm, t, mutator, mutualTLS)
 	time.Sleep(time.Second)
-	require.Equal(t, 0, len(acceptChan))
+	require.Empty(t, acceptChan)
 	tempL.Close()
 	tempL2.Close()
 
@@ -412,7 +414,7 @@ func TestHandshake(t *testing.T) {
 	}
 	acceptChan = handshaker(port, tempEndpoint, comm, t, mutator, mutualTLS)
 	time.Sleep(time.Second)
-	require.Equal(t, 0, len(acceptChan))
+	require.Empty(t, acceptChan)
 	tempL.Close()
 
 	// Negative path, no PKI-ID was sent
@@ -424,7 +426,7 @@ func TestHandshake(t *testing.T) {
 	}
 	acceptChan = handshaker(port, tempEndpoint, comm, t, mutator, mutualTLS)
 	time.Sleep(time.Second)
-	require.Equal(t, 0, len(acceptChan))
+	require.Empty(t, acceptChan)
 	tempL.Close()
 
 	// Negative path, connection message is of a different type
@@ -438,7 +440,7 @@ func TestHandshake(t *testing.T) {
 	}
 	acceptChan = handshaker(port, tempEndpoint, comm, t, mutator, mutualTLS)
 	time.Sleep(time.Second)
-	require.Equal(t, 0, len(acceptChan))
+	require.Empty(t, acceptChan)
 	tempL.Close()
 
 	// Negative path, the peer didn't respond to the handshake in due time
@@ -449,7 +451,7 @@ func TestHandshake(t *testing.T) {
 	}
 	acceptChan = handshaker(port, tempEndpoint, comm, t, mutator, mutualTLS)
 	time.Sleep(time.Second)
-	require.Equal(t, 0, len(acceptChan))
+	require.Empty(t, acceptChan)
 	tempL.Close()
 }
 
@@ -682,7 +684,7 @@ func (bp *nonResponsivePeer) GossipStream(stream proto.Gossip_GossipStreamServer
 }
 
 func (bp *nonResponsivePeer) stop() {
-	bp.Server.Stop()
+	bp.Stop()
 }
 
 func TestNonResponsivePing(t *testing.T) {
@@ -976,7 +978,7 @@ func TestSendBadEnvelope(t *testing.T) {
 
 	select {
 	case goodMsgReceived := <-inc:
-		require.Equal(t, goodMsg.Envelope.Payload, goodMsgReceived.GetSourceEnvelope().Payload)
+		require.Equal(t, goodMsg.GetPayload(), goodMsgReceived.GetSourceEnvelope().GetPayload())
 	case <-time.After(time.Minute):
 		require.Fail(t, "Didn't receive message within a timely manner")
 		return
@@ -986,7 +988,7 @@ func TestSendBadEnvelope(t *testing.T) {
 	start := time.Now()
 	for {
 		badMsg := createGossipMsg()
-		badMsg.Envelope.Payload = []byte{1}
+		badMsg.Payload = []byte{1}
 		err = stream.Send(badMsg.Envelope)
 		if err != nil {
 			require.Equal(t, io.EOF, err)
@@ -1077,7 +1079,7 @@ func waitForMessages(t *testing.T, msgChan chan uint64, count int, errMsg string
 }
 
 func TestConcurrentCloseSend(t *testing.T) {
-	var stopping int32
+	var stopping atomic.Int32
 
 	comm1, _ := newCommInstance(t, naiveSec)
 	comm2, port2 := newCommInstance(t, naiveSec)
@@ -1092,12 +1094,25 @@ func TestConcurrentCloseSend(t *testing.T) {
 		comm1.Send(createGossipMsg(), remotePeer(port2))
 		close(ready)
 
-		for atomic.LoadInt32(&stopping) == int32(0) {
+		for stopping.Load() == int32(0) {
 			comm1.Send(createGossipMsg(), remotePeer(port2))
 		}
 	}()
 	<-ready
 	comm2.Stop()
-	atomic.StoreInt32(&stopping, int32(1))
+	stopping.Store(int32(1))
 	<-done
+}
+
+// String marshals with json.Deterministic(true), so the output is stable:
+// outer and inner map keys are sorted.
+func TestAggregatedSendResultString(t *testing.T) {
+	results := AggregatedSendResult{
+		{Endpoint: "p1"},
+		{error: errors.New("boom"), Endpoint: "p2"},
+		{error: errors.New("boom"), Endpoint: "p3"},
+		{error: errors.New("bang"), Endpoint: "p4"},
+	}
+
+	require.Equal(t, `{"failures":{"bang":1,"boom":2},"successes":1}`, results.String()) //nolint:testifylint
 }

@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package graph
 
 import (
-	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,10 +44,10 @@ func TestBFS(t *testing.T) {
 	for {
 		v := i.Next()
 		if v == nil {
-			require.True(t, j == 6)
+			require.Equal(t, 6, j)
 			break
 		}
-		require.Equal(t, fmt.Sprintf("%d", j), v.Id)
+		require.Equal(t, strconv.Itoa(j), v.Id)
 		j++
 	}
 }
@@ -59,7 +59,7 @@ func TestClone(t *testing.T) {
 
 	copy := v.Clone()
 	// They are different references
-	require.False(t, copy == v)
+	require.NotSame(t, v, copy)
 	// They are equal
 	require.Equal(t, v, copy)
 

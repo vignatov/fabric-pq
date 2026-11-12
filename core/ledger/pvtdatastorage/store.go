@@ -15,7 +15,8 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset"
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset/kvrwset"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
+	db "github.com/hyperledger/fabric/common/ledger"
+	"github.com/hyperledger/fabric/common/ledger/util/dbfactory"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/confighistory"
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
@@ -32,7 +33,7 @@ var logger = flogging.MustGetLogger("pvtdatastorage")
 // Provider provides handle to specific 'Store' that in turn manages
 // private write sets for a ledger
 type Provider struct {
-	dbProvider *leveldbhelper.Provider
+	dbProvider db.Provider
 	pvtData    *PrivateDataConfig
 }
 
@@ -44,11 +45,14 @@ type PrivateDataConfig struct {
 	// It is internally computed by the ledger component,
 	// so it is not in ledger.PrivateDataConfig and not exposed to other components.
 	StorePath string
+	// DBType is the type of database to use. An unknown or empty value falls
+	// back to leveldb at the store selection point, without an error.
+	DBType string
 }
 
 // Store manages the permanent storage of private write sets for a ledger
 type Store struct {
-	db                    *leveldbhelper.DBHandle
+	db                    db.DBHandle
 	ledgerid              string
 	btlPolicy             pvtdatapolicy.BTLPolicy
 	batchesInterval       int
@@ -179,11 +183,7 @@ type lastUpdatedOldBlocksList []uint64
 
 // NewProvider instantiates a StoreProvider
 func NewProvider(conf *PrivateDataConfig) (*Provider, error) {
-	dbProvider, err := leveldbhelper.NewProvider(
-		&leveldbhelper.Conf{
-			DBPath:         conf.StorePath,
-			ExpectedFormat: currentDataVersion,
-		})
+	dbProvider, err := dbfactory.NewProvider(conf.DBType, conf.StorePath, currentDataVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +217,7 @@ func (p *Provider) SnapshotDataImporterFor(
 		membershipProvider,
 		configHistoryRetriever,
 		tempDirRoot,
+		p.pvtData.DBType,
 	)
 }
 
@@ -440,7 +441,7 @@ func (s *Store) getLastUpdatedOldBlocksList() ([]uint64, error) {
 	}
 	position += n
 
-	for i := 0; i < int(numBlks); i++ {
+	for range numBlks {
 		blkNum, n := protowire.ConsumeVarint(v[position:])
 		if n < 0 {
 			return nil, protowire.ParseError(n)
@@ -628,11 +629,11 @@ func (s *Store) removePurgedDataFromCollPvtRWset(k *dataKey, v *rwset.Collection
 	}
 
 	filterInKVWrites := []*kvrwset.KVWrite{}
-	for _, w := range collRWSet.KvRwSet.Writes {
+	for _, w := range collRWSet.KvRwSet.GetWrites() {
 		potentialPurgeMarker := encodePurgeMarkerKey(&purgeMarkerKey{
 			ns:         k.ns,
 			coll:       k.coll,
-			pvtkeyHash: util.ComputeStringHash(w.Key),
+			pvtkeyHash: util.ComputeStringHash(w.GetKey()),
 		})
 
 		encPurgeMarkerVal, err := s.db.Get(potentialPurgeMarker)
@@ -885,6 +886,7 @@ func (s *Store) deleteDataMarkedForPurge() error {
 	if err != nil {
 		return err
 	}
+	defer purgeMarkerIter.Release()
 
 	for purgeMarkerIter.Next() {
 		if err := purgeMarkerIter.Error(); err != nil {
@@ -905,15 +907,18 @@ func (s *Store) deleteDataMarkedForPurge() error {
 		}
 		for hashedIndexIter.Next() {
 			if err := hashedIndexIter.Error(); err != nil {
+				hashedIndexIter.Release()
 				return err
 			}
 
 			// for each hashed index entry, process the purge from private data store and delete the hashed index
 			if err := p.process(hashedIndexIter.Key(), hashedIndexIter.Value()); err != nil {
+				hashedIndexIter.Release()
 				return err
 			}
 			hashedIndexCounter++
 		}
+		hashedIndexIter.Release()
 
 		// also delete the purge marker itself
 		p.addProcessedPurgeMarkerForDeletion(encPurgeMarkerKey)
@@ -1021,9 +1026,9 @@ func (s *Store) processCollElgEvents() error {
 			logger.Errorf("This error is not expected %s", err)
 			continue
 		}
-		for ns, colls := range CollElgInfo.NsCollMap {
+		for ns, colls := range CollElgInfo.GetNsCollMap() {
 			var coll string
-			for _, coll = range colls.Entries {
+			for _, coll = range colls.GetEntries() {
 				logger.Infof("Converting missing data entries from ineligible to eligible for [ns=%s, coll=%s]", ns, coll)
 				startKey, endKey := createRangeScanKeysForInelgMissingData(blkNum, ns, coll)
 				collItr, err := s.db.GetIterator(startKey, endKey)
@@ -1051,9 +1056,24 @@ func (s *Store) processCollElgEvents() error {
 						sleepTime := time.Duration(s.batchesInterval)
 						logger.Infof("Going to sleep for %d milliseconds between batches. Entries for [ns=%s, coll=%s] converted so far = %d",
 							sleepTime, ns, coll, collEntriesConverted)
+						// Close the snapshot iterator before releasing the lock.
+						// A live LevelDB snapshot held across the lock-release window
+						// lets the purger delete InelgMissingData keys that the
+						// iterator still sees, causing them to be re-written as
+						// ElgPrioMissingData after the lock is re-acquired. Closing
+						// here and re-opening after the sleep gives a view of the DB
+						// that reflects any purges that ran during the sleep window,
+						// so already-purged entries are not re-inserted.
+						nextKey := make([]byte, len(originalKey))
+						copy(nextKey, originalKey)
+						collItr.Release()
 						s.purgerLock.Unlock()
-						time.Sleep(sleepTime * time.Millisecond)
+						time.Sleep(sleepTime * time.Millisecond) //nolint:durationcheck
 						s.purgerLock.Lock()
+						collItr, err = s.db.GetIterator(nextKey, endKey)
+						if err != nil {
+							return err
+						}
 					}
 				} // entry loop
 
@@ -1174,8 +1194,8 @@ func (c *collElgProcSync) waitForDone() {
 
 type purgeUpdatesProcessor struct {
 	ledgerid     string
-	db           *leveldbhelper.DBHandle
-	batch        *leveldbhelper.UpdateBatch
+	db           db.DBHandle
+	batch        db.Batch
 	maxBatchSize int
 
 	pvtWrites map[string]*rwsetutil.CollPvtRwSet
@@ -1186,7 +1206,7 @@ type purgeUpdatesProcessor struct {
 
 // newPurgeUpdatesProcessor is used for processing the purge markers - i.e., delete the private data versions that are marked for purge from
 // the pvtdata store.
-func newPurgeUpdatesProcessor(ledgerid string, db *leveldbhelper.DBHandle, purgedKeyAuditLogging bool, maxBatchSize int) *purgeUpdatesProcessor {
+func newPurgeUpdatesProcessor(ledgerid string, db db.DBHandle, purgedKeyAuditLogging bool, maxBatchSize int) *purgeUpdatesProcessor {
 	return &purgeUpdatesProcessor{
 		ledgerid:              ledgerid,
 		db:                    db,
@@ -1227,12 +1247,12 @@ func (p *purgeUpdatesProcessor) process(hashedIndexKey, hashedIndexVal []byte) e
 	}
 
 	collWS := p.pvtWrites[string(dataKey)]
-	writes := collWS.KvRwSet.Writes
+	writes := collWS.KvRwSet.GetWrites()
 	for i, w := range writes {
 		// hashedIndexVal represents the raw private data key
-		if w.Key == string(hashedIndexVal) {
+		if w.GetKey() == string(hashedIndexVal) {
 			collWS.KvRwSet.Writes = append(writes[:i], writes[i+1:]...)
-			p.currentSize -= len(w.Key) + len(w.Value)
+			p.currentSize -= len(w.GetKey()) + len(w.GetValue())
 			break
 		}
 	}
@@ -1243,7 +1263,7 @@ func (p *purgeUpdatesProcessor) process(hashedIndexKey, hashedIndexVal []byte) e
 		if err != nil {
 			return err
 		}
-		logger.Infow("Purging private data from private data storage", "channel", p.ledgerid, "chaincode", decodedDataKey.nsCollBlk.ns, "collection", decodedDataKey.nsCollBlk.coll, "key", string(hashedIndexVal), "blockNum", decodedDataKey.nsCollBlk.blkNum, "tranNum", decodedDataKey.txNum)
+		logger.Infow("Purging private data from private data storage", "channel", p.ledgerid, "chaincode", decodedDataKey.ns, "collection", decodedDataKey.coll, "key", string(hashedIndexVal), "blockNum", decodedDataKey.blkNum, "tranNum", decodedDataKey.txNum)
 	}
 
 	p.batch.Delete(hashedIndexKey)

@@ -73,7 +73,7 @@ func testValidationWithNTXes(t *testing.T, ledger ledger2.PeerLedger, gbHash []b
 
 	tValidator.Validate(block)
 
-	txsfltr := txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsfltr := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 
 	for i := range nBlocks {
 		require.True(t, txsfltr.IsSetTo(i, peer.TxValidationCode_VALID))
@@ -109,7 +109,7 @@ func TestBlockValidationDuplicateTXId(t *testing.T) {
 	defer cleanup()
 
 	gb, _ := test.MakeGenesisBlock("TestLedger")
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	ledger, _ := ledgerMgr.CreateLedger("TestLedger", gb)
 	defer ledger.Close()
 
@@ -154,7 +154,7 @@ func TestBlockValidationDuplicateTXId(t *testing.T) {
 	acv.On("ForbidDuplicateTXIdInBlock").Return(false).Once()
 	tValidator.Validate(block)
 
-	txsfltr := txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsfltr := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 
 	require.True(t, txsfltr.IsSetTo(0, peer.TxValidationCode_VALID))
 	require.True(t, txsfltr.IsSetTo(1, peer.TxValidationCode_VALID))
@@ -162,7 +162,7 @@ func TestBlockValidationDuplicateTXId(t *testing.T) {
 	acv.On("ForbidDuplicateTXIdInBlock").Return(true)
 	tValidator.Validate(block)
 
-	txsfltr = block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER]
+	txsfltr = block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER]
 
 	require.True(t, txsfltr.IsSetTo(0, peer.TxValidationCode_VALID))
 	require.True(t, txsfltr.IsSetTo(1, peer.TxValidationCode_DUPLICATE_TXID))
@@ -173,7 +173,7 @@ func TestBlockValidation(t *testing.T) {
 	defer cleanup()
 
 	gb, _ := test.MakeGenesisBlock("TestLedger")
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	ledger, _ := ledgerMgr.CreateLedger("TestLedger", gb)
 	defer ledger.Close()
 
@@ -186,7 +186,7 @@ func TestParallelBlockValidation(t *testing.T) {
 	defer cleanup()
 
 	gb, _ := test.MakeGenesisBlock("TestLedger")
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	ledger, _ := ledgerMgr.CreateLedger("TestLedger", gb)
 	defer ledger.Close()
 
@@ -199,7 +199,7 @@ func TestVeryLargeParallelBlockValidation(t *testing.T) {
 	defer cleanup()
 
 	gb, _ := test.MakeGenesisBlock("TestLedger")
-	gbHash := protoutil.BlockHeaderHash(gb.Header)
+	gbHash := protoutil.BlockHeaderHash(gb.GetHeader())
 	ledger, _ := ledgerMgr.CreateLedger("TestLedger", gb)
 	defer ledger.Close()
 
@@ -277,7 +277,7 @@ func TestTxValidationFailure_InvalidTxid(t *testing.T) {
 		},
 	}
 
-	hash, _ := protoutil.BlockDataHash(block.Data)
+	hash, _ := protoutil.BlockDataHash(block.GetData())
 	block.Header = &common.BlockHeader{
 		Number:   0,
 		DataHash: hash,
@@ -285,7 +285,7 @@ func TestTxValidationFailure_InvalidTxid(t *testing.T) {
 
 	// Initialize metadata
 	protoutil.InitBlockMetadata(block)
-	txsFilter := txflags.NewWithValues(len(block.Data.Data), peer.TxValidationCode_VALID)
+	txsFilter := txflags.NewWithValues(len(block.GetData().GetData()), peer.TxValidationCode_VALID)
 	block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txsFilter
 
 	// Commit block to the ledger
@@ -295,11 +295,11 @@ func TestTxValidationFailure_InvalidTxid(t *testing.T) {
 	// because it's already committed
 	tValidator.Validate(block)
 
-	txsfltr := txflags.ValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsfltr := txflags.ValidationFlags(block.GetMetadata().GetMetadata()[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	require.True(t, txsfltr.IsInvalid(0))
 
 	// We expect the tx to be invalid because of a bad txid
-	require.True(t, txsfltr.Flag(0) == peer.TxValidationCode_BAD_PROPOSAL_TXID)
+	require.Equal(t, peer.TxValidationCode_BAD_PROPOSAL_TXID, txsfltr.Flag(0))
 }
 
 func createCCUpgradeEnvelope(channelID, chaincodeName, chaincodeVersion string, signer msp.SigningIdentity) (*common.Envelope, error) {
@@ -350,7 +350,7 @@ func TestGetTxCCInstance(t *testing.T) {
 	require.NoError(t, err)
 
 	// get the payload from the envelope
-	payload, err := protoutil.UnmarshalPayload(env.Payload)
+	payload, err := protoutil.UnmarshalPayload(env.GetPayload())
 	require.NoError(t, err)
 
 	expectInvokeCCIns := &sysccprovider.ChaincodeInstance{
@@ -371,8 +371,8 @@ func TestGetTxCCInstance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get chaincode from tx error: %s", err)
 	}
-	require.EqualValues(t, expectInvokeCCIns, invokeCCIns)
-	require.EqualValues(t, expectUpgradeCCIns, upgradeCCIns)
+	require.Equal(t, expectInvokeCCIns, invokeCCIns)
+	require.Equal(t, expectUpgradeCCIns, upgradeCCIns)
 }
 
 func TestInvalidTXsForUpgradeCC(t *testing.T) {
@@ -419,7 +419,7 @@ func TestInvalidTXsForUpgradeCC(t *testing.T) {
 	}
 	tValidator.invalidTXsForUpgradeCC(txsChaincodeNames, upgradedChaincodes, txsfltr)
 
-	require.EqualValues(t, expectTxsFltr, txsfltr)
+	require.Equal(t, expectTxsFltr, txsfltr)
 }
 
 func constructLedgerMgrWithTestDefaults(t *testing.T) (*ledgermgmt.LedgerMgr, func()) {

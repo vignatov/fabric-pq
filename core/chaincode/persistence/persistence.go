@@ -18,7 +18,6 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric/common/chaincode"
 	"github.com/hyperledger/fabric/common/util"
-
 	"github.com/pkg/errors"
 )
 
@@ -55,7 +54,8 @@ func (f *FilesystemIO) WriteFile(path, name string, data []byte) error {
 		if err == nil {
 			err = errors.Errorf(
 				"failed to write the entire content of the file, expected %d, wrote %d",
-				len(data), n)
+				len(data), n,
+			)
 		}
 		return errors.Wrapf(err, "error writing to temp file '%s'", tmpFile.Name())
 	}
@@ -180,7 +180,10 @@ func (s *Store) Save(label string, ccInstallPkg []byte) (string, error) {
 // Load loads a persisted chaincode install package bytes with
 // the given packageID.
 func (s *Store) Load(packageID string) ([]byte, error) {
-	ccInstallPkgPath := filepath.Join(s.Path, CCFileName(packageID))
+	ccInstallPkgPath, err := s.packagePath(packageID)
+	if err != nil {
+		return nil, err
+	}
 
 	exists, err := s.ReadWriter.Exists(ccInstallPkgPath)
 	if err != nil {
@@ -205,8 +208,22 @@ func (s *Store) Load(packageID string) ([]byte, error) {
 // so this should only be performed if the chaincode has already
 // been marked built.
 func (s *Store) Delete(packageID string) error {
-	ccInstallPkgPath := filepath.Join(s.Path, CCFileName(packageID))
+	ccInstallPkgPath, err := s.packagePath(packageID)
+	if err != nil {
+		return err
+	}
 	return s.ReadWriter.Remove(ccInstallPkgPath)
+}
+
+// packagePath returns the path of the install package with the given
+// packageID. The packageID is rejected if it does not map to a plain file
+// name, as it would otherwise resolve to a path outside of the store.
+func (s *Store) packagePath(packageID string) (string, error) {
+	ccInstallPkgFileName := CCFileName(packageID)
+	if ccInstallPkgFileName != filepath.Base(ccInstallPkgFileName) {
+		return "", errors.Errorf("invalid chaincode install package ID '%s'", packageID)
+	}
+	return filepath.Join(s.Path, ccInstallPkgFileName), nil
 }
 
 // CodePackageNotFoundErr is the error returned when a code package cannot

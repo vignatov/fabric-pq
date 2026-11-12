@@ -141,15 +141,24 @@ func (s *RPC) submitSent(start time.Time, to uint64, msg *orderer.SubmitRequest)
 }
 
 func (s *RPC) consensusSent(start time.Time, to uint64, msg *orderer.ConsensusRequest) {
-	s.Logger.Debugf("Sending msg of %d bytes (with metadata %d bytes) to %d on channel %s took %v", len(msg.Payload), len(msg.Metadata), to, s.Channel, time.Since(start))
+	s.Logger.Debugf("Sending msg of %d bytes (with metadata %d bytes) to %d on channel %s took %v", len(msg.GetPayload()), len(msg.GetMetadata()), to, s.Channel, time.Since(start))
 }
 
 // getOrCreateStream obtains a Submit stream for the given destination node
 func (s *RPC) getOrCreateStream(destination uint64, operationType OperationType) (*Stream, error) {
 	stream := s.getStream(destination, operationType)
 	if stream != nil {
-		return stream, nil
+		if !stream.Canceled() {
+			return stream, nil
+		}
+
+		// The cached stream was aborted, for example because the TLS certificate
+		// of the remote node changed or the connection to it was lost.
+		// Discard it, so that a new stream is established below.
+		s.Logger.Infof("Discarding %s stream %d to %d on channel %s because it is canceled", operationType, stream.ID, destination, s.Channel)
+		s.unMapStream(destination, operationType, stream.ID)
 	}
+
 	stub, err := s.Comm.Remote(s.Channel, destination)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -204,8 +213,8 @@ func (s *RPC) cleanCanceledStreams(operationType OperationType) {
 }
 
 func submitMsgLength(request *orderer.SubmitRequest) int {
-	if request.Payload == nil {
+	if request.GetPayload() == nil {
 		return 0
 	}
-	return len(request.Payload.Payload)
+	return len(request.GetPayload().GetPayload())
 }

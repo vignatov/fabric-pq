@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package smartbft
 
 import (
-	protos "github.com/hyperledger-labs/SmartBFT/smartbftprotos"
+	protos "github.com/hyperledger/SmartBFT/smartbftprotos"
 	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
@@ -48,7 +48,7 @@ func (in *Ingress) OnConsensus(channel string, sender uint64, request *ab.Consen
 		return errors.Errorf("channel %s doesn't exist", channel)
 	}
 	msg := &protos.Message{}
-	if err := proto.Unmarshal(request.Payload, msg); err != nil {
+	if err := proto.Unmarshal(request.GetPayload(), msg); err != nil {
 		in.Logger.Warningf("Malformed message: %v", err)
 		return errors.Wrap(err, "malformed message")
 	}
@@ -63,6 +63,6 @@ func (in *Ingress) OnSubmit(channel string, sender uint64, request *ab.SubmitReq
 		in.Logger.Warningf("An attempt to submit a transaction to a non existing channel (%s) was made by %d", channel, sender)
 		return errors.Errorf("channel %s doesn't exist", channel)
 	}
-	receiver.HandleRequest(sender, protoutil.MarshalOrPanic(request.Payload))
+	receiver.HandleRequest(sender, protoutil.MarshalOrPanic(request.GetPayload()))
 	return nil
 }

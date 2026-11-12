@@ -8,7 +8,9 @@ package golang
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	errors2 "errors"
 	"fmt"
 	"io"
 	"os"
@@ -62,7 +64,7 @@ func gopathDependencyPackageInfo(goos, goarch, pkg string) ([]PackageInfo, error
 	if err != nil {
 		return nil, wrapExitErr(err, "'go list -deps' failed")
 	}
-	decoder := json.NewDecoder(stdout)
+	decoder := jsontext.NewDecoder(stdout)
 
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -71,7 +73,7 @@ func gopathDependencyPackageInfo(goos, goarch, pkg string) ([]PackageInfo, error
 	var list []PackageInfo
 	for {
 		var packageInfo PackageInfo
-		if err := decoder.Decode(&packageInfo); errors.Is(err, io.EOF) {
+		if err := json.UnmarshalDecode(decoder, &packageInfo); errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
 			return nil, err
@@ -94,7 +96,7 @@ func gopathDependencyPackageInfo(goos, goarch, pkg string) ([]PackageInfo, error
 }
 
 func wrapExitErr(err error, message string) error {
-	if ee, ok := err.(*exec.ExitError); ok {
+	if ee, ok := errors2.AsType[*exec.ExitError](err); ok {
 		return errors.Wrapf(err, message+" with: %s", strings.TrimRight(string(ee.Stderr), "\n\r\t"))
 	}
 	return errors.Wrap(err, message)
@@ -107,14 +109,13 @@ type ModuleInfo struct {
 	ModulePath string
 }
 
-// listModuleInfo extracts module information for the curent working directory.
+// listModuleInfo extracts module information for the current working directory.
 func listModuleInfo(extraEnv ...string) (*ModuleInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "go", "list", "-json", ".")
-	cmd.Env = append(os.Environ(), "GO111MODULE=on")
-	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Env = append(os.Environ(), extraEnv...)
 
 	output, err := cmd.Output()
 	if err != nil {

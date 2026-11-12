@@ -292,7 +292,7 @@ func TestNilArgs(t *testing.T) {
 			}),
 		}),
 	}}
-	require.True(t, len(request.GetProposedTransaction().GetProposalBytes()) != 0)
+	require.NotEmpty(t, request.GetProposedTransaction().GetProposalBytes())
 	_, err = server.Evaluate(ctx, request)
 	require.ErrorIs(t, err, status.Error(codes.InvalidArgument, "failed to unpack transaction proposal: no channel id provided"))
 
@@ -546,7 +546,7 @@ func checkError(t *testing.T, tt *testDef, err error) (checked bool) {
 		return
 	}
 
-	require.NotNil(t, err, "error")
+	require.Error(t, err, "error")
 
 	if stringCheck {
 		require.ErrorContains(t, err, tt.errString, "error string")
@@ -657,7 +657,8 @@ func createMockPeer(t *testing.T, endorser *endorserState) *dp.Peer {
 					Membership: &gossip.Member{Endpoint: endorser.endorser.address},
 				},
 			},
-		})
+		},
+	)
 
 	require.NoError(t, err)
 
@@ -670,7 +671,8 @@ func createMockPeer(t *testing.T, endorser *endorserState) *dp.Peer {
 					},
 				},
 			},
-		})
+		},
+	)
 
 	require.NoError(t, err)
 

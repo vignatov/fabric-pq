@@ -73,7 +73,7 @@ func TestSerializedBlockInfo(t *testing.T) {
 		testSerializedBlockInfo(t, block, c)
 	})
 
-	t.Run("malformed tx-envelop for one of the transactions", func(t *testing.T) {
+	t.Run("malformed tx-envelope for one of the transactions", func(t *testing.T) {
 		block := testutil.ConstructTestBlock(t, 1, 10, 100)
 		// malformed Payload for
 		block.Data.Data[1] = protoutil.MarshalOrPanic(&common.Envelope{
@@ -90,8 +90,8 @@ func testSerializedBlockInfo(t *testing.T, block *common.Block, c *testutilTxIDC
 	infoFromBB, err := extractSerializedBlockInfo(bb)
 	require.NoError(t, err)
 	require.Equal(t, info, infoFromBB)
-	require.Equal(t, len(block.Data.Data), len(info.txOffsets))
-	for txIndex, txEnvBytes := range block.Data.Data {
+	require.Len(t, info.txOffsets, len(block.GetData().GetData()))
+	for txIndex, txEnvBytes := range block.GetData().GetData() {
 		txid := c.computeExpectedTxID(txIndex, txEnvBytes)
 		indexInfo := info.txOffsets[txIndex]
 		indexTxID := indexInfo.txID

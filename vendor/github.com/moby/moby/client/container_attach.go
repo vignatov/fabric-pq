@@ -23,7 +23,7 @@ type ContainerAttachResult struct {
 
 // ContainerAttach attaches a connection to a container in the server.
 // It returns a [HijackedResponse] with the hijacked connection
-// and a reader to get output. It's up to the called to close
+// and a reader to get output. It's up to the caller to close
 // the hijacked connection by calling [HijackedResponse.Close].
 //
 // The stream format on the response uses one of two formats:
@@ -75,9 +75,8 @@ func (cli *Client) ContainerAttach(ctx context.Context, containerID string, opti
 		query.Set("logs", "1")
 	}
 
-	hijacked, err := cli.postHijacked(ctx, "/containers/"+containerID+"/attach", query, nil, http.Header{
-		"Content-Type": {"text/plain"},
-	})
+	headers := http.Header{"Content-Type": {"text/plain"}}
+	hijacked, err := cli.postHijacked(ctx, "/containers/"+containerID+"/attach", query, headers, nil)
 	if err != nil {
 		return ContainerAttachResult{}, err
 	}

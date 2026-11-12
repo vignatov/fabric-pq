@@ -56,6 +56,7 @@ func (env *testVDBEnv) init(t *testing.T, sysNamespaces []string) {
 		MaxRetriesOnStartup: 20,
 		RequestTimeout:      35 * time.Second,
 		RedoLogPath:         redoPath,
+		RedoLogDBType:       ledger.GoLevelDB,
 		UserCacheSizeMBs:    8,
 	}
 
@@ -222,7 +223,7 @@ func TestGetVersionFromCache(t *testing.T) {
 	// db also, get version call would not update
 	// the cache.
 	ver, err := db.GetVersion("ns", "key1")
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, ver)
 	testDoesNotExistInCache(t, vdbEnv.cache, chainID, "ns", "key1")
 
@@ -238,7 +239,7 @@ func TestGetVersionFromCache(t *testing.T) {
 
 	ver, err = db.GetVersion("ns", "key1")
 	require.NoError(t, err)
-	expectedVer, _, err := version.NewHeightFromBytes(cacheValue.Version)
+	expectedVer, _, err := version.NewHeightFromBytes(cacheValue.GetVersion())
 	require.NoError(t, err)
 	require.Equal(t, expectedVer, ver)
 
@@ -315,7 +316,7 @@ func TestGetMultipleStatesFromCache(t *testing.T) {
 
 	// key5 does not exist at all while key3 and key4 does not exist in the cache
 	vvalues, err := db.GetStateMultipleKeys("ns", []string{"key1", "key2", "key3", "key4", "key5"})
-	require.Nil(t, err)
+	require.NoError(t, err)
 	vv1, err := constructVersionedValue(cacheValue1)
 	require.NoError(t, err)
 	vv2, err := constructVersionedValue(cacheValue2)
@@ -378,11 +379,11 @@ func TestCacheUpdatesAfterCommit(t *testing.T) {
 
 	v, err := vdbEnv.cache.getState(chainID, "ns1", "key1")
 	require.NoError(t, err)
-	ns1key1rev := string(v.AdditionalInfo)
+	ns1key1rev := string(v.GetAdditionalInfo())
 
 	v, err = vdbEnv.cache.getState(chainID, "ns1", "key2")
 	require.NoError(t, err)
-	ns1key2rev := string(v.AdditionalInfo)
+	ns1key2rev := string(v.GetAdditionalInfo())
 
 	// update key1 and key2 in ns1. delete key1 and key2 in ns2. add a new key3 in ns2.
 	batch = statedb.NewUpdateBatch()
@@ -406,14 +407,14 @@ func TestCacheUpdatesAfterCommit(t *testing.T) {
 	vv, err := constructVersionedValue(cacheValue)
 	require.NoError(t, err)
 	require.Equal(t, vv1Update, vv)
-	require.NotEqual(t, ns1key1rev, string(cacheValue.AdditionalInfo))
+	require.NotEqual(t, ns1key1rev, string(cacheValue.GetAdditionalInfo()))
 
 	cacheValue, err = vdbEnv.cache.getState(chainID, "ns1", "key2")
 	require.NoError(t, err)
 	vv, err = constructVersionedValue(cacheValue)
 	require.NoError(t, err)
 	require.Equal(t, vv2Update, vv)
-	require.NotEqual(t, ns1key2rev, string(cacheValue.AdditionalInfo))
+	require.NotEqual(t, ns1key2rev, string(cacheValue.GetAdditionalInfo()))
 
 	testDoesNotExistInCache(t, vdbEnv.cache, chainID, "ns2", "key1")
 	testDoesNotExistInCache(t, vdbEnv.cache, chainID, "ns2", "key2")
@@ -513,7 +514,7 @@ func TestUtilityFunctions(t *testing.T) {
 
 	// ValidateKeyValue should return nil for a valid key and value
 	err = db.ValidateKeyValue("testKey", []byte("Some random bytes"))
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	// ValidateKeyValue should return an error for a key that is not a utf-8 valid string
 	err = db.ValidateKeyValue(string([]byte{0xff, 0xfe, 0xfd}), []byte("Some random bytes"))
@@ -530,8 +531,9 @@ func TestUtilityFunctions(t *testing.T) {
 	for _, reservedField := range reservedFields {
 		testVal := fmt.Sprintf(`{"%s":"dummyVal"}`, reservedField)
 		err = db.ValidateKeyValue("testKey", []byte(testVal))
-		require.Error(t, err, fmt.Sprintf(
-			"ValidateKey should have thrown an error for a json value %s, as contains one of the reserved fields", testVal))
+		require.Errorf(t, err,
+			"ValidateKey should have thrown an error for a json value %s, as contains one of the reserved fields", testVal,
+		)
 	}
 
 	// ValidateKeyValue should not return an error for a json value that contains one of the reserved fields
@@ -539,8 +541,9 @@ func TestUtilityFunctions(t *testing.T) {
 	for _, reservedField := range reservedFields {
 		testVal := fmt.Sprintf(`{"data.%s":"dummyVal"}`, reservedField)
 		err = db.ValidateKeyValue("testKey", []byte(testVal))
-		require.NoError(t, err, fmt.Sprintf(
-			"ValidateKey should not have thrown an error the json value %s since the reserved field was not at the top level", testVal))
+		require.NoErrorf(t, err,
+			"ValidateKey should not have thrown an error the json value %s since the reserved field was not at the top level", testVal,
+		)
 	}
 
 	// ValidateKeyValue should return an error for a key that begins with an underscore
@@ -1110,7 +1113,8 @@ func TestFormatCheck(t *testing.T) {
 			fmt.Sprintf("testCase %d", i),
 			func(t *testing.T) {
 				testFormatCheck(t, testCase.dataFormat, testCase.dataExists, testCase.expectedErr, testCase.expectedFormat, vdbEnv)
-			})
+			},
+		)
 	}
 }
 
@@ -1124,6 +1128,7 @@ func testFormatCheck(t *testing.T, dataFormat string, dataExists bool, expectedE
 		MaxRetriesOnStartup: 20,
 		RequestTimeout:      35 * time.Second,
 		RedoLogPath:         redoPath,
+		RedoLogDBType:       ledger.GoLevelDB,
 	}
 	dbProvider, err := NewVersionedDBProvider(config, &disabled.Provider{}, nil)
 	require.NoError(t, err)
@@ -1178,7 +1183,7 @@ func testExistInCache(t *testing.T, db *couchDatabase, cache *cache, chainID, ns
 	require.Equal(t, expectedVV, vv)
 	metadata, err := retrieveNsMetadata(db, []string{key})
 	require.NoError(t, err)
-	require.Equal(t, metadata[0].Rev, string(cacheValue.AdditionalInfo))
+	require.Equal(t, metadata[0].Rev, string(cacheValue.GetAdditionalInfo()))
 }
 
 func TestLoadCommittedVersion(t *testing.T) {
@@ -1298,7 +1303,7 @@ func TestMissingRevisionRetrievalFromDB(t *testing.T) {
 	// retrieve the versions of key1, key2, and key3
 	revisions := make(map[string]string)
 	require.NoError(t, db.(*VersionedDB).addMissingRevisionsFromDB("ns1", []string{"key1", "key2", "key3"}, revisions))
-	require.Equal(t, 3, len(revisions))
+	require.Len(t, revisions, 3)
 
 	// update key1 and key2 but not key3
 	batch = statedb.NewUpdateBatch()
@@ -1312,7 +1317,7 @@ func TestMissingRevisionRetrievalFromDB(t *testing.T) {
 	// for key3, the revision should be the same but not for key1 and key2
 	newRevisions := make(map[string]string)
 	require.NoError(t, db.(*VersionedDB).addMissingRevisionsFromDB("ns1", []string{"key1", "key2", "key3"}, newRevisions))
-	require.Equal(t, 3, len(newRevisions))
+	require.Len(t, newRevisions, 3)
 	require.NotEqual(t, revisions["key1"], newRevisions["key1"])
 	require.NotEqual(t, revisions["key2"], newRevisions["key2"])
 	require.Equal(t, revisions["key3"], newRevisions["key3"])

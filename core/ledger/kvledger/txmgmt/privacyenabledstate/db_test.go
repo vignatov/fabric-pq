@@ -21,7 +21,7 @@ import (
 	testmock "github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/privacyenabledstate/mock"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/statecouchdb"
-	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/stateleveldb"
+	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/statekvdb"
 	"github.com/hyperledger/fabric/core/ledger/mock"
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/stretchr/testify/require"
@@ -30,7 +30,7 @@ import (
 func TestHealthCheckRegister(t *testing.T) {
 	fakeHealthCheckRegistry := &mock.HealthCheckRegistry{}
 	dbProvider := &DBProvider{
-		VersionedDBProvider: &stateleveldb.VersionedDBProvider{},
+		VersionedDBProvider: &statekvdb.VersionedDBProvider{},
 		HealthCheckRegistry: fakeHealthCheckRegistry,
 	}
 
@@ -470,7 +470,7 @@ func testHandleChainCodeDeploy(t *testing.T, env TestEnv) {
 	// Verify the content of the array item
 	expectedJSON := []byte(`{"index":{"fields":["docType","owner"]},"ddoc":"indexCollectionMarbles", "name":"indexCollectionMarbles","type":"json"}`)
 	actualJSON := fileEntries["META-INF/statedb/couchdb/collections/collectionMarbles/indexes"][0].FileContent
-	require.Equal(t, expectedJSON, actualJSON)
+	require.JSONEq(t, string(expectedJSON), string(actualJSON))
 
 	// The collection config is added to the chaincodeDef but missing collectionMarblesPrivateDetails.
 	// Hence, the index on collectionMarblesPrivateDetails cannot be created
@@ -586,7 +586,7 @@ func generateLedgerID(t *testing.T) string {
 	bytes := make([]byte, 8)
 	_, err := io.ReadFull(rand.Reader, bytes)
 	require.NoError(t, err)
-	return fmt.Sprintf("x%s", hex.EncodeToString(bytes))
+	return "x" + hex.EncodeToString(bytes)
 }
 
 func TestDrop(t *testing.T) {

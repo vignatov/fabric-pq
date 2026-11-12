@@ -126,7 +126,6 @@ func TestValidatorBulkLoadingOfCache(t *testing.T) {
 	blk := &block{num: 1, txs: trans}
 
 	if testValidator.db.IsBulkOptimizable() {
-
 		db := testValidator.db
 		bulkOptimizable, _ := db.VersionedDB.(statedb.BulkOptimizable)
 
@@ -514,7 +513,7 @@ func checkValidation(t *testing.T, val *validator, transRWSets []*rwsetutil.TxRw
 			invalidTxs = append(invalidTxs, tx.indexInBlock)
 		}
 	}
-	require.Equal(t, len(expectedInvalidTxIndexes), len(invalidTxs))
+	require.Len(t, invalidTxs, len(expectedInvalidTxIndexes))
 	require.ElementsMatch(t, invalidTxs, expectedInvalidTxIndexes)
 }
 

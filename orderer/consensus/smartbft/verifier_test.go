@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/hyperledger-labs/SmartBFT/pkg/types"
-	"github.com/hyperledger-labs/SmartBFT/smartbftprotos"
+	"github.com/hyperledger/SmartBFT/pkg/types"
+	"github.com/hyperledger/SmartBFT/smartbftprotos"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
@@ -23,8 +23,8 @@ import (
 	"github.com/hyperledger/fabric/orderer/consensus/smartbft/mocks"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -40,11 +40,11 @@ func TestNodeIdentitiesByID(t *testing.T) {
 
 		sID := &msp.SerializedIdentity{}
 		err := proto.Unmarshal(m[id], sID)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		id2, ok := m.IdentityToID(m[id])
-		assert.True(t, ok)
-		assert.Equal(t, id, id2)
+		require.True(t, ok)
+		require.Equal(t, id, id2)
 	}
 
 	_, ok := m.IdentityToID(protoutil.MarshalOrPanic(&msp.SerializedIdentity{
@@ -52,10 +52,10 @@ func TestNodeIdentitiesByID(t *testing.T) {
 		Mspid:   "OrdererOrg",
 	}))
 
-	assert.False(t, ok)
+	require.False(t, ok)
 
 	_, ok = m.IdentityToID([]byte{1, 2, 3})
-	assert.False(t, ok)
+	require.False(t, ok)
 }
 
 func TestVerifySignature(t *testing.T) {
@@ -79,14 +79,14 @@ func TestVerifySignature(t *testing.T) {
 		err := v.VerifySignature(types.Signature{
 			ID: 2,
 		})
-		assert.EqualError(t, err, "node with id of 2 doesn't exist")
+		require.EqualError(t, err, "node with id of 2 doesn't exist")
 	})
 
 	t.Run("signature doesn't verify", func(t *testing.T) {
 		err := v.VerifySignature(types.Signature{
 			ID: 3,
 		})
-		assert.EqualError(t, err, "bad signature")
+		require.EqualError(t, err, "bad signature")
 	})
 }
 
@@ -117,7 +117,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 	cv := &mocks.ConsenterVerifier{}
 	cv.On("Evaluate", mock.Anything).Return(errors.New("bad signature"))
 
-	lastHash := hex.EncodeToString(protoutil.BlockHeaderHash(lastBlock.Header))
+	lastHash := hex.EncodeToString(protoutil.BlockHeaderHash(lastBlock.GetHeader()))
 
 	for _, testCase := range []struct {
 		description                 string
@@ -135,7 +135,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "No consenter in mapping",
 			expectedErr:        "node with id of 3 doesn't exist",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 		},
 		{
 			description: "Bad signature format",
@@ -143,7 +143,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 				"{class:0 tag:1 length:2 isCompound:false}) {optional:false explicit:false application:" +
 				"false private:false defaultValue:<nil> tag:<nil> stringType:0 timeType:0 set:false omitEmpty:false} Signature @2",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			signatureMutator: func(signature types.Signature) types.Signature {
 				return types.Signature{
@@ -157,7 +157,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "metadata doesn't match proposal",
 			expectedErr:        "consenter metadata in OrdererBlockMetadata doesn't match proposal",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			signatureMutator: func(signature types.Signature) types.Signature {
 				sig := smartbft.Signature{}
@@ -174,7 +174,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "block header doesn't match proposal",
 			expectedErr:        "mismatched block header",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			signatureMutator: func(signature types.Signature) types.Signature {
 				sig := smartbft.Signature{}
@@ -191,7 +191,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "nonce different than what was used for signing",
 			expectedErr:        "bad signature",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			signatureMutator: func(signature types.Signature) types.Signature {
 				sig := smartbft.Signature{}
@@ -208,7 +208,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "orderer block metadata is malformed",
 			expectedErr:        "malformed orderer metadata in signature: proto: cannot parse invalid wire-format data",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			signatureMutator: func(signature types.Signature) types.Signature {
 				sig := smartbft.Signature{}
@@ -225,7 +225,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "signature doesn't verify",
 			expectedErr:        "bad signature",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 		},
 		{
@@ -236,7 +236,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 				"defaultValue:<nil> tag:<nil> stringType:0 timeType:0 set:false " +
 				"omitEmpty:false} ByteBufferTuple @2",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			proposalMutator: func(proposal types.Proposal) types.Proposal {
 				proposal.Payload = []byte{1, 2, 3}
@@ -247,7 +247,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "empty proposal payload",
 			expectedErr:        "proposal payload cannot be nil",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			proposalMutator: func(proposal types.Proposal) types.Proposal {
 				proposal.Payload = nil
@@ -258,14 +258,14 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "metadata too short",
 			expectedErr:        "block metadata is of size 4 but should be of size 5",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			proposalMutator: func(proposal types.Proposal) types.Proposal {
 				block, _ := smartbft.ProposalToBlock(proposal)
 				block.Metadata.Metadata = make([][]byte, len(cb.BlockMetadataIndex_name)-1)
 				bbt := &smartbft.ByteBufferTuple{}
 				_ = bbt.FromBytes(proposal.Payload)
-				bbt.B = protoutil.MarshalOrPanic(block.Metadata)
+				bbt.B = protoutil.MarshalOrPanic(block.GetMetadata())
 				proposal.Payload = bbt.ToBytes()
 				return proposal
 			},
@@ -274,14 +274,14 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "malformed signature metadata",
 			expectedErr:        "malformed signature metadata: proto: cannot parse invalid wire-format data",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			proposalMutator: func(proposal types.Proposal) types.Proposal {
 				block, _ := smartbft.ProposalToBlock(proposal)
 				block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES] = []byte{1, 2, 3}
 				bbt := &smartbft.ByteBufferTuple{}
 				_ = bbt.FromBytes(proposal.Payload)
-				bbt.B = protoutil.MarshalOrPanic(block.Metadata)
+				bbt.B = protoutil.MarshalOrPanic(block.GetMetadata())
 				proposal.Payload = bbt.ToBytes()
 				return proposal
 			},
@@ -290,17 +290,17 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "malformed OrdererBlockMetadata",
 			expectedErr:        "malformed orderer metadata in block: proto: cannot parse invalid wire-format data",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			proposalMutator: func(proposal types.Proposal) types.Proposal {
 				block, _ := smartbft.ProposalToBlock(proposal)
 				md := &cb.Metadata{}
-				_ = proto.Unmarshal(block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES], md)
+				_ = proto.Unmarshal(block.GetMetadata().GetMetadata()[cb.BlockMetadataIndex_SIGNATURES], md)
 				md.Value = []byte{1, 2, 3}
 				block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES] = protoutil.MarshalOrPanic(md)
 				bbt := &smartbft.ByteBufferTuple{}
 				_ = bbt.FromBytes(proposal.Payload)
-				bbt.B = protoutil.MarshalOrPanic(block.Metadata)
+				bbt.B = protoutil.MarshalOrPanic(block.GetMetadata())
 				proposal.Payload = bbt.ToBytes()
 				return proposal
 			},
@@ -309,20 +309,20 @@ func TestVerifyConsenterSig(t *testing.T) {
 			description:        "mismatched OrdererBlockMetadata",
 			expectedErr:        "signature's OrdererBlockMetadata and OrdererBlockMetadata extracted from block do not match",
 			lastBlock:          lastBlock,
-			lastConfigBlockNum: lastConfigBlock.Header.Number,
+			lastConfigBlockNum: lastConfigBlock.GetHeader().GetNumber(),
 			id2Identity:        map[uint64][]byte{3: {0, 2, 4, 6}},
 			proposalMutator: func(proposal types.Proposal) types.Proposal {
 				block, _ := smartbft.ProposalToBlock(proposal)
 				md := &cb.Metadata{}
-				_ = proto.Unmarshal(block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES], md)
+				_ = proto.Unmarshal(block.GetMetadata().GetMetadata()[cb.BlockMetadataIndex_SIGNATURES], md)
 				obm := &cb.OrdererBlockMetadata{}
-				_ = proto.Unmarshal(md.Value, obm)
+				_ = proto.Unmarshal(md.GetValue(), obm)
 				obm.LastConfig.Index++
 				md.Value = protoutil.MarshalOrPanic(obm)
 				block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES] = protoutil.MarshalOrPanic(md)
 				bbt := &smartbft.ByteBufferTuple{}
 				_ = bbt.FromBytes(proposal.Payload)
-				bbt.B = protoutil.MarshalOrPanic(block.Metadata)
+				bbt.B = protoutil.MarshalOrPanic(block.GetMetadata())
 				proposal.Payload = bbt.ToBytes()
 				return proposal
 			},
@@ -335,7 +335,7 @@ func TestVerifyConsenterSig(t *testing.T) {
 
 			s := &smartbft.Signer{
 				LastConfigBlockNum: func(_ *cb.Block) uint64 {
-					return lastConfigBlock.Header.Number
+					return lastConfigBlock.GetHeader().GetNumber()
 				},
 				SignerSerializer: ss,
 				Logger:           flogging.MustGetLogger("test"),
@@ -387,8 +387,8 @@ func TestVerifyConsenterSig(t *testing.T) {
 
 			_, err := v.VerifyConsenterSig(signature, proposal)
 
-			assert.Error(t, err)
-			assert.Equal(t, testCase.expectedErr, strings.ReplaceAll(err.Error(), "\u00a0", " "))
+			require.Error(t, err)
+			require.Equal(t, testCase.expectedErr, strings.ReplaceAll(err.Error(), "\u00a0", " "))
 		})
 	}
 }
@@ -419,7 +419,7 @@ func TestVerifyProposal(t *testing.T) {
 		Logger: logger,
 	}
 
-	lastHash := hex.EncodeToString(protoutil.BlockHeaderHash(lastBlock.Header))
+	lastHash := hex.EncodeToString(protoutil.BlockHeaderHash(lastBlock.GetHeader()))
 
 	for _, testCase := range []struct {
 		description                 string
@@ -478,8 +478,8 @@ func TestVerifyProposal(t *testing.T) {
 			bftMetadataMutator:          noopMutator,
 			ordererBlockMetadataMutator: noopOrdererBlockMetadataMutator,
 			expectedErr: fmt.Sprintf("previous header hash is %s but expected %s",
-				hex.EncodeToString(protoutil.BlockHeaderHash(notLastBlock.Header)),
-				hex.EncodeToString(protoutil.BlockHeaderHash(lastBlock.Header))),
+				hex.EncodeToString(protoutil.BlockHeaderHash(notLastBlock.GetHeader())),
+				hex.EncodeToString(protoutil.BlockHeaderHash(lastBlock.GetHeader()))),
 			verifierChainID: "test-chain",
 		},
 		{
@@ -586,13 +586,13 @@ func TestVerifyProposal(t *testing.T) {
 			tuple := &smartbft.ByteBufferTuple{}
 			_ = tuple.FromBytes(proposal.Payload)
 			blockMD := &cb.BlockMetadata{}
-			assert.NoError(t, proto.Unmarshal(tuple.B, blockMD))
+			require.NoError(t, proto.Unmarshal(tuple.B, blockMD))
 
 			sigMD := &cb.Metadata{}
-			assert.NoError(t, proto.Unmarshal(blockMD.Metadata[cb.BlockMetadataIndex_SIGNATURES], sigMD))
+			require.NoError(t, proto.Unmarshal(blockMD.GetMetadata()[cb.BlockMetadataIndex_SIGNATURES], sigMD))
 
 			ordererMetadataFromSignature := &cb.OrdererBlockMetadata{}
-			assert.NoError(t, proto.Unmarshal(sigMD.Value, ordererMetadataFromSignature))
+			require.NoError(t, proto.Unmarshal(sigMD.GetValue(), ordererMetadataFromSignature))
 
 			// Mutate the OrdererBlockMetadata
 			testCase.ordererBlockMetadataMutator(ordererMetadataFromSignature)
@@ -620,17 +620,17 @@ func TestVerifyProposal(t *testing.T) {
 			reqInfo, err := v.VerifyProposal(proposal)
 
 			if testCase.expectedErr == "" {
-				assert.NoError(t, err)
-				assert.NotNil(t, reqInfo)
-				assert.Len(t, reqInfo, 1)
-				assert.Equal(t, hashOfZero, reqInfo[0].ClientID)
-				assert.Equal(t, hashOfZero, reqInfo[0].ID)
+				require.NoError(t, err)
+				require.NotNil(t, reqInfo)
+				require.Len(t, reqInfo, 1)
+				require.Equal(t, hashOfZero, reqInfo[0].ClientID)
+				require.Equal(t, hashOfZero, reqInfo[0].ID)
 				return
 			}
 
-			assert.Error(t, err)
-			assert.Equal(t, testCase.expectedErr, strings.ReplaceAll(err.Error(), "\u00a0", " "))
-			assert.Nil(t, reqInfo)
+			require.Error(t, err)
+			require.Equal(t, testCase.expectedErr, strings.ReplaceAll(err.Error(), "\u00a0", " "))
+			require.Nil(t, reqInfo)
 		})
 	}
 }

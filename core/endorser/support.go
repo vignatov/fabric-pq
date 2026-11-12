@@ -7,8 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package endorser
 
 import (
-	"fmt"
-
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/core/aclmgmt"
@@ -98,10 +96,10 @@ func (s *SupportImpl) GetLedgerHeight(channelID string) (uint64, error) {
 
 	info, err := lgr.GetBlockchainInfo()
 	if err != nil {
-		return 0, errors.Wrap(err, fmt.Sprintf("failed to obtain information for Channel %s", channelID))
+		return 0, errors.Wrap(err, "failed to obtain information for Channel "+channelID)
 	}
 
-	return info.Height, nil
+	return info.GetHeight(), nil
 }
 
 // IsSysCC returns true if the name matches a system chaincode's
@@ -121,7 +119,7 @@ func (s *SupportImpl) Execute(txParams *ccprovider.TransactionParams, name strin
 	decorators := library.InitRegistry(library.Config{}).Lookup(library.Decoration).([]decoration.Decorator)
 	input.Decorations = make(map[string][]byte)
 	input = decoration.Apply(txParams.Proposal, input, decorators...)
-	txParams.ProposalDecorations = input.Decorations
+	txParams.ProposalDecorations = input.GetDecorations()
 
 	return s.ChaincodeSupport.Execute(txParams, name, input)
 }

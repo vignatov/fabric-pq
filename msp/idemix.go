@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 package msp
 
 import (
-	"github.com/IBM/idemix"
+	idemix "github.com/IBM/idemix/msp"
 	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
 )
 
@@ -57,7 +57,7 @@ type idemixMSPWrapper struct {
 }
 
 func (i *idemixMSPWrapper) deserializeIdentityInternal(serializedIdentity []byte) (Identity, error) {
-	id, err := i.Idemixmsp.DeserializeIdentityInternal(serializedIdentity)
+	id, err := i.DeserializeIdentityInternal(serializedIdentity)
 	if err != nil {
 		return nil, err
 	}

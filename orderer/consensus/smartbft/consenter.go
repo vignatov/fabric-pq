@@ -12,14 +12,15 @@ package smartbft
 import (
 	"bytes"
 	"encoding/pem"
+	"os"
 	"path"
 	"reflect"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/hyperledger-labs/SmartBFT/pkg/api"
-	"github.com/hyperledger-labs/SmartBFT/pkg/wal"
+	"github.com/hyperledger/SmartBFT/pkg/api"
+	"github.com/hyperledger/SmartBFT/pkg/wal"
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-lib-go/common/metrics"
@@ -124,7 +125,7 @@ func New(
 		logger.Panicf("failed unmarshaling identity: %s", err)
 	}
 
-	consenter.Identity = sID.IdBytes
+	consenter.Identity = sID.GetIdBytes()
 
 	consenter.Comm = &cluster.AuthCommMgr{
 		Logger:         flogging.MustGetLogger("orderer.common.cluster"),
@@ -133,7 +134,7 @@ func New(
 		Chan2Members:   make(cluster.MembersByChannel),
 		Connections:    cluster.NewConnectionMgr(clusterDialer.Config),
 		Signer:         signerSerializer,
-		NodeIdentity:   sID.IdBytes,
+		NodeIdentity:   sID.GetIdBytes(),
 	}
 
 	consenter.ClusterService = &cluster.ClusterService{
@@ -145,7 +146,7 @@ func New(
 		MinimumExpirationWarningInterval: cluster.MinimumExpirationWarningInterval,
 		CertExpWarningThreshold:          conf.General.Cluster.CertExpirationWarningThreshold,
 		MembershipByChannel:              make(map[string]*cluster.ChannelMembersConfig),
-		NodeIdentity:                     sID.IdBytes,
+		NodeIdentity:                     sID.GetIdBytes(),
 		RequestHandler: &Ingress{
 			Logger:        logger,
 			ChainSelector: consenter,
@@ -187,7 +188,7 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb
 	}
 	c.Logger.Infof("Local consenter id is %d", selfID)
 
-	config, err := util.ConfigFromMetadataOptions((uint64)(selfID), configOptions)
+	config, err := util.ConfigFromMetadataOptions(selfID, configOptions)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed parsing smartbft configuration")
 	}
@@ -218,7 +219,7 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb
 
 	chain, err := NewChain(
 		configValidator,
-		(uint64)(selfID),
+		selfID,
 		config,
 		path.Join(c.WALBaseDir, support.ChannelID()),
 		c.ClusterDialer,
@@ -232,7 +233,8 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb
 		c.MetricsWalBFT,
 		c.BCCSP,
 		egressCommFactory,
-		&synchronizerCreator{})
+		&synchronizerCreator{},
+	)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed creating a new BFTChain")
 	}
@@ -280,27 +282,27 @@ func (c *Consenter) IsChannelMember(joinBlock *cb.Block) (bool, error) {
 	}
 
 	for _, consenter := range oc.Consenters() {
-		santizedCert, err := crypto.SanitizeX509Cert(consenter.Identity)
+		santizedCert, err := crypto.SanitizeX509Cert(consenter.GetIdentity())
 		if err != nil {
-			c.Logger.Warnf("Failed to sanitize consenter %d identity: %v", consenter.Id, err)
+			c.Logger.Warnf("Failed to sanitize consenter %d identity: %v", consenter.GetId(), err)
 			return false, err
 		}
 
 		// Extract public key using the same approach as IsConsenterOfChannel
 		bl, _ := pem.Decode(santizedCert)
 		if bl == nil {
-			c.Logger.Warnf("Consenter %d: failed to decode PEM for identity", consenter.Id)
+			c.Logger.Warnf("Consenter %d: failed to decode PEM for identity", consenter.GetId())
 			continue
 		}
 
 		publicKey, err := cluster.ExtractPublicKeyFromCert(bl.Bytes)
 		if err != nil {
-			c.Logger.Warnf("Consenter %d: failed to extract public key from cert: %v", consenter.Id, err)
+			c.Logger.Warnf("Consenter %d: failed to extract public key from cert: %v", consenter.GetId(), err)
 			continue
 		}
-		c.Logger.Debugf("Consenter %d: extracted public key: %x", consenter.Id, publicKey)
+		c.Logger.Debugf("Consenter %d: extracted public key: %x", consenter.GetId(), publicKey)
 		if bytes.Equal(myPublicKey, publicKey) {
-			c.Logger.Debugf("Found matching public key for consenter %d", consenter.Id)
+			c.Logger.Debugf("Found matching public key for consenter %d", consenter.GetId())
 			member = true
 			break
 		}
@@ -309,14 +311,29 @@ func (c *Consenter) IsChannelMember(joinBlock *cb.Block) (bool, error) {
 	return member, nil
 }
 
+// RemoveChannelData removes the WAL directory of the channel.
+func (c *Consenter) RemoveChannelData(channelID string) error {
+	if channelID == "" {
+		return errors.New("empty channel ID")
+	}
+	if c.WALBaseDir == "" {
+		return nil
+	}
+	dir := path.Join(c.WALBaseDir, channelID)
+	if err := os.RemoveAll(dir); err != nil {
+		return errors.Wrapf(err, "failed to remove %s", dir)
+	}
+	return nil
+}
+
 // TargetChannel extracts the channel from the given proto.Message.
 // Returns an empty string on failure.
 func (c *Consenter) TargetChannel(message proto.Message) string {
 	switch req := message.(type) {
 	case *ab.ConsensusRequest:
-		return req.Channel
+		return req.GetChannel()
 	case *ab.SubmitRequest:
-		return req.Channel
+		return req.GetChannel()
 	default:
 		return ""
 	}
@@ -340,17 +357,17 @@ func (c *Consenter) detectSelfID(consenters []*cb.Consenter) (uint64, error) {
 
 	var serverCertificates []string
 	for _, cst := range consenters {
-		serverCertificates = append(serverCertificates, string(cst.Identity))
+		serverCertificates = append(serverCertificates, string(cst.GetIdentity()))
 
-		certAsDER, err := pemToDER(cst.Identity, uint64(cst.Id), "server", c.Logger)
+		certAsDER, err := pemToDER(cst.GetIdentity(), uint64(cst.GetId()), "server", c.Logger)
 		if err != nil {
 			c.Logger.Errorf("Failed to convert node identity certificate to DER: %s", err)
 			return 0, err
 		}
 
 		if crypto.CertificatesWithSamePublicKey(thisNodeCertAsDER, certAsDER) == nil {
-			c.Logger.Debugf("Found node %d in channel consenters set", cst.Id)
-			return uint64(cst.Id), nil
+			c.Logger.Debugf("Found node %d in channel consenters set", cst.GetId())
+			return uint64(cst.GetId()), nil
 		}
 	}
 

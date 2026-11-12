@@ -20,6 +20,7 @@ import (
 	mspproto "github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	tspb "github.com/hyperledger/fabric-protos-go-apiv2/transientstore"
+	db "github.com/hyperledger/fabric/common/ledger"
 	util2 "github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/transientstore"
@@ -57,15 +58,15 @@ func init() {
 
 func TestRetrievePvtdata(t *testing.T) {
 	err := msptesttools.LoadMSPSetupForTesting()
-	require.NoError(t, err, fmt.Sprintf("Failed to setup local msp for testing, got err %s", err))
+	require.NoErrorf(t, err, "Failed to setup local msp for testing, got err %s", err)
 
 	identity, err := mspmgmt.GetLocalMSP(factory.GetDefault()).GetDefaultSigningIdentity()
 	require.NoError(t, err)
 	serializedID, err := identity.Serialize()
-	require.NoError(t, err, fmt.Sprintf("Serialize should have succeeded, got err %s", err))
+	require.NoErrorf(t, err, "Serialize should have succeeded, got err %s", err)
 	data := []byte{1, 2, 3}
 	signature, err := identity.Sign(data)
-	require.NoError(t, err, fmt.Sprintf("Could not sign identity, got err %s", err))
+	require.NoErrorf(t, err, "Could not sign identity, got err %s", err)
 	peerSelfSignedData := protoutil.SignedData{
 		Identity:  serializedID,
 		Signature: signature,
@@ -830,15 +831,15 @@ func TestRetrievePvtdata(t *testing.T) {
 
 func TestRetrievePvtdataFailure(t *testing.T) {
 	err := msptesttools.LoadMSPSetupForTesting()
-	require.NoError(t, err, fmt.Sprintf("Failed to setup local msp for testing, got err %s", err))
+	require.NoErrorf(t, err, "Failed to setup local msp for testing, got err %s", err)
 
 	identity, err := mspmgmt.GetLocalMSP(factory.GetDefault()).GetDefaultSigningIdentity()
 	require.NoError(t, err)
 	serializedID, err := identity.Serialize()
-	require.NoError(t, err, fmt.Sprintf("Serialize should have succeeded, got err %s", err))
+	require.NoErrorf(t, err, "Serialize should have succeeded, got err %s", err)
 	data := []byte{1, 2, 3}
 	signature, err := identity.Sign(data)
-	require.NoError(t, err, fmt.Sprintf("Could not sign identity, got err %s", err))
+	require.NoErrorf(t, err, "Could not sign identity, got err %s", err)
 	peerSelfSignedData := protoutil.SignedData{
 		Identity:  serializedID,
 		Signature: signature,
@@ -890,15 +891,15 @@ func TestRetrievePvtdataFailure(t *testing.T) {
 
 func TestRetryFetchFromPeer(t *testing.T) {
 	err := msptesttools.LoadMSPSetupForTesting()
-	require.NoError(t, err, fmt.Sprintf("Failed to setup local msp for testing, got err %s", err))
+	require.NoErrorf(t, err, "Failed to setup local msp for testing, got err %s", err)
 
 	identity, err := mspmgmt.GetLocalMSP(factory.GetDefault()).GetDefaultSigningIdentity()
 	require.NoError(t, err)
 	serializedID, err := identity.Serialize()
-	require.NoError(t, err, fmt.Sprintf("Serialize should have succeeded, got err %s", err))
+	require.NoErrorf(t, err, "Serialize should have succeeded, got err %s", err)
 	data := []byte{1, 2, 3}
 	signature, err := identity.Sign(data)
-	require.NoError(t, err, fmt.Sprintf("Could not sign identity, got err %s", err))
+	require.NoErrorf(t, err, "Could not sign identity, got err %s", err)
 	peerSelfSignedData := protoutil.SignedData{
 		Identity:  serializedID,
 		Signature: signature,
@@ -922,10 +923,10 @@ func TestRetryFetchFromPeer(t *testing.T) {
 	ns1c2 := collectionPvtdataInfoFromTemplate("ns1", "c2", identity.GetMSPIdentifier(), ts.hash, endorser, signature)
 
 	tempdir := t.TempDir()
-	storeProvider, err := transientstore.NewStoreProvider(tempdir)
-	require.NoError(t, err, fmt.Sprintf("Failed to create store provider, got err %s", err))
+	storeProvider, err := transientstore.NewStoreProvider(tempdir, db.GoLevelDB)
+	require.NoErrorf(t, err, "Failed to create store provider, got err %s", err)
 	store, err := storeProvider.OpenStore(ts.channelID)
-	require.NoError(t, err, fmt.Sprintf("Failed to open store, got err %s", err))
+	require.NoErrorf(t, err, "Failed to open store, got err %s", err)
 
 	defer storeProvider.Close()
 
@@ -977,21 +978,21 @@ func TestRetryFetchFromPeer(t *testing.T) {
 	require.NoError(t, err)
 
 	maxRetries := int(testConfig.PullRetryThreshold / pullRetrySleepInterval)
-	require.Equal(t, fakeSleeper.SleepCallCount() <= maxRetries, true)
-	require.Equal(t, fakeSleeper.SleepArgsForCall(0), pullRetrySleepInterval)
+	require.LessOrEqual(t, fakeSleeper.SleepCallCount(), maxRetries)
+	require.Equal(t, pullRetrySleepInterval, fakeSleeper.SleepArgsForCall(0))
 }
 
 func TestSkipPullingAllInvalidTransactions(t *testing.T) {
 	err := msptesttools.LoadMSPSetupForTesting()
-	require.NoError(t, err, fmt.Sprintf("Failed to setup local msp for testing, got err %s", err))
+	require.NoErrorf(t, err, "Failed to setup local msp for testing, got err %s", err)
 
 	identity, err := mspmgmt.GetLocalMSP(factory.GetDefault()).GetDefaultSigningIdentity()
 	require.NoError(t, err)
 	serializedID, err := identity.Serialize()
-	require.NoError(t, err, fmt.Sprintf("Serialize should have succeeded, got err %s", err))
+	require.NoErrorf(t, err, "Serialize should have succeeded, got err %s", err)
 	data := []byte{1, 2, 3}
 	signature, err := identity.Sign(data)
-	require.NoError(t, err, fmt.Sprintf("Could not sign identity, got err %s", err))
+	require.NoErrorf(t, err, "Could not sign identity, got err %s", err)
 	peerSelfSignedData := protoutil.SignedData{
 		Identity:  serializedID,
 		Signature: signature,
@@ -1015,10 +1016,10 @@ func TestSkipPullingAllInvalidTransactions(t *testing.T) {
 	ns1c2 := collectionPvtdataInfoFromTemplate("ns1", "c2", identity.GetMSPIdentifier(), ts.hash, endorser, signature)
 
 	tempdir := t.TempDir()
-	storeProvider, err := transientstore.NewStoreProvider(tempdir)
-	require.NoError(t, err, fmt.Sprintf("Failed to create store provider, got err %s", err))
+	storeProvider, err := transientstore.NewStoreProvider(tempdir, ledger.GoLevelDB)
+	require.NoErrorf(t, err, "Failed to create store provider, got err %s", err)
 	store, err := storeProvider.OpenStore(ts.channelID)
-	require.NoError(t, err, fmt.Sprintf("Failed to open store, got err %s", err))
+	require.NoErrorf(t, err, "Failed to open store, got err %s", err)
 
 	defer storeProvider.Close()
 
@@ -1074,8 +1075,8 @@ func TestSkipPullingAllInvalidTransactions(t *testing.T) {
 	require.Equal(t, expectedBlockPvtdata, blockPvtdata)
 
 	// Check sleep and fetch were never called
-	require.Equal(t, fakeSleeper.SleepCallCount(), 0)
-	require.Len(t, newFetcher.Calls, 0)
+	require.Equal(t, 0, fakeSleeper.SleepCallCount())
+	require.Empty(t, newFetcher.Calls)
 }
 
 func TestRetrievedPvtdataPurgeBelowHeight(t *testing.T) {
@@ -1083,15 +1084,15 @@ func TestRetrievedPvtdataPurgeBelowHeight(t *testing.T) {
 	conf.TransientBlockRetention = 5
 
 	err := msptesttools.LoadMSPSetupForTesting()
-	require.NoError(t, err, fmt.Sprintf("Failed to setup local msp for testing, got err %s", err))
+	require.NoErrorf(t, err, "Failed to setup local msp for testing, got err %s", err)
 
 	identity, err := mspmgmt.GetLocalMSP(factory.GetDefault()).GetDefaultSigningIdentity()
 	require.NoError(t, err)
 	serializedID, err := identity.Serialize()
-	require.NoError(t, err, fmt.Sprintf("Serialize should have succeeded, got err %s", err))
+	require.NoErrorf(t, err, "Serialize should have succeeded, got err %s", err)
 	data := []byte{1, 2, 3}
 	signature, err := identity.Sign(data)
-	require.NoError(t, err, fmt.Sprintf("Could not sign identity, got err %s", err))
+	require.NoErrorf(t, err, "Could not sign identity, got err %s", err)
 	peerSelfSignedData := protoutil.SignedData{
 		Identity:  serializedID,
 		Signature: signature,
@@ -1114,10 +1115,10 @@ func TestRetrievedPvtdataPurgeBelowHeight(t *testing.T) {
 	ns1c1 := collectionPvtdataInfoFromTemplate("ns1", "c1", identity.GetMSPIdentifier(), ts.hash, endorser, signature)
 
 	tempdir := t.TempDir()
-	storeProvider, err := transientstore.NewStoreProvider(tempdir)
-	require.NoError(t, err, fmt.Sprintf("Failed to create store provider, got err %s", err))
+	storeProvider, err := transientstore.NewStoreProvider(tempdir, ledger.GoLevelDB)
+	require.NoErrorf(t, err, "Failed to create store provider, got err %s", err)
 	store, err := storeProvider.OpenStore(ts.channelID)
-	require.NoError(t, err, fmt.Sprintf("Failed to open store, got err %s", err))
+	require.NoErrorf(t, err, "Failed to open store, got err %s", err)
 
 	defer storeProvider.Close()
 
@@ -1147,10 +1148,10 @@ func TestRetrievedPvtdataPurgeBelowHeight(t *testing.T) {
 		func() {
 			txID := fmt.Sprintf("tx%d", i)
 			iterator, err := store.GetTxPvtRWSetByTxid(txID, nil)
-			require.NoError(t, err, fmt.Sprintf("Failed obtaining iterator from transient store, got err %s", err))
+			require.NoErrorf(t, err, "Failed obtaining iterator from transient store, got err %s", err)
 			defer iterator.Close()
 			res, err := iterator.Next()
-			require.NoError(t, err, fmt.Sprintf("Failed iterating, got err %s", err))
+			require.NoErrorf(t, err, "Failed iterating, got err %s", err)
 			require.NotNil(t, res)
 		}()
 	}
@@ -1195,10 +1196,10 @@ func TestRetrievedPvtdataPurgeBelowHeight(t *testing.T) {
 		func() {
 			txID := fmt.Sprintf("tx%d", i)
 			iterator, err := store.GetTxPvtRWSetByTxid(txID, nil)
-			require.NoError(t, err, fmt.Sprintf("Failed obtaining iterator from transient store, got err %s", err))
+			require.NoErrorf(t, err, "Failed obtaining iterator from transient store, got err %s", err)
 			defer iterator.Close()
 			res, err := iterator.Next()
-			require.NoError(t, err, fmt.Sprintf("Failed iterating, got err %s", err))
+			require.NoErrorf(t, err, "Failed iterating, got err %s", err)
 			// Check that only the fetched private write set was purged because we haven't reached a blockNum that's a multiple of 5 yet
 			if i == 9 {
 				require.Nil(t, res)
@@ -1219,10 +1220,10 @@ func TestRetrievedPvtdataPurgeBelowHeight(t *testing.T) {
 		func() {
 			txID := fmt.Sprintf("tx%d", i)
 			iterator, err := store.GetTxPvtRWSetByTxid(txID, nil)
-			require.NoError(t, err, fmt.Sprintf("Failed obtaining iterator from transient store, got err %s", err))
+			require.NoErrorf(t, err, "Failed obtaining iterator from transient store, got err %s", err)
 			defer iterator.Close()
 			res, err := iterator.Next()
-			require.NoError(t, err, fmt.Sprintf("Failed iterating, got err %s", err))
+			require.NoErrorf(t, err, "Failed iterating, got err %s", err)
 			// Check that the first 5 sets have been purged alongside the 9th set purged earlier
 			if i < 6 || i == 9 {
 				require.Nil(t, res)
@@ -1249,14 +1250,15 @@ func testRetrievePvtdataSuccess(t *testing.T,
 	rwSetsInCache, rwSetsInTransientStore, rwSetsInPeer []rwSet,
 	expectedDigKeys []privdatacommon.DigKey,
 	pvtdataToRetrieve []*ledger.TxPvtdataInfo,
-	expectedBlockPvtdata *ledger.BlockPvtdata) {
+	expectedBlockPvtdata *ledger.BlockPvtdata,
+) {
 	fmt.Println("\n" + scenario)
 
 	tempdir := t.TempDir()
-	storeProvider, err := transientstore.NewStoreProvider(tempdir)
-	require.NoError(t, err, fmt.Sprintf("Failed to create store provider, got err %s", err))
+	storeProvider, err := transientstore.NewStoreProvider(tempdir, ledger.GoLevelDB)
+	require.NoErrorf(t, err, "Failed to create store provider, got err %s", err)
 	store, err := storeProvider.OpenStore(ts.channelID)
-	require.NoError(t, err, fmt.Sprintf("Failed to open store, got err %s", err))
+	require.NoErrorf(t, err, "Failed to open store, got err %s", err)
 	defer storeProvider.Close()
 
 	pdp := setupPrivateDataProvider(t, ts, testConfig,
@@ -1285,14 +1287,15 @@ func testRetrievePvtdataFailure(t *testing.T,
 	rwSetsInCache, rwSetsInTransientStore, rwSetsInPeer []rwSet,
 	expectedDigKeys []privdatacommon.DigKey,
 	pvtdataToRetrieve []*ledger.TxPvtdataInfo,
-	expectedErr string) {
+	expectedErr string,
+) {
 	fmt.Println("\n" + scenario)
 
 	tempdir := t.TempDir()
-	storeProvider, err := transientstore.NewStoreProvider(tempdir)
-	require.NoError(t, err, fmt.Sprintf("Failed to create store provider, got err %s", err))
+	storeProvider, err := transientstore.NewStoreProvider(tempdir, ledger.GoLevelDB)
+	require.NoErrorf(t, err, "Failed to create store provider, got err %s", err)
 	store, err := storeProvider.OpenStore(ts.channelID)
-	require.NoError(t, err, fmt.Sprintf("Failed to open store, got err %s", err))
+	require.NoErrorf(t, err, "Failed to open store, got err %s", err)
 	defer storeProvider.Close()
 
 	pdp := setupPrivateDataProvider(t, ts, testConfig,
@@ -1310,7 +1313,8 @@ func setupPrivateDataProvider(t *testing.T,
 	config CoordinatorConfig,
 	storePvtdataOfInvalidTx, skipPullingInvalidTransactions bool, store *transientstore.Store,
 	rwSetsInCache, rwSetsInTransientStore, rwSetsInPeer []rwSet,
-	expectedDigKeys []privdatacommon.DigKey) *PvtdataProvider {
+	expectedDigKeys []privdatacommon.DigKey,
+) *PvtdataProvider {
 	metrics := metrics.NewGossipMetrics(&disabled.Provider{}).PrivdataMetrics
 
 	idDeserializerFactory := IdentityDeserializerFactoryFunc(func(chainID string) msp.IdentityDeserializer {
@@ -1321,7 +1325,7 @@ func setupPrivateDataProvider(t *testing.T,
 	prefetchedPvtdata := storePvtdataInCache(rwSetsInCache)
 	// set up data in transient store
 	err := storePvtdataInTransientStore(rwSetsInTransientStore, store)
-	require.NoError(t, err, fmt.Sprintf("Failed to store private data in transient store: got err %s", err))
+	require.NoErrorf(t, err, "Failed to store private data in transient store: got err %s", err)
 
 	// set up data in peer
 	fetcher := &fetcherMock{t: t}
@@ -1353,19 +1357,20 @@ func testPurged(t *testing.T,
 	scenario string,
 	retrievedPvtdata ledger.RetrievedPvtdata,
 	store *transientstore.Store,
-	txPvtdataInfo []*ledger.TxPvtdataInfo) {
+	txPvtdataInfo []*ledger.TxPvtdataInfo,
+) {
 	retrievedPvtdata.Purge()
 	for _, pvtdata := range retrievedPvtdata.GetBlockPvtdata().PvtData {
 		func() {
 			txID := getTxIDBySeqInBlock(pvtdata.SeqInBlock, txPvtdataInfo)
-			require.NotEqual(t, txID, "", fmt.Sprintf("Could not find txID for SeqInBlock %d", pvtdata.SeqInBlock), scenario)
+			require.NotEmpty(t, txID, fmt.Sprintf("Could not find txID for SeqInBlock %d", pvtdata.SeqInBlock), scenario)
 
 			iterator, err := store.GetTxPvtRWSetByTxid(txID, nil)
-			require.NoError(t, err, fmt.Sprintf("Failed obtaining iterator from transient store, got err %s", err))
+			require.NoErrorf(t, err, "Failed obtaining iterator from transient store, got err %s", err)
 			defer iterator.Close()
 
 			res, err := iterator.Next()
-			require.NoError(t, err, fmt.Sprintf("Failed iterating, got err %s", err))
+			require.NoErrorf(t, err, "Failed iterating, got err %s", err)
 
 			require.Nil(t, res, scenario)
 		}()
@@ -1451,7 +1456,7 @@ func getCollectionPvtReadWriteSet(rws rwSet) []*rwset.CollectionPvtReadWriteSet 
 	}
 
 	sort.Slice(colPvtRwSet, func(i, j int) bool {
-		return colPvtRwSet[i].CollectionName < colPvtRwSet[j].CollectionName
+		return colPvtRwSet[i].GetCollectionName() < colPvtRwSet[j].GetCollectionName()
 	})
 
 	return colPvtRwSet
@@ -1459,9 +1464,9 @@ func getCollectionPvtReadWriteSet(rws rwSet) []*rwset.CollectionPvtReadWriteSet 
 
 func sortBlockPvtdata(blockPvtdata *ledger.BlockPvtdata) *ledger.BlockPvtdata {
 	for _, pvtdata := range blockPvtdata.PvtData {
-		for _, ws := range pvtdata.WriteSet.NsPvtRwset {
-			sort.Slice(ws.CollectionPvtRwset, func(i, j int) bool {
-				return ws.CollectionPvtRwset[i].CollectionName < ws.CollectionPvtRwset[j].CollectionName
+		for _, ws := range pvtdata.WriteSet.GetNsPvtRwset() {
+			sort.Slice(ws.GetCollectionPvtRwset(), func(i, j int) bool {
+				return ws.GetCollectionPvtRwset()[i].GetCollectionName() < ws.GetCollectionPvtRwset()[j].GetCollectionName()
 			})
 		}
 	}

@@ -18,7 +18,7 @@ import (
 )
 
 func TestDataKeyEncoding(t *testing.T) {
-	dataKey1 := &dataKey{nsCollBlk: nsCollBlk{ns: "ns1", coll: "coll1", blkNum: 2}, txNum: 5}
+	dataKey1 := &dataKey{ns: "ns1", coll: "coll1", blkNum: 2, txNum: 5}
 	datakey2, err := decodeDatakey(encodeDataKey(dataKey1))
 	require.NoError(t, err)
 	require.Equal(t, dataKey1, datakey2)
@@ -31,26 +31,26 @@ func TestDataKeyRange(t *testing.T) {
 	for txNum = range uint64(100) {
 		keyOfBlock := encodeDataKey(
 			&dataKey{
-				nsCollBlk: nsCollBlk{ns: "ns", coll: "coll", blkNum: blockNum},
-				txNum:     txNum,
+				ns: "ns", coll: "coll", blkNum: blockNum,
+				txNum: txNum,
 			},
 		)
 		keyOfPreviousBlock := encodeDataKey(
 			&dataKey{
-				nsCollBlk: nsCollBlk{ns: "ns", coll: "coll", blkNum: blockNum - 1},
-				txNum:     txNum,
+				ns: "ns", coll: "coll", blkNum: blockNum - 1,
+				txNum: txNum,
 			},
 		)
 		keyOfNextBlock := encodeDataKey(
 			&dataKey{
-				nsCollBlk: nsCollBlk{ns: "ns", coll: "coll", blkNum: blockNum + 1},
-				txNum:     txNum,
+				ns: "ns", coll: "coll", blkNum: blockNum + 1,
+				txNum: txNum,
 			},
 		)
-		require.Equal(t, bytes.Compare(keyOfPreviousBlock, startKey), -1)
-		require.Equal(t, bytes.Compare(keyOfBlock, startKey), 1)
-		require.Equal(t, bytes.Compare(keyOfBlock, endKey), -1)
-		require.Equal(t, bytes.Compare(keyOfNextBlock, endKey), 1)
+		require.Equal(t, -1, bytes.Compare(keyOfPreviousBlock, startKey))
+		require.Equal(t, 1, bytes.Compare(keyOfBlock, startKey))
+		require.Equal(t, -1, bytes.Compare(keyOfBlock, endKey))
+		require.Equal(t, 1, bytes.Compare(keyOfNextBlock, endKey))
 	}
 }
 
@@ -60,35 +60,29 @@ func TestEligibleMissingDataRange(t *testing.T) {
 	for range uint64(100) {
 		keyOfBlock := encodeElgPrioMissingDataKey(
 			&missingDataKey{
-				nsCollBlk: nsCollBlk{
-					ns:     "ns",
-					coll:   "coll",
-					blkNum: blockNum,
-				},
+				ns:     "ns",
+				coll:   "coll",
+				blkNum: blockNum,
 			},
 		)
 		keyOfPreviousBlock := encodeElgPrioMissingDataKey(
 			&missingDataKey{
-				nsCollBlk: nsCollBlk{
-					ns:     "ns",
-					coll:   "coll",
-					blkNum: blockNum - 1,
-				},
+				ns:     "ns",
+				coll:   "coll",
+				blkNum: blockNum - 1,
 			},
 		)
 		keyOfNextBlock := encodeElgPrioMissingDataKey(
 			&missingDataKey{
-				nsCollBlk: nsCollBlk{
-					ns:     "ns",
-					coll:   "coll",
-					blkNum: blockNum + 1,
-				},
+				ns:     "ns",
+				coll:   "coll",
+				blkNum: blockNum + 1,
 			},
 		)
-		require.Equal(t, bytes.Compare(keyOfNextBlock, startKey), -1)
-		require.Equal(t, bytes.Compare(keyOfBlock, startKey), 1)
-		require.Equal(t, bytes.Compare(keyOfBlock, endKey), -1)
-		require.Equal(t, bytes.Compare(keyOfPreviousBlock, endKey), 1)
+		require.Equal(t, -1, bytes.Compare(keyOfNextBlock, startKey))
+		require.Equal(t, 1, bytes.Compare(keyOfBlock, startKey))
+		require.Equal(t, -1, bytes.Compare(keyOfBlock, endKey))
+		require.Equal(t, 1, bytes.Compare(keyOfPreviousBlock, endKey))
 	}
 }
 
@@ -101,14 +95,13 @@ func TestEncodeDecodeMissingdataKey(t *testing.T) {
 
 func testEncodeDecodeMissingdataKey(t *testing.T, blkNum uint64) {
 	key := &missingDataKey{
-		nsCollBlk: nsCollBlk{
-			ns:     "ns",
-			coll:   "coll",
-			blkNum: blkNum,
-		},
+		ns:     "ns",
+		coll:   "coll",
+		blkNum: blkNum,
 	}
 
-	t.Run("ineligibileKey",
+	t.Run(
+		"ineligibileKey",
 		func(t *testing.T) {
 			decodedKey := decodeInelgMissingDataKey(
 				encodeInelgMissingDataKey(key),
@@ -117,7 +110,8 @@ func testEncodeDecodeMissingdataKey(t *testing.T, blkNum uint64) {
 		},
 	)
 
-	t.Run("eligiblePrioritizedKey",
+	t.Run(
+		"eligiblePrioritizedKey",
 		func(t *testing.T) {
 			decodedKey := decodeElgMissingDataKey(
 				encodeElgPrioMissingDataKey(key),
@@ -126,7 +120,8 @@ func testEncodeDecodeMissingdataKey(t *testing.T, blkNum uint64) {
 		},
 	)
 
-	t.Run("eligibleDeprioritizedKey",
+	t.Run(
+		"eligibleDeprioritizedKey",
 		func(t *testing.T) {
 			decodedKey := decodeElgMissingDataKey(
 				encodeElgDeprioMissingDataKey(key),
@@ -140,7 +135,7 @@ func TestBasicEncodingDecoding(t *testing.T) {
 	for i := range 10000 {
 		value := encodeReverseOrderVarUint64(uint64(i))
 		nextValue := encodeReverseOrderVarUint64(uint64(i + 1))
-		if !(bytes.Compare(value, nextValue) > 0) {
+		if bytes.Compare(value, nextValue) <= 0 {
 			t.Fatalf("A smaller integer should result into greater bytes. Encoded bytes for [%d] is [%x] and for [%d] is [%x]",
 				i, i+1, value, nextValue)
 		}
@@ -238,14 +233,13 @@ func TestDeriveDataKeyFromHashedIndexKey(t *testing.T) {
 
 			dk, err := decodeDatakey(datakeyBytes)
 			require.NoError(t, err)
-			require.Equal(t,
+			require.Equal(
+				t,
 				&dataKey{
-					nsCollBlk: nsCollBlk{
-						ns:     testcase.ns,
-						coll:   testcase.coll,
-						blkNum: testcase.blkNum,
-					},
-					txNum: testcase.txNum,
+					ns:     testcase.ns,
+					coll:   testcase.coll,
+					blkNum: testcase.blkNum,
+					txNum:  testcase.txNum,
 				},
 				dk,
 			)

@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package gateway
 
 import (
+	"errors"
 	"io"
 
 	gp "github.com/hyperledger/fabric-protos-go-apiv2/gateway"
@@ -85,7 +86,7 @@ func (gs *Server) ChaincodeEvents(signedRequest *gp.SignedChaincodeEventsRequest
 		response.Events = matchingEvents
 
 		if err := stream.Send(response); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				// Stream closed by the client
 				return status.Error(codes.Canceled, err.Error())
 			}
@@ -108,7 +109,7 @@ func chaincodeEventMatcher(request *gp.ChaincodeEventsRequest) func(event *peer.
 
 	return func(event *peer.ChaincodeEvent) bool {
 		if !passedPreviousTransaction {
-			if event.TxId == previousTransactionID {
+			if event.GetTxId() == previousTransactionID {
 				passedPreviousTransaction = true
 			}
 			return false

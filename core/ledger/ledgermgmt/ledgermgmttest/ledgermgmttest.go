@@ -29,14 +29,15 @@ import (
 func NewInitializer(testLedgerDir string) *ledgermgmt.Initializer {
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	if err != nil {
-		panic(fmt.Errorf("Failed to initialize cryptoProvider bccsp: %s", err))
+		panic(fmt.Errorf("Failed to initialize cryptoProvider bccsp: %w", err))
 	}
 
 	return &ledgermgmt.Initializer{
 		Config: &ledger.Config{
 			RootFSPath: testLedgerDir,
-			// empty StateDBConfig means leveldb
-			StateDBConfig: &ledger.StateDBConfig{},
+			StateDBConfig: &ledger.StateDBConfig{
+				StateDatabase: ledger.GoLevelDB,
+			},
 			HistoryDBConfig: &ledger.HistoryDBConfig{
 				Enabled: false,
 			},

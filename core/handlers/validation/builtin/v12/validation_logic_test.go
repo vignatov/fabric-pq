@@ -50,7 +50,7 @@ func createTx(endorsedByDuplicatedIdentity bool) (*common.Envelope, error) {
 		return nil, err
 	}
 
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, &peer.Response{Status: 200}, []byte("res"), nil, ccid, id)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), &peer.Response{Status: 200}, []byte("res"), nil, ccid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func createLSCCTxPutCdsWithCollection(ccname, ccver, f string, res, cdsbytes []b
 
 	ccid := &peer.ChaincodeID{Name: ccname, Version: ccver}
 
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, &peer.Response{Status: 200}, res, nil, ccid, id)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), &peer.Response{Status: 200}, res, nil, ccid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func createLSCCTxPutCds(ccname, ccver, f string, res, cdsbytes []byte, putcds bo
 
 	ccid := &peer.ChaincodeID{Name: ccname, Version: ccver}
 
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, &peer.Response{Status: 200}, res, nil, ccid, id)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), &peer.Response{Status: 200}, res, nil, ccid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func getSignedByMSPMemberPolicy(mspID string) ([]byte, error) {
 
 	b, err := protoutil.Marshal(p)
 	if err != nil {
-		return nil, fmt.Errorf("Could not marshal policy, err %s", err)
+		return nil, fmt.Errorf("Could not marshal policy, err %w", err)
 	}
 
 	return b, err
@@ -250,7 +250,7 @@ func getSignedByOneMemberTwicePolicy(mspID string) ([]byte, error) {
 	}
 	b, err := protoutil.Marshal(p)
 	if err != nil {
-		return nil, fmt.Errorf("Could not marshal policy, err %s", err)
+		return nil, fmt.Errorf("Could not marshal policy, err %w", err)
 	}
 
 	return b, err
@@ -261,7 +261,7 @@ func getSignedByMSPAdminPolicy(mspID string) ([]byte, error) {
 
 	b, err := protoutil.Marshal(p)
 	if err != nil {
-		return nil, fmt.Errorf("Could not marshal policy, err %s", err)
+		return nil, fmt.Errorf("Could not marshal policy, err %w", err)
 	}
 
 	return b, err
@@ -576,7 +576,7 @@ func TestValidateDeployFail(t *testing.T) {
 
 	b = &common.Block{Data: &common.BlockData{Data: [][]byte{envBytes}}}
 	err = v.Validate(b, "lscc", 0, 0, policy)
-	require.ErrorContains(t, err, "GetChaincodeDeploymentSpec error error unmarshalling ChaincodeDeploymentSpec")
+	require.ErrorContains(t, err, "GetChaincodeDeploymentSpec error: error unmarshalling ChaincodeDeploymentSpec")
 
 	/***********************/
 	/* test bad cc version */
@@ -827,7 +827,7 @@ func TestValidateDeployNOKNilChaincodeSpec(t *testing.T) {
 
 	ccid := &peer.ChaincodeID{Name: ccname, Version: ccver}
 
-	presp, err := protoutil.CreateProposalResponse(prop.Header, prop.Payload, &peer.Response{Status: 200}, res, nil, ccid, id)
+	presp, err := protoutil.CreateProposalResponse(prop.GetHeader(), prop.GetPayload(), &peer.Response{Status: 200}, res, nil, ccid, id)
 	require.NoError(t, err)
 
 	env, err := protoutil.CreateSignedTx(prop, id, presp)
@@ -1134,8 +1134,7 @@ func TestValidateUpgradeOK(t *testing.T) {
 	v := newValidationInstance(state)
 
 	ccname := "mycc"
-	ccver := "upgradeok"
-	ccver = "2"
+	ccver := "2"
 
 	// policy signed by the right MSP
 	policy, err := getSignedByMSPMemberPolicy(mspid)
@@ -1486,7 +1485,8 @@ func validateUpgradeWithNewFailAllIP(t *testing.T, v11capability, expecterr bool
 	// now we upgrade, with v 2 of the same cc, with the crucial difference that it has a reject all IP
 	ccver = ccver + ".2"
 
-	simresres, err := createCCDataRWset(ccname, ccname, ccver,
+	simresres, err := createCCDataRWset(
+		ccname, ccname, ccver,
 		policydsl.MarshaledRejectAllPolicy, // here's where we specify the IP of the upgraded cc
 	)
 	require.NoError(t, err)
@@ -1606,7 +1606,7 @@ func testValidateCollection(t *testing.T, v *Validator, collectionConfigs []*pee
 	require.NotNil(t, ccpBytes)
 
 	lsccargs := [][]byte{nil, nil, nil, nil, nil, ccpBytes}
-	rwset := &kvrwset.KVRWSet{Writes: []*kvrwset.KVWrite{{Key: cdRWSet.Name}, {Key: privdata.BuildCollectionKVSKey(cdRWSet.Name), Value: ccpBytes}}}
+	rwset := &kvrwset.KVRWSet{Writes: []*kvrwset.KVWrite{{Key: cdRWSet.GetName()}, {Key: privdata.BuildCollectionKVSKey(cdRWSet.GetName()), Value: ccpBytes}}}
 
 	err = v.validateRWSetAndCollection(rwset, cdRWSet, lsccargs, lsccFunc, ac, chid)
 	return err

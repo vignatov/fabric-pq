@@ -37,18 +37,13 @@ const (
 )
 
 func TestLoadCertificateECDSA(t *testing.T) {
-	testDir := t.TempDir()
-
 	// generate private key
-	certDir, err := os.MkdirTemp(testDir, "certs")
-	if err != nil {
-		t.Fatalf("Failed to create certs directory: %s", err)
-	}
+	certDir := t.TempDir()
 	priv, err := csp.GeneratePrivateKey(certDir, ECDSA)
 	require.NoError(t, err, "Failed to generate signed certificate")
 
 	// create our CA
-	caDir := filepath.Join(testDir, "ca")
+	caDir := t.TempDir()
 	rootCA, err := ca.NewCA(
 		caDir,
 		testCA3Name,
@@ -93,7 +88,7 @@ func TestLoadCertificateECDSA_wrongEncoding(t *testing.T) {
 	require.NoErrorf(t, err, "failed to create file %s", filename)
 
 	_, err = ca.LoadCertificate(testDir)
-	require.NotNil(t, err)
+	require.Error(t, err)
 	require.EqualError(t, err, filename+": wrong PEM encoding")
 }
 
@@ -107,7 +102,7 @@ func TestLoadCertificateECDSA_empty_DER_cert(t *testing.T) {
 
 	cert, err := ca.LoadCertificate(testDir)
 	require.Nil(t, cert)
-	require.NotNil(t, err)
+	require.Error(t, err)
 	require.EqualError(t, err, filename+": wrong DER encoding")
 }
 
@@ -136,8 +131,7 @@ func TestNewCA(t *testing.T) {
 
 	// check to make sure the root public key was stored
 	pemFile := filepath.Join(caDir, testCAName+"-cert.pem")
-	require.Equal(t, true, checkForFile(pemFile),
-		"Expected to find file "+pemFile)
+	require.True(t, checkForFile(pemFile), "Expected to find file "+pemFile)
 
 	require.NotEmpty(t, rootCA.SignCert.Subject.Country, "country cannot be empty.")
 	require.Equal(t, testCountry, rootCA.SignCert.Subject.Country[0], "Failed to match country")
@@ -154,19 +148,14 @@ func TestNewCA(t *testing.T) {
 }
 
 func TestGenerateSignCertificate(t *testing.T) {
-	testDir := t.TempDir()
-
 	// generate private key
-	certDir, err := os.MkdirTemp(testDir, "certs")
-	if err != nil {
-		t.Fatalf("Failed to create certs directory: %s", err)
-	}
+	certDir := t.TempDir()
 	privGeneric, err := csp.GeneratePrivateKey(certDir, ECDSA)
 	require.NoError(t, err, "Failed to generate signed certificate")
 	priv := privGeneric.(*ecdsa.PrivateKey)
 
 	// create our CA
-	caDir := filepath.Join(testDir, "ca")
+	caDir := t.TempDir()
 	rootCA, err := ca.NewCA(
 		caDir,
 		testCA2Name,
@@ -206,7 +195,7 @@ func TestGenerateSignCertificate(t *testing.T) {
 		[]x509.ExtKeyUsage{},
 	)
 	require.NoError(t, err, "Failed to generate signed certificate")
-	require.Equal(t, 0, len(cert.ExtKeyUsage))
+	require.Empty(t, cert.ExtKeyUsage)
 
 	// make sure ous are correctly set
 	ous := []string{"TestOU", "PeerOU"}
@@ -224,12 +213,11 @@ func TestGenerateSignCertificate(t *testing.T) {
 	require.Contains(t, cert.DNSNames, testName2)
 	require.Contains(t, cert.DNSNames, testName3)
 	require.Contains(t, cert.IPAddresses, net.ParseIP(testIP).To4())
-	require.Equal(t, len(cert.DNSNames), 2)
+	require.Len(t, cert.DNSNames, 2)
 
 	// check to make sure the signed public key was stored
 	pemFile := filepath.Join(certDir, testName+"-cert.pem")
-	require.Equal(t, true, checkForFile(pemFile),
-		"Expected to find file "+pemFile)
+	require.True(t, checkForFile(pemFile), "Expected to find file "+pemFile)
 
 	_, err = rootCA.SignCertificate(certDir, "empty/CA", nil, nil, &priv.PublicKey,
 		x509.KeyUsageKeyEncipherment, []x509.ExtKeyUsage{x509.ExtKeyUsageAny})

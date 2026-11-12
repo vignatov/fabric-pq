@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package cauthdsl
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,19 +24,18 @@ var cauthdslLogger = flogging.MustGetLogger("cauthdsl")
 // passing them to this function for evaluation
 func compile(policy *cb.SignaturePolicy, identities []*mb.MSPPrincipal) (func([]msp.Identity, []bool) bool, error) {
 	if policy == nil {
-		return nil, fmt.Errorf("Empty policy element")
+		return nil, errors.New("Empty policy element")
 	}
 
-	switch t := policy.Type.(type) {
+	switch t := policy.GetType().(type) {
 	case *cb.SignaturePolicy_NOutOf_:
-		policies := make([]func([]msp.Identity, []bool) bool, len(t.NOutOf.Rules))
-		for i, policy := range t.NOutOf.Rules {
+		policies := make([]func([]msp.Identity, []bool) bool, len(t.NOutOf.GetRules()))
+		for i, policy := range t.NOutOf.GetRules() {
 			compiledPolicy, err := compile(policy, identities)
 			if err != nil {
 				return nil, err
 			}
 			policies[i] = compiledPolicy
-
 		}
 		return func(signedData []msp.Identity, used []bool) bool {
 			grepKey := time.Now().UnixNano()
@@ -50,13 +50,13 @@ func compile(policy *cb.SignaturePolicy, identities []*mb.MSPPrincipal) (func([]
 				}
 			}
 
-			if verified >= t.NOutOf.N {
+			if verified >= t.NOutOf.GetN() {
 				cauthdslLogger.Debugf("%p gate %d evaluation succeeds", signedData, grepKey)
 			} else {
 				cauthdslLogger.Debugf("%p gate %d evaluation fails", signedData, grepKey)
 			}
 
-			return verified >= t.NOutOf.N
+			return verified >= t.NOutOf.GetN()
 		}, nil
 	case *cb.SignaturePolicy_SignedBy:
 		if t.SignedBy < 0 || t.SignedBy >= int32(len(identities)) {

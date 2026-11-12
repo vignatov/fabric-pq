@@ -98,7 +98,8 @@ func NewRegistrar(
 	metricsProvider metrics.Provider,
 	bccsp bccsp.BCCSP,
 	clusterDialer *cluster.PredicateDialer,
-	callbacks ...channelconfig.BundleActor) *Registrar {
+	callbacks ...channelconfig.BundleActor,
+) *Registrar {
 	r := &Registrar{
 		config:                      config,
 		chains:                      make(map[string]*ChainSupport),
@@ -210,7 +211,7 @@ func (r *Registrar) initAppChannels(existingChannels []string, channelsWithJoinB
 			logger.Panicf("Failed to determine cluster membership from join-block, channel: %s, error: %s", channelID, err)
 		}
 
-		if joinBlock.Header.Number == 0 && isMember {
+		if joinBlock.GetHeader().GetNumber() == 0 && isMember {
 			if _, _, err := r.createAsMember(ledgerRes, joinBlock, channelID); err != nil {
 				logger.Panicf("Failed to createAsMember, error: %s", err)
 			}
@@ -310,7 +311,7 @@ func (r *Registrar) BroadcastChannelSupport(msg *cb.Envelope) (*cb.ChannelHeader
 		return nil, false, nil, errors.WithMessage(err, "could not determine channel ID")
 	}
 
-	cs := r.GetChain(chdr.ChannelId)
+	cs := r.GetChain(chdr.GetChannelId())
 	// Used to be new channel creation with the system channel, but now channels are created with the channel
 	// participation API only, so it is just a wrong channel name.
 	if cs == nil {
@@ -361,38 +362,38 @@ func (r *Registrar) GetFollower(chainID string) *follower.Chain {
 }
 
 func (r *Registrar) newLedgerResources(configTx *cb.Envelope) (*ledgerResources, error) {
-	payload, err := protoutil.UnmarshalPayload(configTx.Payload)
+	payload, err := protoutil.UnmarshalPayload(configTx.GetPayload())
 	if err != nil {
 		return nil, errors.WithMessage(err, "error umarshaling envelope to payload")
 	}
 
-	if payload.Header == nil {
+	if payload.GetHeader() == nil {
 		return nil, errors.New("missing channel header")
 	}
 
-	chdr, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
+	chdr, err := protoutil.UnmarshalChannelHeader(payload.GetHeader().GetChannelHeader())
 	if err != nil {
 		return nil, errors.WithMessage(err, "error unmarshalling channel header")
 	}
 
-	configEnvelope, err := configtx.UnmarshalConfigEnvelope(payload.Data)
+	configEnvelope, err := configtx.UnmarshalConfigEnvelope(payload.GetData())
 	if err != nil {
 		return nil, errors.WithMessage(err, "error umarshaling config envelope from payload data")
 	}
 
-	bundle, err := channelconfig.NewBundle(chdr.ChannelId, configEnvelope.Config, r.bccsp)
+	bundle, err := channelconfig.NewBundle(chdr.GetChannelId(), configEnvelope.GetConfig(), r.bccsp)
 	if err != nil {
 		return nil, errors.WithMessage(err, "error creating channelconfig bundle")
 	}
 
 	err = checkResources(bundle)
 	if err != nil {
-		return nil, errors.WithMessagef(err, "error checking bundle for channel: %s", chdr.ChannelId)
+		return nil, errors.WithMessagef(err, "error checking bundle for channel: %s", chdr.GetChannelId())
 	}
 
-	ledger, err := r.ledgerFactory.GetOrCreate(chdr.ChannelId)
+	ledger, err := r.ledgerFactory.GetOrCreate(chdr.GetChannelId())
 	if err != nil {
-		return nil, errors.WithMessagef(err, "error getting ledger for channel: %s", chdr.ChannelId)
+		return nil, errors.WithMessagef(err, "error getting ledger for channel: %s", chdr.GetChannelId())
 	}
 
 	policy, exists := bundle.PolicyManager().GetPolicy(policies.BlockValidation)
@@ -659,12 +660,12 @@ func (r *Registrar) FetchBlock(channelID string, blockID string) (*cb.Block, err
 	default:
 	}
 
-	nb, err := strconv.Atoi(blockID)
+	nb, err := strconv.ParseUint(blockID, 10, 64)
 	if err != nil {
 		return nil, err
 	}
 
-	return cs.RetrieveBlockByNumber(uint64(nb))
+	return cs.RetrieveBlockByNumber(nb)
 }
 
 // JoinChannel instructs the orderer to create a channel and join it with the provided config block.
@@ -724,7 +725,7 @@ func (r *Registrar) JoinChannel(channelID string, configBlock *cb.Block) (info t
 		return types.ChannelInfo{}, errors.WithMessage(err, "failed to determine cluster membership from join-block")
 	}
 
-	if configBlock.Header.Number == 0 && isMember {
+	if configBlock.GetHeader().GetNumber() == 0 && isMember {
 		chain, info, err := r.createAsMember(ledgerRes, configBlock, channelID)
 		if err == nil {
 			if err := r.removeJoinBlock(channelID); err != nil {
@@ -750,6 +751,7 @@ func (r *Registrar) JoinChannel(channelID string, configBlock *cb.Block) (info t
 func (r *Registrar) UpdateChannel(channelID string, envelope *cb.Envelope) (info types.ChannelInfo, err error) {
 	r.lock.Lock()
 	if status, ok := r.pendingRemoval[channelID]; ok {
+		r.lock.Unlock()
 		if status.Status == types.StatusFailed {
 			return types.ChannelInfo{}, types.ErrChannelRemovalFailure
 		}
@@ -757,14 +759,15 @@ func (r *Registrar) UpdateChannel(channelID string, envelope *cb.Envelope) (info
 	}
 
 	if _, ok := r.followers[channelID]; ok {
+		r.lock.Unlock()
 		return types.ChannelInfo{}, types.ErrChannelNotReady
 	}
 
 	cs, ok := r.chains[channelID]
+	r.lock.Unlock()
 	if !ok {
 		return types.ChannelInfo{}, types.ErrChannelNotExist
 	}
-	r.lock.Unlock()
 
 	config, configSeq, err := cs.ProcessConfigUpdateMsg(envelope)
 	if err != nil {
@@ -832,7 +835,8 @@ func (r *Registrar) createFollower(
 ) (*follower.Chain, types.ChannelInfo, error) {
 	fLog := flogging.MustGetLogger("orderer.common.follower")
 	blockPullerCreator, err := follower.NewBlockPullerCreator(
-		channelID, fLog, r.signer, r.clusterDialer, r.config.General.Cluster, r.bccsp)
+		channelID, fLog, r.signer, r.clusterDialer, r.config.General.Cluster, r.bccsp,
+	)
 	if err != nil {
 		return nil, types.ChannelInfo{}, errors.WithMessagef(err, "failed to create BlockPullerFactory for channel %s", channelID)
 	}
@@ -897,7 +901,7 @@ func (r *Registrar) RemoveChannel(channelID string) error {
 func (r *Registrar) removeMember(channelID string, cs *ChainSupport) {
 	relation, status := cs.StatusReport()
 	r.pendingRemoval[channelID] = consensus.StaticStatusReporter{ConsensusRelation: relation, Status: status}
-	r.removeLedgerAsync(channelID)
+	r.removeChannelDataAsync(channelID)
 
 	delete(r.chains, channelID)
 
@@ -916,7 +920,7 @@ func (r *Registrar) removeFollower(channelID string, follower *follower.Chain) e
 
 	relation, status := follower.StatusReport()
 	r.pendingRemoval[channelID] = consensus.StaticStatusReporter{ConsensusRelation: relation, Status: status}
-	r.removeLedgerAsync(channelID)
+	r.removeChannelDataAsync(channelID)
 
 	delete(r.followers, channelID)
 
@@ -967,19 +971,41 @@ func (r *Registrar) removeJoinBlock(channelID string) error {
 	return nil
 }
 
-func (r *Registrar) removeLedgerAsync(channelID string) {
+func (r *Registrar) removeChannelDataAsync(channelID string) {
 	go func() {
 		err := r.ledgerFactory.Remove(channelID)
+		if err != nil {
+			err = errors.WithMessagef(err, "ledger factory failed to remove empty ledger '%s'", channelID)
+		} else {
+			err = r.removeConsensusData(channelID)
+		}
+
 		r.lock.Lock()
 		defer r.lock.Unlock()
 		if err != nil {
 			r.pendingRemoval[channelID] = consensus.StaticStatusReporter{ConsensusRelation: r.pendingRemoval[channelID].ConsensusRelation, Status: types.StatusFailed}
 			r.channelParticipationMetrics.reportStatus(channelID, types.StatusFailed)
-			logger.Errorf("ledger factory failed to remove empty ledger '%s', error: %s", channelID, err)
+			logger.Errorf("Failed to remove channel '%s', error: %s", channelID, err)
 			return
 		}
 		delete(r.pendingRemoval, channelID)
 	}()
+}
+
+// removeConsensusData asks every consenter, not only the one of the channel's consensus type, to remove the
+// data it keeps for the channel outside the ledger. The data may be left from an earlier incarnation of the
+// channel with a different consensus type.
+func (r *Registrar) removeConsensusData(channelID string) error {
+	for consensusType, consenter := range r.consenters {
+		remover, ok := consenter.(consensus.ChannelDataRemover)
+		if !ok {
+			continue
+		}
+		if err := remover.RemoveChannelData(channelID); err != nil {
+			return errors.WithMessagef(err, "failed to remove %s data of channel '%s'", consensusType, channelID)
+		}
+	}
+	return nil
 }
 
 func (r *Registrar) ReportConsensusRelationAndStatusMetrics(channelID string, relation types.ConsensusRelation, status types.Status) {
@@ -988,21 +1014,21 @@ func (r *Registrar) ReportConsensusRelationAndStatusMetrics(channelID string, re
 }
 
 func channelNameFromConfigTx(configtx *cb.Envelope) (string, error) {
-	payload, err := protoutil.UnmarshalPayload(configtx.Payload)
+	payload, err := protoutil.UnmarshalPayload(configtx.GetPayload())
 	if err != nil {
 		return "", errors.WithMessage(err, "error umarshaling envelope to payload")
 	}
 
-	if payload.Header == nil {
+	if payload.GetHeader() == nil {
 		return "", errors.New("missing channel header")
 	}
 
-	chdr, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
+	chdr, err := protoutil.UnmarshalChannelHeader(payload.GetHeader().GetChannelHeader())
 	if err != nil {
 		return "", errors.WithMessage(err, "error unmarshalling channel header")
 	}
 
-	return chdr.ChannelId, nil
+	return chdr.GetChannelId(), nil
 }
 
 func (r *Registrar) ApplyFilters(channel string, env *cb.Envelope) error {

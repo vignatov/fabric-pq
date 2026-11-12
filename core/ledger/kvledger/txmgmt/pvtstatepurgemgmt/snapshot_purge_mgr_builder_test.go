@@ -11,6 +11,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/bookkeeping"
 	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
@@ -20,7 +21,7 @@ import (
 )
 
 func TestPurgeMgrBuilder(t *testing.T) {
-	bookkeepingEnv := bookkeeping.NewTestEnv(t)
+	bookkeepingEnv := bookkeeping.NewTestEnv(t, ledger.GoLevelDB)
 	defer bookkeepingEnv.Cleanup()
 
 	ledgerID := "test-ledger"
@@ -34,13 +35,15 @@ func TestPurgeMgrBuilder(t *testing.T) {
 
 	purgeMgrBuilder := NewPurgeMgrBuilder(ledgerID, btlPolicy, bookkeepingProvider)
 
-	require.NoError(t,
+	require.NoError(
+		t,
 		purgeMgrBuilder.ConsumeSnapshotData(
 			"ns1",
 			"never-expiring-collection",
 			[]byte("key-hash-3"),
 			[]byte("value-hash-3"),
-			version.NewHeight(5, 1)),
+			version.NewHeight(5, 1),
+		),
 	)
 	expiry, err := purgeMgrBuilder.expKeeper.retrieveByExpiryKey(
 		&expiryInfoKey{
@@ -49,10 +52,11 @@ func TestPurgeMgrBuilder(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	require.Nil(t, expiry.pvtdataKeys.Map)
+	require.Nil(t, expiry.pvtdataKeys.GetMap())
 
 	// add data that expires at block-7
-	require.NoError(t,
+	require.NoError(
+		t,
 		purgeMgrBuilder.ConsumeSnapshotData(
 			"ns1",
 			"coll1",
@@ -61,7 +65,8 @@ func TestPurgeMgrBuilder(t *testing.T) {
 			version.NewHeight(5, 1),
 		),
 	)
-	require.NoError(t,
+	require.NoError(
+		t,
 		purgeMgrBuilder.ConsumeSnapshotData(
 			"ns1", "coll1",
 			[]byte("key-hash-2"),
@@ -70,7 +75,8 @@ func TestPurgeMgrBuilder(t *testing.T) {
 		),
 	)
 	// add data that expires at block-8
-	require.NoError(t,
+	require.NoError(
+		t,
 		purgeMgrBuilder.ConsumeSnapshotData(
 			"ns2",
 			"coll2",
@@ -88,7 +94,6 @@ func TestPurgeMgrBuilder(t *testing.T) {
 		expiringBlock  uint64
 		expectedOutput []*expiryInfo
 	}{
-
 		{
 			name:           "nothing-expires-at-block-6",
 			expiringBlock:  6,
@@ -180,7 +185,7 @@ func TestPurgeMgrBuilderErrorsPropagation(t *testing.T) {
 	var bookkeepingProvider *bookkeeping.Provider
 
 	init := func() {
-		bookkeepingEnv := bookkeeping.NewTestEnv(t)
+		bookkeepingEnv := bookkeeping.NewTestEnv(t, ledger.GoLevelDB)
 		bookkeepingProvider = bookkeepingEnv.TestProvider
 		btlPolicy = btltestutil.SampleBTLPolicy(
 			map[[2]string]uint64{

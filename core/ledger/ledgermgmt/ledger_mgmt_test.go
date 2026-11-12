@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,7 +90,7 @@ func TestCreateLedgerFromSnapshot(t *testing.T) {
 		bcInfo, _ := l.GetBlockchainInfo()
 		require.Equal(t, &common.BlockchainInfo{
 			Height:            1,
-			CurrentBlockHash:  protoutil.BlockHeaderHash(gb.Header),
+			CurrentBlockHash:  protoutil.BlockHeaderHash(gb.GetHeader()),
 			PreviousBlockHash: nil,
 			BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
 				LastBlockInSnapshot: 0,
@@ -108,7 +109,7 @@ func TestCreateLedgerFromSnapshot(t *testing.T) {
 
 		ledgerCreated := func() bool {
 			status := ledgerMgr.JoinBySnapshotStatus()
-			return !status.InProgress && status.BootstrappingSnapshotDir == ""
+			return !status.GetInProgress() && status.GetBootstrappingSnapshotDir() == ""
 		}
 
 		require.Eventually(t, ledgerCreated, time.Minute, time.Second)
@@ -116,7 +117,7 @@ func TestCreateLedgerFromSnapshot(t *testing.T) {
 
 		ledgerids, err := ledgerMgr.GetLedgerIDs()
 		require.NoError(t, err)
-		require.Equal(t, ledgerids, []string{channelID})
+		require.Equal(t, []string{channelID}, ledgerids)
 	})
 
 	t.Run("create_existing_ledger_returns_error", func(t *testing.T) {
@@ -154,7 +155,7 @@ func TestCreateLedgerFromSnapshot(t *testing.T) {
 		// wait until CreateFromSnapshot is done
 		ledgerCreated := func() bool {
 			status := ledgerMgr.JoinBySnapshotStatus()
-			return !status.InProgress && status.BootstrappingSnapshotDir == ""
+			return !status.GetInProgress() && status.GetBootstrappingSnapshotDir() == ""
 		}
 		require.Eventually(t, ledgerCreated, time.Minute, time.Second)
 
@@ -163,7 +164,7 @@ func TestCreateLedgerFromSnapshot(t *testing.T) {
 
 		ids, err := ledgerMgr.GetLedgerIDs()
 		require.NoError(t, err)
-		require.Equal(t, 0, len(ids))
+		require.Empty(t, ids)
 	})
 }
 
@@ -179,14 +180,18 @@ func TestConcurrentCreateLedgerFromGB(t *testing.T) {
 	}
 
 	// verify CreateLedger (from genesisblock) can be called concurrently
+	var wg sync.WaitGroup
+	errs := make(chan error, 10)
 	for i := range gbs {
 		gb := gbs[i]
 		ledgerID := fmt.Sprintf("l%d", i)
-		go func() {
+		wg.Go(func() {
 			_, err := ledgerMgr.CreateLedger(ledgerID, gb)
-			require.NoError(t, err)
-		}()
+			errs <- err
+		})
 	}
+	wg.Wait()
+	close(errs)
 
 	ledgersGenerated := func() bool {
 		ledgerIds, err := ledgerMgr.GetLedgerIDs()
@@ -194,11 +199,14 @@ func TestConcurrentCreateLedgerFromGB(t *testing.T) {
 		return len(ledgerIds) == len(gbs)
 	}
 	require.Eventually(t, ledgersGenerated, time.Minute, time.Second)
+
+	for err = range errs {
+		require.NoError(t, err)
+	}
 }
 
 func TestConcurrentCreateLedgerFromSnapshot(t *testing.T) {
-	initializer, ledgerMgr, cleanup := setup(t)
-	defer cleanup()
+	initializer, ledgerMgr, _ := setup(t)
 
 	// generate 2 snapshots for 2 channels
 	channelID1 := "testcreatefromsnapshot1"
@@ -232,14 +240,14 @@ func TestConcurrentCreateLedgerFromSnapshot(t *testing.T) {
 
 	waitCh <- struct{}{}
 	ledgerCreated := func() bool {
-		status := ledgerMgr.JoinBySnapshotStatus()
-		return !status.InProgress && status.BootstrappingSnapshotDir == ""
+		status := ledgerMgr2.JoinBySnapshotStatus()
+		return !status.GetInProgress() && status.GetBootstrappingSnapshotDir() == ""
 	}
 	require.Eventually(t, ledgerCreated, time.Minute, time.Second)
 
 	ledgerIDs, err := ledgerMgr2.GetLedgerIDs()
 	require.NoError(t, err)
-	require.Equal(t, ledgerIDs, []string{channelID1})
+	require.Equal(t, []string{channelID1}, ledgerIDs)
 
 	// CreateLedger should work after the previous CreateLedgerFromSnapshot is done
 	_, err = ledgerMgr2.CreateLedger(channelID3, gb)
@@ -252,7 +260,7 @@ func TestConcurrentCreateLedgerFromSnapshot(t *testing.T) {
 	// wait until ledger is created from snapshotDir2
 	ledgerCreated = func() bool {
 		status := ledgerMgr2.JoinBySnapshotStatus()
-		return !status.InProgress && status.BootstrappingSnapshotDir == ""
+		return !status.GetInProgress() && status.GetBootstrappingSnapshotDir() == ""
 	}
 	require.Eventually(t, ledgerCreated, time.Minute, time.Second)
 
@@ -313,8 +321,10 @@ func constructDefaultInitializer(testDir string) (*Initializer, error) {
 	}
 	return &Initializer{
 		Config: &ledger.Config{
-			RootFSPath:    testDir,
-			StateDBConfig: &ledger.StateDBConfig{},
+			RootFSPath: testDir,
+			StateDBConfig: &ledger.StateDBConfig{
+				StateDatabase: ledger.GoLevelDB,
+			},
 			PrivateDataConfig: &ledger.PrivateDataConfig{
 				MaxBatchSize:    5000,
 				BatchesInterval: 1000,

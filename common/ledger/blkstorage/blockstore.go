@@ -13,7 +13,6 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/snapshot"
-	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 )
 
 // BlockStore - filesystem based implementation for `BlockStore`
@@ -26,7 +25,8 @@ type BlockStore struct {
 
 // newBlockStore constructs a `BlockStore`
 func newBlockStore(id string, conf *Conf, indexConfig *IndexConfig,
-	dbHandle *leveldbhelper.DBHandle, stats *stats) (*BlockStore, error) {
+	dbHandle ledger.DBHandle, stats *stats,
+) (*BlockStore, error) {
 	fileMgr, err := newBlockfileMgr(id, conf, indexConfig, dbHandle)
 	if err != nil {
 		return nil, err
@@ -35,7 +35,7 @@ func newBlockStore(id string, conf *Conf, indexConfig *IndexConfig,
 	// create ledgerStats and initialize blockchain_height stat
 	ledgerStats := stats.ledgerStats(id)
 	info := fileMgr.getBlockchainInfo()
-	ledgerStats.updateBlockchainHeight(info.Height)
+	ledgerStats.updateBlockchainHeight(info.GetHeight())
 
 	return &BlockStore{id, conf, fileMgr, ledgerStats}, nil
 }
@@ -47,7 +47,7 @@ func (store *BlockStore) AddBlock(block *common.Block) error {
 	result := store.fileMgr.addBlock(block)
 	elapsedBlockCommit := time.Since(startBlockCommit)
 
-	store.updateBlockStats(block.Header.Number, elapsedBlockCommit)
+	store.updateBlockStats(block.GetHeader().GetNumber(), elapsedBlockCommit)
 
 	return result
 }

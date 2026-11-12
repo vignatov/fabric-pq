@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package comm
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"time"
 
@@ -19,7 +19,6 @@ import (
 // Comm is an object that enables to communicate with other peers
 // that also embed a CommModule.
 type Comm interface {
-
 	// GetPKIid returns this instance's PKI id
 	GetPKIid() common.PKIidType
 
@@ -113,7 +112,7 @@ func (ar AggregatedSendResult) String() string {
 	if ackCount < len(ar) {
 		output["failures"] = errMap
 	}
-	b, _ := json.Marshal(output)
+	b, _ := json.Marshal(output, json.Deterministic(true))
 	return string(b)
 }
 
