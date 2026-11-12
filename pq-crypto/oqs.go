@@ -14,8 +14,8 @@ import (
 type SigType string
 
 const (
-	MLDSA65ProfileV1 SigType = "ML-DSA-65-FIPS204-PURE-EMPTY-CONTEXT-v1"
-	defaultProfile   SigType = "DEFAULT"
+	MLDSA65ProfileV1    SigType = "ML-DSA-65-FIPS204-PURE-EMPTY-CONTEXT-v1"
+	defaultProfile      SigType = "DEFAULT"
 	UnknownKeyAlgorithm SigType = "UnknownKeyAlgorithm"
 )
 

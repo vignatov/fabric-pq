@@ -76,8 +76,8 @@ func TestMLDSA65RejectsMalformedAndUnsupportedInputs(t *testing.T) {
 	_, _, err = KeyPair("Dilithium3")
 	require.Error(t, err)
 	_, err = Sign(SecretKey{
-		Sk:       secretKey.Sk,
-		PublicKey: PublicKey{Pk: secretKey.Pk, Sig: OQSSigInfo{Algorithm: "Dilithium3"}},
+		secretKey.Sk,
+		PublicKey{Pk: secretKey.Pk, Sig: OQSSigInfo{Algorithm: "Dilithium3"}},
 	}, []byte("message"))
 	require.Error(t, err)
 	_, err = Verify(PublicKey{Sig: OQSSigInfo{Algorithm: "Dilithium3"}}, nil, []byte("message"))
