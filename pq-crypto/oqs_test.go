@@ -2,6 +2,7 @@ package oqs
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -33,14 +34,13 @@ func TestRoundTrip(t *testing.T) {
 			if string(sigAlg) == "DEFAULT" {
 				return
 			}
-			if err == errAlgDisabledOrUnknown {
+			publicKey, secretKey, err := KeyPair(sigAlg)
+			if errors.Is(err, errAlgDisabledOrUnknown) {
 				t.Skipf("Skipping disabled/unknown algorithm %q", sigAlg)
 			}
 			require.NoError(t, err)
 
-			publicKey, secretKey, err := KeyPair(sigAlg)
 			assert.Equal(t, string(publicKey.Sig.Algorithm), string(sigAlg))
-			require.NoError(t, err)
 
 			signature, err := Sign(secretKey, message)
 			require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestRoundTrip(t *testing.T) {
 			result, err := Verify(publicKey, signature, message)
 			require.NoError(t, err)
 
-			assert.Equal(t, result, true)
+			assert.True(t, result)
 		})
 	}
 }

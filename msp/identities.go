@@ -315,13 +315,11 @@ func newSigningIdentity(cert *x509.Certificate, pk bccsp.Key, qPk bccsp.Key, sig
 		return nil, err
 	}
 	return &signingidentity{
-		identity: identity{
-			id:   mspId.(*identity).id,
-			cert: mspId.(*identity).cert,
-			msp:  mspId.(*identity).msp,
-			pk:   mspId.(*identity).pk,
-			qPk:  mspId.(*identity).qPk,
-		},
+		id:     mspId.(*identity).id,
+		cert:   mspId.(*identity).cert,
+		msp:    mspId.(*identity).msp,
+		pk:     mspId.(*identity).pk,
+		qPk:    mspId.(*identity).qPk,
 		signer: signer,
 	}, nil
 }
@@ -356,8 +354,8 @@ func (id *signingidentity) Sign(msg []byte) ([]byte, error) {
 	if id.cert.PublicKeyAlgorithm != x509.Ed25519 {
 		mspIdentityLogger.Debugf("Sign: digest: %X \n", digestOrMsg)
 	}
-	if id.identity.qPk != nil {
-		qPrivKey, err := id.msp.bccsp.GetKey(id.identity.qPk.SKI())
+	if id.qPk != nil {
+		qPrivKey, err := id.msp.bccsp.GetKey(id.qPk.SKI())
 		if err != nil {
 			return nil, errors.WithMessage(err, "could not get quantum-safe private key")
 		}

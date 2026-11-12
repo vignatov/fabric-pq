@@ -268,5 +268,5 @@ func TestHybridSigningIdentitySignAndVerify(t *testing.T) {
 	// Ensure qPk survives in the signing identity and is not dropped.
 	internalID, ok := hybridSigningIdentity.(*signingidentity)
 	require.True(t, ok)
-	require.NotNil(t, internalID.identity.qPk)
+	require.NotNil(t, internalID.qPk)
 }

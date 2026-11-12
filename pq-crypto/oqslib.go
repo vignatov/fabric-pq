@@ -147,7 +147,7 @@ var (
 	operationFailed         C.libResult = C.ERR_OPERATION_FAILED
 )
 
-func libError(result C.libResult, msg string, a ...interface{}) error {
+func libError(result C.libResult, msg string, a ...any) error {
 	if result == C.ERR_OPERATION_FAILED {
 		return errors.Errorf(msg, a...)
 	}
@@ -212,7 +212,7 @@ func SigName(algID int) (SigType, error) {
 }
 
 func (l *OQSLib) initSigTypes() {
-	for i := 0; i < MaxNumberSigs(); i++ {
+	for i := range MaxNumberSigs() {
 		sigName, _ := SigName(i)
 		l.supportedSigs = append(l.supportedSigs, sigName)
 		if IsSigEnabled(sigName) {
@@ -240,11 +240,12 @@ func (l *OQSLib) generateOids() {
 
 func newLib() (*OQSLib, error) {
 	var libName string
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		libName = defaultLinuxLibPath
-	} else if runtime.GOOS == "darwin" {
+	case "darwin":
 		libName = defaultMacLibPath
-	} else {
+	default:
 		return nil, errors.New("Unsupported OS")
 	}
 	ctx, err := loadCctx(libName)
@@ -401,7 +402,7 @@ func setRandomAlg(ctx *C.ctx, strAlg AlgType) (int, error) {
 
 func GetRandomBytes(nbytes int) (randombytes []byte, err error) {
 	bytes := C.malloc(C.ulong(nbytes))
-	defer C.free(unsafe.Pointer(bytes))
+	defer C.free(bytes)
 
 	res := C.GetRandomBytes((*C.uint8_t)(bytes), C.int(nbytes))
 
