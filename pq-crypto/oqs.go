@@ -79,7 +79,7 @@ func KeyPair(profile SigType) (PublicKey, SecretKey, error) {
 		},
 	}
 	secretKey := SecretKey{
-		Sk:       privateKey.Bytes(),
+		Sk:        privateKey.Bytes(),
 		PublicKey: publicKey,
 	}
 	return publicKey, secretKey, nil
