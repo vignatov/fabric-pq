@@ -43,6 +43,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+replace github.com/hyperledger/fabric-lib-go => ./third_party/fabric-lib-go
+
 require (
 	github.com/IBM/idemix/bccsp/schemes/aries v0.0.0-20240913182345-72941a5f41cd // indirect
 	github.com/IBM/idemix/bccsp/schemes/weak-bb v0.0.0-20240913182345-72941a5f41cd // indirect

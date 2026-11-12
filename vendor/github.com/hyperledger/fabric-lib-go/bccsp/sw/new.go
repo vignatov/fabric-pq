@@ -62,6 +62,7 @@ func NewWithParams(securityLevel int, hashFamily string, keyStore bccsp.KeyStore
 	swbccsp.AddWrapper(reflect.TypeOf(&ecdsaPrivateKey{}), &ecdsaSigner{})
 	swbccsp.AddWrapper(reflect.TypeOf(&ed25519PrivateKey{}), &ed25519Signer{})
 	swbccsp.AddWrapper(reflect.TypeOf(&rsaPrivateKey{}), &rsaSigner{})
+	swbccsp.AddWrapper(reflect.TypeOf(&oqsPrivateKey{}), &oqsSigner{})
 
 	// Set the Verifiers
 	swbccsp.AddWrapper(reflect.TypeOf(&ecdsaPrivateKey{}), &ecdsaPrivateKeyVerifier{})
@@ -70,6 +71,8 @@ func NewWithParams(securityLevel int, hashFamily string, keyStore bccsp.KeyStore
 	swbccsp.AddWrapper(reflect.TypeOf(&ed25519PublicKey{}), &ed25519PublicKeyKeyVerifier{})
 	swbccsp.AddWrapper(reflect.TypeOf(&rsaPrivateKey{}), &rsaPrivateKeyVerifier{})
 	swbccsp.AddWrapper(reflect.TypeOf(&rsaPublicKey{}), &rsaPublicKeyKeyVerifier{})
+	swbccsp.AddWrapper(reflect.TypeOf(&oqsPrivateKey{}), &oqsPrivateKeyVerifier{})
+	swbccsp.AddWrapper(reflect.TypeOf(&oqsPublicKey{}), &oqsPublicKeyKeyVerifier{})
 
 	// Set the Hashers
 	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.SHAOpts{}), &hasher{hash: conf.hashFunction})
@@ -92,6 +95,7 @@ func NewWithParams(securityLevel int, hashFamily string, keyStore bccsp.KeyStore
 	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.RSA2048KeyGenOpts{}), &rsaKeyGenerator{length: 2048})
 	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.RSA3072KeyGenOpts{}), &rsaKeyGenerator{length: 3072})
 	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.RSA4096KeyGenOpts{}), &rsaKeyGenerator{length: 4096})
+	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.OQSKeyGenOpts{}), &oqsKeyGenerator{})
 
 	// Set the key deriver
 	swbccsp.AddWrapper(reflect.TypeOf(&ecdsaPrivateKey{}), &ecdsaPrivateKeyKeyDeriver{})
@@ -110,6 +114,9 @@ func NewWithParams(securityLevel int, hashFamily string, keyStore bccsp.KeyStore
 	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.X509PublicKeyImportOpts{}), &x509PublicKeyImportOptsKeyImporter{bccsp: swbccsp})
 	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.ED25519PrivateKeyImportOpts{}), &ed25519PrivateKeyImportOptsKeyImporter{})
 	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.ED25519GoPublicKeyImportOpts{}), &ed25519GoPublicKeyImportOptsKeyImporter{})
+	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.OQSPublicKeyImportOpts{}), &oqsPKIXPublicKeyImportOptsKeyImporter{})
+	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.OQSGoPublicKeyImportOpts{}), &oqsGoPublicKeyImportOptsKeyImporter{})
+	swbccsp.AddWrapper(reflect.TypeOf(&bccsp.X509AltPublicKeyImportOpts{}), &x509AltPublicKeyImportOptsKeyImporter{bccsp: swbccsp})
 
 	return swbccsp, nil
 }

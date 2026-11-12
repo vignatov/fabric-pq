@@ -100,6 +100,14 @@ func GetDevMspDir() string {
 	return filepath.Join(devDir, "msp")
 }
 
+// GetDevHybridMspDir gets the path to the sampleconfig tree for an MSP that
+// uses hybrid classical and quantum-safe crypto. This should only be used in
+// a test/dev context.
+func GetDevHybridMspDir() string {
+	devDir := GetDevConfigDir()
+	return filepath.Join(devDir, "hybridmsp")
+}
+
 func SetDevFabricConfigPath(t *testing.T) {
 	t.Helper()
 	t.Setenv("FABRIC_CFG_PATH", GetDevConfigDir())

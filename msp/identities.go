@@ -10,6 +10,7 @@ import (
 	"crypto"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
@@ -26,6 +27,12 @@ import (
 
 var mspIdentityLogger = flogging.MustGetLogger("msp.identity")
 
+type hybridSignatureUnpack struct {
+	Raw           asn1.RawContent
+	ClassicalSign asn1.BitString
+	QuantumSign   asn1.BitString
+}
+
 type identity struct {
 	// id contains the identifier (MSPID and identity identifier) for this instance
 	id *IdentityIdentifier
@@ -33,8 +40,14 @@ type identity struct {
 	// cert contains the x.509 certificate that signs the public key of this instance
 	cert *x509.Certificate
 
-	// this is the public key of this instance
+	// this is the classical public key of this instance
 	pk bccsp.Key
+
+	// this is the quantum-safe public key of this instance
+	// it may be nil; in this case, only classical crypto algorithms will be used
+	// if it is non-nil, then when signing and verifying *signatures*, a hybrid scheme
+	// will be assumed. Note that this does not affect the interpretation of certs.
+	qPk bccsp.Key
 
 	// reference to the MSP that "owns" this identity
 	msp *bccspmsp
@@ -52,7 +65,7 @@ type identity struct {
 	validationErr error
 }
 
-func newIdentity(cert *x509.Certificate, pk bccsp.Key, msp *bccspmsp) (Identity, error) {
+func newIdentity(cert *x509.Certificate, pk bccsp.Key, qPk bccsp.Key, msp *bccspmsp) (Identity, error) {
 	if mspIdentityLogger.IsEnabledFor(zapcore.DebugLevel) {
 		mspIdentityLogger.Debugf("Creating identity instance for cert %s", certToPEM(cert))
 	}
@@ -81,7 +94,7 @@ func newIdentity(cert *x509.Certificate, pk bccsp.Key, msp *bccspmsp) (Identity,
 		Id:    hex.EncodeToString(digest),
 	}
 
-	return &identity{id: id, cert: cert, pk: pk, msp: msp}, nil
+	return &identity{id: id, cert: cert, pk: pk, qPk: qPk, msp: msp}, nil
 }
 
 // ExpiresAt returns the time at which the Identity expires.
@@ -194,6 +207,47 @@ func (id *identity) Verify(msg []byte, sig []byte) error {
 		// mspIdentityLogger.Debugf("Verify: sig = %s", hex.Dump(sig))
 	}
 
+	if id.qPk != nil {
+		// If the identity has a quantum public key, we expect to see a hybrid signature and will
+		// verify according to the strong-nested hybrid signature scheme described in
+		// https://eprint.iacr.org/2017/460.pdf
+		mspIdentityLogger.Debug("Verifying with quantum-safe public key.")
+		var hsu hybridSignatureUnpack
+		if rest, err := asn1.Unmarshal(sig, &hsu); err != nil {
+			return err
+		} else if len(rest) != 0 {
+			return errors.New("invalid signature format for quantum signature")
+		}
+		valid, err := id.msp.bccsp.Verify(id.qPk, hsu.QuantumSign.RightAlign(), digestOrMsg, nil)
+		if err != nil {
+			return errors.WithMessage(err, "could not determine the validity of the quantum signature")
+		} else if !valid {
+			return errors.New("The quantum signature is invalid")
+		}
+
+		// If the quantum part of the signature is valid,
+		// continue to check the classical signature.
+		sig = hsu.ClassicalSign.RightAlign()
+		// The classical part of the hybrid signer will have signed
+		// [digest, quantum_signature]
+		// So we append them here.
+		hybridDigest := append(append([]byte{}, digestOrMsg...), hsu.QuantumSign.RightAlign()...)
+		// Must use SHA384 for post-quantum.
+		hashopt, err := bccsp.GetHashOpt(bccsp.SHA384)
+		if err != nil {
+			return err
+		}
+		digestOrMsg, err = id.msp.bccsp.Hash(hybridDigest, hashopt)
+		if err != nil {
+			return err
+		}
+	}
+	// Note that this call to Verify is expected to fail if:
+	// 1. The received identity is purely classical, but the signature was performed by a hybrid signer
+	// 2. The received identity is purely classical, but the signature does not match for some other reason
+	// 3. The received identity is hybrid quantum, but the classical part of the signature does not match or
+	//    was not nested/formatted properly.
+
 	valid, err := id.msp.bccsp.Verify(id.pk, sig, digestOrMsg, nil)
 	if err != nil {
 		return errors.WithMessage(err, "could not determine the validity of the signature")
@@ -223,6 +277,19 @@ func (id *identity) Serialize() ([]byte, error) {
 	return idBytes, nil
 }
 
+func (id *identity) getSigningHashOpt() (bccsp.HashOpts, error) {
+	// Obtain the appropriate hash for signing and verifying,
+	// based on the identity signature algorithm
+
+	if id.qPk != nil {
+		// In a post-quantum world, we must always use at least SHA-384
+		return bccsp.GetHashOpt(bccsp.SHA384)
+	}
+
+	// TODO: Using id.pk, determine an appropriate hashing algorithm
+	return bccsp.GetHashOpt(bccsp.SHA256)
+}
+
 func (id *identity) getHashOpt(hashFamily string) (bccsp.HashOpts, error) {
 	switch hashFamily {
 	case bccsp.SHA2:
@@ -241,9 +308,9 @@ type signingidentity struct {
 	signer crypto.Signer
 }
 
-func newSigningIdentity(cert *x509.Certificate, pk bccsp.Key, signer crypto.Signer, msp *bccspmsp) (SigningIdentity, error) {
+func newSigningIdentity(cert *x509.Certificate, pk bccsp.Key, qPk bccsp.Key, signer crypto.Signer, msp *bccspmsp) (SigningIdentity, error) {
 	// mspIdentityLogger.Infof("Creating signing identity instance for ID %s", id)
-	mspId, err := newIdentity(cert, pk, msp)
+	mspId, err := newIdentity(cert, pk, qPk, msp)
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +320,7 @@ func newSigningIdentity(cert *x509.Certificate, pk bccsp.Key, signer crypto.Sign
 			cert: mspId.(*identity).cert,
 			msp:  mspId.(*identity).msp,
 			pk:   mspId.(*identity).pk,
+			qPk:  mspId.(*identity).qPk,
 		},
 		signer: signer,
 	}, nil
@@ -288,6 +356,38 @@ func (id *signingidentity) Sign(msg []byte) ([]byte, error) {
 	if id.identity.cert.PublicKeyAlgorithm != x509.Ed25519 {
 		mspIdentityLogger.Debugf("Sign: digest: %X \n", digestOrMsg)
 	}
+	if id.identity.qPk != nil {
+		qPrivKey, err := id.msp.bccsp.GetKey(id.identity.qPk.SKI())
+		if err != nil {
+			return nil, errors.WithMessage(err, "could not get quantum-safe private key")
+		}
+
+		qSig, err := id.msp.bccsp.Sign(qPrivKey, digestOrMsg, nil)
+		if err != nil {
+			return nil, errors.WithMessage(err, "could not produce quantum-safe signature")
+		}
+
+		hybridDigest := append(append([]byte{}, digestOrMsg...), qSig...)
+		hashOpt, err := bccsp.GetHashOpt(bccsp.SHA384)
+		if err != nil {
+			return nil, errors.WithMessage(err, "failed getting hybrid hash function options")
+		}
+		digestOrMsg, err = id.msp.bccsp.Hash(hybridDigest, hashOpt)
+		if err != nil {
+			return nil, errors.WithMessage(err, "failed computing hybrid digest")
+		}
+
+		classicalSig, err := id.signer.Sign(rand.Reader, digestOrMsg, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		return asn1.Marshal(hybridSignatureUnpack{
+			ClassicalSign: asn1.BitString{Bytes: classicalSig, BitLength: len(classicalSig) * 8},
+			QuantumSign:   asn1.BitString{Bytes: qSig, BitLength: len(qSig) * 8},
+		})
+	}
+
 	// Sign digest for ECDSA or msg for ED25519
 	return id.signer.Sign(rand.Reader, digestOrMsg, nil)
 }

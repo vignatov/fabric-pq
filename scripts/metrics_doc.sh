@@ -7,8 +7,22 @@
 fabric_dir="$(cd "$(dirname "$0")/.." && pwd)"
 metrics_doc="${fabric_dir}/docs/source/metrics_reference.rst"
 
+resolve_gendoc() {
+    local gendoc_bin
+    gendoc_bin=$(command -v gendoc || true)
+    if [[ -z "$gendoc_bin" && -x "$(go env GOPATH)/bin/gendoc" ]]; then
+        gendoc_bin="$(go env GOPATH)/bin/gendoc"
+    fi
+    if [[ -z "$gendoc_bin" ]]; then
+        echo "gendoc binary not found on PATH or at $(go env GOPATH)/bin/gendoc"
+        exit 1
+    fi
+    echo "$gendoc_bin"
+}
+
 generate_doc() {
-    local gendoc_command="gendoc" # built using "make gotools"
+    local gendoc_command
+    gendoc_command="$(resolve_gendoc)" # built using "make gotools"
     local orderer_prom
     local orderer_statsd
     local peer_prom

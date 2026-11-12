@@ -9,6 +9,24 @@ set -e
 # shellcheck source=/dev/null
 source "$(cd "$(dirname "$0")" && pwd)/functions.sh"
 
+resolve_tool() {
+    local tool="$1"
+    local tool_path
+    tool_path=$(command -v "$tool" || true)
+    if [[ -z "$tool_path" && -x "$(go env GOPATH)/bin/$tool" ]]; then
+        tool_path="$(go env GOPATH)/bin/$tool"
+    fi
+    if [[ -z "$tool_path" ]]; then
+        echo "$tool binary not found on PATH or at $(go env GOPATH)/bin/$tool"
+        exit 1
+    fi
+    echo "$tool_path"
+}
+
+GOIMPORTS_BIN="$(resolve_tool goimports)"
+GOFUMPT_BIN="$(resolve_tool gofumpt)"
+STATICCHECK_BIN="$(resolve_tool staticcheck)"
+
 fabric_dir="$(cd "$(dirname "$0")/.." && pwd)"
 source_dirs=()
 while IFS=$'\n' read -r source_dir; do
@@ -16,7 +34,7 @@ while IFS=$'\n' read -r source_dir; do
 done < <(go list -f '{{.Dir}}' ./... | sed s,"${fabric_dir}".,,g | cut -f 1 -d / | sort -u)
 
 echo "Checking with goimports"
-OUTPUT="$(goimports -l "${source_dirs[@]}")"
+OUTPUT="$("$GOIMPORTS_BIN" -l "${source_dirs[@]}")"
 OUTPUT="$(filterExcludedAndGeneratedFiles "$OUTPUT")"
 if [ -n "$OUTPUT" ]; then
     echo "The following files contain goimports errors"
@@ -26,7 +44,7 @@ if [ -n "$OUTPUT" ]; then
 fi
 
 echo "Checking with gofumpt"
-OUTPUT="$(gofumpt -l -s "${source_dirs[@]}")"
+OUTPUT="$("$GOFUMPT_BIN" -l -s "${source_dirs[@]}")"
 OUTPUT="$(filterExcludedAndGeneratedFiles "$OUTPUT")"
 if [ -n "$OUTPUT" ]; then
     echo "The following files contain gofumpt errors"
@@ -71,7 +89,7 @@ fi
 
 # staticcheck Fabric source files - ignore issues in vendored dependency projects
 echo "Checking with staticcheck"
-OUTPUT="$(staticcheck ./... | grep -v vendor/ || true)"
+OUTPUT="$("$STATICCHECK_BIN" ./... | grep -v vendor/ || true)"
 if [ -n "$OUTPUT" ]; then
     echo "The following staticcheck issues were flagged"
     echo "$OUTPUT"

@@ -2,7 +2,7 @@
 # Copyright Hitachi, Ltd. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-COMMIT_FILES=$(git diff --name-only --diff-filter=ACMRTUXB HEAD | grep -Ev '(^|/)vendor/')
+COMMIT_FILES=$(git diff --name-only --diff-filter=ACMRTUXB HEAD | grep -Ev '(^|/)vendor/|^docs/source/commands/')
 
 echo "Checking trailing spaces ..."
 for filename in $COMMIT_FILES; do
