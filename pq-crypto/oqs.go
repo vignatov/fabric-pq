@@ -4,172 +4,120 @@ SPDX-License-Identifier: Apache-2.0
 
 package oqs
 
-// NOTE: THE COMMENTS BELOW ARE CODE WHICH GETS COMPILED (THEY ARE CALLED PREAMBLE).IT'S A UNIQUE/WEIRD FEATURE IN CGO.
-// ALSO NOTE: THERE MUST BE NO NEWLINE BETWEEN THE END OF THE COMMENT AND THE IMPORT "C" LINE
+import (
+	"bytes"
+	"crypto/mldsa"
+	"crypto/rand"
+	"fmt"
+)
 
-/*
-   #cgo CFLAGS: -Iinclude
-   #cgo LDFLAGS: -L${SRCDIR} -Wl,-rpath,${SRCDIR} -ldl -loqs -lm
+type SigType string
 
-   #include <stdio.h>
-   #include <stdlib.h>
+const (
+	MLDSA65ProfileV1 SigType = "ML-DSA-65-FIPS204-PURE-EMPTY-CONTEXT-v1"
+	defaultProfile   SigType = "DEFAULT"
+	UnknownKeyAlgorithm SigType = "UnknownKeyAlgorithm"
+)
 
-   typedef enum {
-   	ERR_OK,
-   	ERR_CANNOT_LOAD_LIB,
-   	ERR_CONTEXT_CLOSED,
-   	ERR_MEM,
-   	ERR_NO_FUNCTION,
-   	ERR_OPERATION_FAILED,
-   } libResult;
-
-   #include <oqs/oqs.h>
-   #include <dlfcn.h>
-   #include <stdbool.h>
-   #include <stdlib.h>
-   #include <string.h>
-
-   typedef struct {
-     void *handle;
-   } ctx;
-
-   libResult OQS_KeyPair(const OQS_SIG *sig, uint8_t *public_key, uint8_t *secret_key) {
-
-   	OQS_STATUS status = OQS_SIG_keypair(sig,public_key, secret_key);
-   	if (status != OQS_SUCCESS) {
-   		return ERR_OPERATION_FAILED;
-   	}
-   	return ERR_OK;
-   }
-
-   libResult OQS_Sign(const OQS_SIG *sig, uint8_t *signature, size_t *signature_len, const uint8_t *message, size_t message_len, const uint8_t *secret_key) {
-
-   	OQS_STATUS status = OQS_SIG_sign(sig,signature, signature_len, message, message_len, secret_key);
-   	if (status != OQS_SUCCESS) {
-   		return ERR_OPERATION_FAILED;
-   	}
-   	return ERR_OK;
-   }
-
-   libResult OQS_Verify(const OQS_SIG *sig, const uint8_t *message, size_t message_len, const uint8_t *signature, size_t signature_len, const uint8_t *public_key) {
-
-   	OQS_STATUS status =OQS_SIG_verify(sig,message, message_len, signature, signature_len, public_key);
-   	if (status != OQS_SUCCESS) {
-   		return ERR_OPERATION_FAILED;
-   	}
-   	return ERR_OK;
-   }
-*/
-import "C"
-
-func getSig(sigType SigType) (*OQSSig, error) {
-	lib, err := GetLib()
-	if err != nil {
-		return nil, err
-	}
-	return lib.GetSig(sigType)
+type SecretKey struct {
+	Sk []byte
+	PublicKey
 }
 
-// KeyPair generates a new public and secret key pair for the specified signature algorithm.
-// If the provided algName is "DEFAULT", it defaults to using "Dilithium3".
-// It returns the generated PublicKey, SecretKey, and an error if key generation fails.
-//
-// Parameters:
-//   - algName: The signature algorithm to use for key generation.
-//
-// Returns:
-//   - publicKey: The generated public key.
-//   - secretKey: The generated secret key.
-//   - err: An error if key generation fails, otherwise nil.
-func KeyPair(algName SigType) (publicKey PublicKey, secretKey SecretKey, err error) {
-	if algName == "DEFAULT" {
-		algName = "Dilithium3"
+type PublicKey struct {
+	Pk  []byte
+	Sig OQSSigInfo
+}
+
+type OQSSigInfo struct {
+	Algorithm SigType
+}
+
+type OQSLib struct{}
+
+func GetLib() (*OQSLib, error) {
+	return &OQSLib{}, nil
+}
+
+func (l *OQSLib) EnabledSigs() []SigType {
+	return []SigType{MLDSA65ProfileV1}
+}
+
+func normalizeProfile(profile SigType) (SigType, error) {
+	if profile == "" || profile == defaultProfile {
+		return MLDSA65ProfileV1, nil
 	}
-	s, err := getSig(algName)
+	if profile != MLDSA65ProfileV1 {
+		return "", fmt.Errorf("unsupported post-quantum profile %q", profile)
+	}
+	return profile, nil
+}
+
+func requireProfile(profile SigType) error {
+	if profile != MLDSA65ProfileV1 {
+		return fmt.Errorf("unknown OQS algorithm name or unsupported post-quantum profile %q", profile)
+	}
+	return nil
+}
+
+// KeyPair creates an ML-DSA-65 key pair using the fixed versioned profile.
+func KeyPair(profile SigType) (PublicKey, SecretKey, error) {
+	profile, err := normalizeProfile(profile)
 	if err != nil {
 		return PublicKey{}, SecretKey{}, err
 	}
 
-	pubKeyLen := C.int(s.sig.length_public_key)
-	pk := C.malloc(C.ulong(pubKeyLen))
-	defer C.free(pk)
-
-	secKeyLen := C.int(s.sig.length_secret_key)
-	sk := C.malloc(C.ulong(secKeyLen))
-	defer C.free(sk)
-
-	res := C.OQS_KeyPair(s.sig, (*C.uchar)(pk), (*C.uchar)(sk))
-	if res != C.ERR_OK {
-		return PublicKey{}, SecretKey{}, libError(res, "key pair generation failed")
+	privateKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	if err != nil {
+		return PublicKey{}, SecretKey{}, fmt.Errorf("generate %s key: %w", profile, err)
 	}
 
-	sig := OQSSigInfo{
-		Algorithm: SigType(C.GoString(s.sig.method_name)),
+	publicKey := PublicKey{
+		Pk: privateKey.PublicKey().Bytes(),
+		Sig: OQSSigInfo{
+			Algorithm: profile,
+		},
 	}
-	publicKey = PublicKey{Pk: C.GoBytes(pk, pubKeyLen), Sig: sig}
-	secretKey = SecretKey{
-		C.GoBytes(sk, secKeyLen),
-		publicKey,
+	secretKey := SecretKey{
+		Sk:       privateKey.Bytes(),
+		PublicKey: publicKey,
 	}
 	return publicKey, secretKey, nil
 }
 
-func Sign(secretKey SecretKey, message []byte) (signature []byte, err error) {
-	s, err := getSig(secretKey.Sig.Algorithm)
-	if err != nil {
+// Sign signs the supplied message bytes with pure ML-DSA-65 and an empty context.
+func Sign(secretKey SecretKey, message []byte) ([]byte, error) {
+	if err := requireProfile(secretKey.Sig.Algorithm); err != nil {
 		return nil, err
 	}
-	var signatureLen C.ulong
 
-	sig := C.malloc(s.sig.length_signature)
-	defer C.free(sig)
-
-	mes_len := C.size_t(len(message))
-	msg := C.CBytes(message)
-	defer C.free(msg)
-
-	sk := C.CBytes(secretKey.Sk)
-	defer C.free(sk)
-
-	res := C.OQS_Sign(s.sig, (*C.uchar)(sig), &signatureLen, (*C.uchar)(msg), mes_len, (*C.uchar)(sk))
-	if res != C.ERR_OK {
-		return nil, libError(res, "signing failed")
+	privateKey, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), secretKey.Sk)
+	if err != nil {
+		return nil, fmt.Errorf("decode %s private key: %w", secretKey.Sig.Algorithm, err)
+	}
+	if !bytes.Equal(privateKey.PublicKey().Bytes(), secretKey.Pk) {
+		return nil, fmt.Errorf("%s private and public keys do not match", secretKey.Sig.Algorithm)
 	}
 
-	return C.GoBytes(sig, C.int(signatureLen)), nil
+	signature, err := privateKey.Sign(rand.Reader, message, &mldsa.Options{Context: ""})
+	if err != nil {
+		return nil, fmt.Errorf("sign with %s: %w", secretKey.Sig.Algorithm, err)
+	}
+	return signature, nil
 }
 
-// Verify checks the validity of a digital signature for a given message using the provided public key.
-// It returns true if the signature is valid, or false along with an error if verification fails.
-//
-// Parameters:
-//   - publicKey: The PublicKey used to verify the signature.
-//   - signature: The signature bytes to be verified.
-//   - message: The original message bytes that were signed.
-//
-// Returns:
-//   - assert: A boolean indicating whether the signature is valid.
-//   - err: An error if verification fails or an internal error occurs.
-func Verify(publicKey PublicKey, signature []byte, message []byte) (assert bool, err error) {
-	s, err := getSig(publicKey.Sig.Algorithm)
-	if err != nil {
+// Verify verifies pure ML-DSA-65 signatures using an empty context.
+func Verify(publicKey PublicKey, signature, message []byte) (bool, error) {
+	if err := requireProfile(publicKey.Sig.Algorithm); err != nil {
 		return false, err
 	}
-	mes_len := C.ulong(len(message))
-	msg := C.CBytes(message)
-	defer C.free(msg)
 
-	sign_len := C.ulong(len(signature))
-	sgn := C.CBytes(signature)
-	defer C.free(sgn)
-
-	pk := C.CBytes(publicKey.Pk)
-	defer C.free(pk)
-
-	res := C.OQS_Verify(s.sig, (*C.uchar)(msg), mes_len, (*C.uchar)(sgn), sign_len, (*C.uchar)(pk))
-	if res != C.ERR_OK {
-		return false, libError(res, "verification failed")
+	key, err := mldsa.NewPublicKey(mldsa.MLDSA65(), publicKey.Pk)
+	if err != nil {
+		return false, fmt.Errorf("decode %s public key: %w", publicKey.Sig.Algorithm, err)
 	}
-
+	if err := mldsa.Verify(key, message, signature, &mldsa.Options{Context: ""}); err != nil {
+		return false, fmt.Errorf("invalid %s signature: %w", publicKey.Sig.Algorithm, err)
+	}
 	return true, nil
 }
