@@ -4,10 +4,10 @@ SPDX-License-Identifier: Apache-2.0
 
 package oqs
 
-import "C"
-
 import (
+	"bytes"
 	"crypto"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -17,147 +17,101 @@ import (
 	"github.com/pkg/errors"
 )
 
-// MVP implementation for marshalling and unmarshalling OQS keys.
-// It is assumed that, once specific quantum-safe algorithms become standardized,
-// there will be forthcoming RFCs that precisely describe their expected asn1 format, etc.
-// Eventually, these should be supported by the Go SDK crypto packages directly.
-
 type Algorithm = SigType
 
-// pkixPublicKey reflects a PKIX public key structure. See SubjectPublicKeyInfo
-// in RFC 3280.
-type pkixPublicKey struct {
-	Algorithm pkix.AlgorithmIdentifier
-	PublicKey asn1.BitString
-}
-
-// asn1.Unmarshal will unmarshal into a data structure like pkixPublicKey, but with RawContent
-type pkixPublicKeyUnpack struct {
-	Raw       asn1.RawContent
-	Algorithm pkix.AlgorithmIdentifier
-	PublicKey asn1.BitString
-}
-
 func MarshalPKIXPublicKey(pub any) ([]byte, error) {
-	l, err := GetLib()
-	if err != nil {
-		return nil, errors.Wrap(err, "Unable to marshal OQS key")
-	}
 	pk, ok := pub.(*PublicKey)
 	if !ok {
 		return nil, errors.New("key is not a known OQS key type")
 	}
-
-	publicKeyAlgorithm, err := l.GetAlgorithmIdentifier(pk.Sig.Algorithm)
-	if err != nil {
+	if err := requireProfile(pk.Sig.Algorithm); err != nil {
 		return nil, err
 	}
-	pkix := pkixPublicKey{
-		Algorithm: publicKeyAlgorithm,
-		PublicKey: asn1.BitString{
-			Bytes:     pk.Pk,
-			BitLength: 8 * len(pk.Pk),
-		},
+	key, err := mldsa.NewPublicKey(mldsa.MLDSA65(), pk.Pk)
+	if err != nil {
+		return nil, errors.Wrap(err, "invalid ML-DSA-65 public key")
 	}
-	ret, _ := asn1.Marshal(pkix)
-	return ret, nil
+	return x509.MarshalPKIXPublicKey(key)
 }
 
 func ParsePKIXPublicKey(derBytes []byte) (any, error) {
-	l, err := GetLib()
+	var info struct {
+		Algorithm pkix.AlgorithmIdentifier
+		PublicKey asn1.BitString
+	}
+	rest, err := asn1.Unmarshal(derBytes, &info)
 	if err != nil {
-		return nil, errors.Wrap(err, "Unable to parse OQS key")
-	}
-	var pku pkixPublicKeyUnpack
-	if rest, err := asn1.Unmarshal(derBytes, &pku); err != nil {
 		return nil, err
-	} else if len(rest) != 0 {
-		return nil, errors.New("x509: trailing data after ASN.1 of public-key")
 	}
-	alg := l.GetAlgorithmFromOID(pku.Algorithm.Algorithm)
-	if alg == UnknownKeyAlgorithm {
-		return nil, errors.New("unknown OQS public key algorithm with id " + pku.Algorithm.Algorithm.String())
+	if len(rest) != 0 {
+		return nil, errors.New("x509: trailing data after ASN.1 of public key")
 	}
-	asn1Data := pku.PublicKey.RightAlign()
-	s := OQSSigInfo{
-		Algorithm: alg,
+	if !info.Algorithm.Algorithm.Equal(oidMLDSA65) {
+		return nil, errors.New("unknown OQS public key algorithm; only ML-DSA-65 is supported")
 	}
-	publicKey := &PublicKey{Pk: asn1Data, Sig: s}
-	return publicKey, nil
-}
-
-type pkixPrivateKey struct {
-	Algorithm  pkix.AlgorithmIdentifier
-	PrivateKey asn1.BitString
-	PublicKey  asn1.BitString
-}
-
-type pkixPrivateKeyUnpack struct {
-	Raw        asn1.RawContent
-	Algorithm  pkix.AlgorithmIdentifier
-	PrivateKey asn1.BitString
-	PublicKey  asn1.BitString
+	if len(info.Algorithm.Parameters.FullBytes) != 0 {
+		return nil, errors.New("ML-DSA-65 AlgorithmIdentifier parameters must be absent")
+	}
+	if info.PublicKey.BitLength != 8*len(info.PublicKey.Bytes) {
+		return nil, errors.New("ML-DSA-65 public key BIT STRING must be byte-aligned")
+	}
+	mlDSAKey, err := mldsa.NewPublicKey(mldsa.MLDSA65(), info.PublicKey.RightAlign())
+	if err != nil {
+		return nil, errors.Wrap(err, "invalid ML-DSA-65 public key")
+	}
+	return &PublicKey{
+		Pk: mlDSAKey.Bytes(),
+		Sig: OQSSigInfo{
+			Algorithm: MLDSA65ProfileV1,
+		},
+	}, nil
 }
 
 func MarshalPKIXPrivateKey(pub any) ([]byte, error) {
-	l, err := GetLib()
-	if err != nil {
-		return nil, errors.Wrap(err, "Unable to marshal OQS key")
-	}
 	sk, ok := pub.(*SecretKey)
 	if !ok {
 		return nil, errors.New("key is not a known OQS key type")
 	}
-	privateKeyAlgorithm, err := l.GetAlgorithmIdentifier(sk.Sig.Algorithm)
-	if err != nil {
+	if err := requireProfile(sk.Sig.Algorithm); err != nil {
 		return nil, err
 	}
-	pkix := pkixPrivateKey{
-		Algorithm: privateKeyAlgorithm,
-		PrivateKey: asn1.BitString{
-			Bytes:     sk.Sk,
-			BitLength: 8 * len(sk.Sk),
-		},
-		PublicKey: asn1.BitString{
-			Bytes:     sk.Pk,
-			BitLength: 8 * len(sk.Pk),
-		},
+	privateKey, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), sk.Sk)
+	if err != nil {
+		return nil, errors.Wrap(err, "invalid ML-DSA-65 private key")
 	}
-	ret, _ := asn1.Marshal(pkix)
-	return ret, nil
+	if !bytes.Equal(privateKey.PublicKey().Bytes(), sk.Pk) {
+		return nil, errors.New("ML-DSA-65 private and public keys do not match")
+	}
+	return x509.MarshalPKCS8PrivateKey(privateKey)
 }
 
 func ParsePKIXPrivateKey(derBytes []byte) (any, error) {
-	l, err := GetLib()
+	key, err := x509.ParsePKCS8PrivateKey(derBytes)
 	if err != nil {
-		return nil, errors.Wrap(err, "Unable to parse OQS key")
-	}
-	var pku pkixPrivateKeyUnpack
-	if rest, err := asn1.Unmarshal(derBytes, &pku); err != nil {
 		return nil, err
-	} else if len(rest) != 0 {
-		return nil, errors.New("x509: trailing data after ASN.1 of private-key")
 	}
-	alg := l.GetAlgorithmFromOID(pku.Algorithm.Algorithm)
-	if alg == UnknownKeyAlgorithm {
-		return nil, errors.New("unknown OQS public key algorithm")
+	privateKey, ok := key.(*mldsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("unknown ML-DSA private key algorithm")
 	}
-	asn1PrivData := pku.PrivateKey.RightAlign()
-	asn1PubData := pku.PublicKey.RightAlign()
-	s := OQSSigInfo{
-		Algorithm: alg,
+	if parameters := privateKey.PublicKey().Parameters(); parameters != mldsa.MLDSA65() {
+		return nil, errors.Errorf("unsupported ML-DSA parameter set %s; only ML-DSA-65 is supported", parameters.String())
 	}
-	pk := PublicKey{
-		Pk:  asn1PubData,
-		Sig: s,
-	}
-	privKey := &SecretKey{asn1PrivData, pk}
-	return privKey, nil
+	return &SecretKey{
+		privateKey.Bytes(),
+		PublicKey{
+			Pk: privateKey.PublicKey().Bytes(),
+			Sig: OQSSigInfo{
+				Algorithm: MLDSA65ProfileV1,
+			},
+		},
+	}, nil
 }
 
 // Encode quantum public keys as X509 Extensions, per
 // https://tools.ietf.org/id/draft-truskovsky-lamps-pq-hybrid-x509-00.html
 var (
+	oidMLDSA65                 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 3, 18}
 	oidSubjectAltPublicKeyInfo = asn1.ObjectIdentifier{2, 5, 29, 71}
 	oidAltSignatureAlgorithm   = asn1.ObjectIdentifier{2, 5, 29, 72}
 	oidAltSignatureValue       = asn1.ObjectIdentifier{2, 5, 29, 73}
@@ -169,27 +123,15 @@ type KeyMaterial struct {
 }
 
 func buildSubjectAltPublicKeyInfoExt(qk *PublicKey) (pkix.Extension, error) {
-	l, err := GetLib()
+	value, err := MarshalPKIXPublicKey(qk)
 	if err != nil {
-		return pkix.Extension{}, errors.Wrap(err, "Unable to build subjectaltpublickeyinfo extension")
+		return pkix.Extension{}, errors.Wrap(err, "unable to build subjectAltPublicKeyInfo extension")
 	}
-	oid, err := l.GetAlgorithmIdentifier(qk.Sig.Algorithm)
-	if err != nil {
-		return pkix.Extension{}, err
-	}
-	pki := pkixPublicKey{
-		Algorithm: oid,
-		PublicKey: asn1.BitString{
-			Bytes:     qk.Pk,
-			BitLength: 8 * len(qk.Pk),
-		},
-	}
-	val, _ := asn1.Marshal(pki)
 
 	return pkix.Extension{
 		Id:       oidSubjectAltPublicKeyInfo,
 		Critical: false,
-		Value:    val,
+		Value:    value,
 	}, nil
 }
 
@@ -232,7 +174,7 @@ func buildAltSignatureValueExt(qkb []byte, ckb []byte, qSigner crypto.Signer) (p
 
 	signature, err := qSigner.Sign(rand.Reader, kmBytes, nil)
 	if err != nil {
-		return pkix.Extension{}, errors.New("Failed to sign classical/quantum key material")
+		return pkix.Extension{}, errors.Wrap(err, "failed to sign classical/quantum key material")
 	}
 	return pkix.Extension{
 		Id:       oidAltSignatureValue,
@@ -292,31 +234,17 @@ func BuildAltPublicKeyExtensions(quantumKey any, classicalKey any, qSigner crypt
 }
 
 func ParseSubjectAltPublicKeyInfoExtension(extensions []pkix.Extension) (*PublicKey, error) {
-	l, err := GetLib()
-	if err != nil {
-		return nil, errors.Wrap(err, "Unable to parse subjectaltpublickeyinfo extension")
-	}
-	var publicKey *PublicKey = nil
+	var publicKey *PublicKey
 	for _, ext := range extensions {
 		if ext.Id.Equal(oidSubjectAltPublicKeyInfo) {
 			if publicKey != nil {
 				return nil, errors.New("Multiple alternate public keys found")
 			}
-			var pku pkixPublicKeyUnpack
-			if rest, err := asn1.Unmarshal(ext.Value, &pku); err != nil {
-				return nil, err
-			} else if len(rest) != 0 {
-				return nil, errors.New("x509: trailing data after ASN.1 of SubjectAltPublicKey")
+			key, err := ParsePKIXPublicKey(ext.Value)
+			if err != nil {
+				return nil, errors.Wrap(err, "invalid alternate ML-DSA public key")
 			}
-			alg := l.GetAlgorithmFromOID(pku.Algorithm.Algorithm)
-			if alg == UnknownKeyAlgorithm {
-				return nil, errors.New("unknown OQS public key algorithm")
-			}
-			asn1Data := pku.PublicKey.RightAlign()
-			s := OQSSigInfo{
-				Algorithm: alg,
-			}
-			publicKey = &PublicKey{Pk: asn1Data, Sig: s}
+			publicKey = key.(*PublicKey)
 		}
 	}
 	// If no alt public key extensions are found, this is not an error.

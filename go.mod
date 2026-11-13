@@ -2,6 +2,8 @@ module github.com/hyperledger/fabric
 
 go 1.27.3
 
+toolchain go1.27.4
+
 replace github.com/hyperledger/fabric-lib-go => ./third_party/fabric-lib-go
 
 require (
