@@ -1326,7 +1326,7 @@ acceptance() {
 	run_acceptance_step "Unit and tool validation" go -C "$ROOT" test -mod=vendor \
 		./cmd/pq3-verify ./integration/pq3 ./pq-crypto ./msp ./common/channelconfig \
 		./common/configtx ./orderer/common/msgprocessor
-	run_acceptance_step "Hybrid MSP network acceptance" go -C "$ROOT" test \
+	run_acceptance_step "Hybrid MSP network acceptance" go -C "$ROOT" test -v \
 		-count=1 -timeout=40m -mod=vendor ./integration/msp "-ginkgo.focus=$ginkgo_focus" -ginkgo.v
 	run_acceptance_step "Build verifier and chaincode" go -C "$ROOT" build -mod=vendor \
 		./cmd/pq3-verify ./integration/pq3
