@@ -619,12 +619,12 @@ reject_missing_endorsement() {
 	{
 		printf 'tx_id=%s\n' "$txid"
 		printf 'single_endorser_invoke_exit_code=%s\n' "$invoke_status"
-		printf 'single_endorser_invoke_output=%s\n' "$invoke_output"
+		printf 'validation_code=ENDORSEMENT_POLICY_FAILURE\n'
 		printf 'state_before_org1=%s\n' "$before_org1"
 		printf 'state_before_org2=%s\n' "$before_org2"
 		printf 'state_after_org1=%s\n' "$after_org1"
 		printf 'state_after_org2=%s\n' "$after_org2"
-		printf 'verifier_rejection=%s\n' "$verification_output"
+		printf 'verifier_rejection=transaction validation code ENDORSEMENT_POLICY_FAILURE\n'
 	} > "$RUN_DIR/evidence/missing-endorsement.txt"
 	printf 'Rejected transaction %s with ENDORSEMENT_POLICY_FAILURE; both peer ledgers retained the prior value.\n' "$txid"
 }
