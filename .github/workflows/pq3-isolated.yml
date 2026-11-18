@@ -58,7 +58,7 @@ jobs:
 
       - name: Run hybrid MSP transaction acceptance
         run: |
-          make ccaasbuilder
+          make integration-test-prereqs
           go test -timeout=30m -mod=vendor ./integration/msp -ginkgo.focus='Pactway hybrid transaction (expiry replay|signature rejection)|persists the rotation before signer activation|Upstream channel capability compatibility' -ginkgo.v
         env:
           PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
