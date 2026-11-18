@@ -31,16 +31,6 @@ jobs:
           go-version: 1.27.4
           cache: true
 
-      - name: Run hybrid-negative unit and tool validation
-        run: |
-          bash -n integration/pq3/pq3.sh
-          go test -mod=vendor ./cmd/pq3-verify ./integration/pq3
-          go test -mod=vendor ./pq-crypto ./msp ./common/channelconfig ./common/configtx ./orderer/common/msgprocessor
-          go build -mod=vendor ./cmd/pq3-verify ./integration/pq3
-        env:
-          PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
-          PACTWAY_ISOLATED_DEVELOPMENT: "true"
-
       - name: Install verified upstream peer for compatibility check
         run: |
           set -euo pipefail
@@ -56,69 +46,25 @@ jobs:
           "$install_dir/bin/peer" version
           echo "PACTWAY_UPSTREAM_PEER=$install_dir/bin/peer" >> "$GITHUB_ENV"
 
-      - name: Run hybrid MSP transaction acceptance
-        run: |
-          make integration-test-prereqs
-          go test -timeout=30m -mod=vendor ./integration/msp -ginkgo.focus='Pactway hybrid transaction (expiry replay|signature rejection)|persists the rotation before signer activation|Upstream channel capability compatibility' -ginkgo.v
+      - name: Run complete PQ3 acceptance
+        run: integration/pq3/pq3.sh acceptance
         env:
           PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
           PACTWAY_ISOLATED_DEVELOPMENT: "true"
 
-      - name: Start source-built isolated network
-        run: integration/pq3/pq3.sh fresh
-        env:
-          PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
-          PACTWAY_ISOLATED_DEVELOPMENT: "true"
-
-      - name: Join orderer and both peers
-        run: integration/pq3/pq3.sh join
-        env:
-          PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
-          PACTWAY_ISOLATED_DEVELOPMENT: "true"
-
-      - name: Deploy two-organization chaincode
-        run: integration/pq3/pq3.sh deploy
-        env:
-          PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
-          PACTWAY_ISOLATED_DEVELOPMENT: "true"
-
-      - name: Verify transaction state and cryptographic evidence
-        run: |
-          integration/pq3/pq3.sh invoke
-          repo_key="$(printf '%s' "$(git rev-parse --show-toplevel)" | sha256sum | cut -c1-12)"
-          run_id="$(<"$HOME/.local/share/pactway-pq3/$repo_key/active-run")"
-          run_dir="$HOME/.local/share/pactway-pq3/$repo_key/$run_id"
-          {
-            echo "## PQ3 transaction verification"
-            echo
-            echo '```json'
-            cat "$run_dir/evidence/transaction-verification.json"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-        env:
-          PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
-          PACTWAY_ISOLATED_DEVELOPMENT: "true"
-
-      - name: Reject a transaction missing Org2 endorsement
-        run: integration/pq3/pq3.sh negative-endorsement
-        env:
-          PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
-          PACTWAY_ISOLATED_DEVELOPMENT: "true"
-
-      - name: Verify stop/start/restart/resume recovery
-        run: integration/pq3/pq3.sh recovery
-        env:
-          PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
-          PACTWAY_ISOLATED_DEVELOPMENT: "true"
-
-      - name: Remove isolated runtime
+      - name: Add acceptance report to job summary
         if: always()
         run: |
-          repo_key="$(printf '%s' "$(git rev-parse --show-toplevel)" | sha256sum | cut -c1-12)"
-          active_file="$HOME/.local/share/pactway-pq3/$repo_key/active-run"
-          if [[ -f "$active_file" ]]; then
-            integration/pq3/pq3.sh reset
+          report="$(find build/pq3/acceptance-evidence -name report.md -type f -print -quit 2>/dev/null || true)"
+          if [[ -n "$report" ]]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
           fi
-        env:
-          PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
-          PACTWAY_ISOLATED_DEVELOPMENT: "true"
+
+      - name: Upload sanitized PQ3 evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pq3-acceptance-${{ github.run_id }}
+          path: build/pq3/acceptance-evidence/
+          if-no-files-found: warn
+          retention-days: 14

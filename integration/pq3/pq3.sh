@@ -24,7 +24,7 @@ readonly CHAINCODE_SEQUENCE="1"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 readonly DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-readonly STATE_ROOT="$DATA_HOME/pactway-pq3"
+readonly STATE_ROOT="${PQ3_STATE_ROOT:-$DATA_HOME/pactway-pq3}"
 readonly REPO_KEY="$(printf '%s' "$ROOT" | sha256sum | cut -c1-12)"
 readonly STATE_DIR="$STATE_ROOT/$REPO_KEY"
 readonly ACTIVE_FILE="$STATE_DIR/active-run"
@@ -33,6 +33,12 @@ CHAINCODE_ID_ORG1=""
 CHAINCODE_ID_ORG2=""
 CURRENT_STATE_KEY=""
 CURRENT_STATE_VALUE=""
+ACCEPTANCE_OUTPUT_DIR=""
+ACCEPTANCE_LOG_DIR=""
+ACCEPTANCE_STATE_ROOT=""
+ACCEPTANCE_CURRENT_STEP=""
+ACCEPTANCE_RUN_ID=""
+ACCEPTANCE_STEPS=()
 
 fail() {
 	printf 'pq3: %s\n' "$*" >&2
@@ -82,7 +88,7 @@ source_tree_digest() {
 }
 
 build_runtime_images() {
-	local source_commit tree_digest revision_tag dirty source_dirty
+	local source_commit tree_digest revision_tag source_dirty
 	source_commit="$(git -C "$ROOT" rev-parse HEAD)"
 	tree_digest="$(source_tree_digest)"
 	revision_tag="pq3-${source_commit:0:7}-${tree_digest:0:12}"
@@ -135,6 +141,11 @@ build_runtime_images() {
 	printf '%s\n' "$CC_IMAGE" > "$RUN_DIR/ccaas-image"
 	printf '%s\n' "$TOOLS_IMAGE" > "$RUN_DIR/tools-image"
 
+	local peer_image_id orderer_image_id ccaas_image_id tools_image_id
+	peer_image_id="$(docker image inspect --format '{{.Id}}' "$PEER_IMAGE")"
+	orderer_image_id="$(docker image inspect --format '{{.Id}}' "$ORDERER_IMAGE")"
+	ccaas_image_id="$(docker image inspect --format '{{.Id}}' "$CC_IMAGE")"
+	tools_image_id="$(docker image inspect --format '{{.Id}}' "$TOOLS_IMAGE")"
 	mkdir -p -- "$RUN_DIR/evidence"
 	cat > "$RUN_DIR/evidence/network-manifest.json" <<EOF
 {
@@ -151,14 +162,14 @@ build_runtime_images() {
   "docker_network_internal": true,
   "host_ports_published": false,
   "peer_image": "$PEER_IMAGE",
-  "peer_image_id": "$(docker image inspect --format '{{.Id}}' "$PEER_IMAGE")",
+  "peer_image_id": "$peer_image_id",
   "orderer_image": "$ORDERER_IMAGE",
-  "orderer_image_id": "$(docker image inspect --format '{{.Id}}' "$ORDERER_IMAGE")",
+  "orderer_image_id": "$orderer_image_id",
   "chaincode_execution_service_count": 2,
   "chaincode_image": "$CC_IMAGE",
-  "chaincode_image_id": "$(docker image inspect --format '{{.Id}}' "$CC_IMAGE")",
+  "chaincode_image_id": "$ccaas_image_id",
   "admin_tools_image": "$TOOLS_IMAGE",
-  "admin_tools_image_id": "$(docker image inspect --format '{{.Id}}' "$TOOLS_IMAGE")",
+  "admin_tools_image_id": "$tools_image_id",
   "compose_sha256": "$(sha256sum "$SCRIPT_DIR/compose.yaml" | cut -d ' ' -f 1)",
   "orderer_config_sha256": "$(sha256sum "$ROOT/sampleconfig/orderer.yaml" | cut -d ' ' -f 1)"
 }
@@ -222,6 +233,16 @@ run_cli() {
 	compose run --rm --no-deps -e "CORE_PEER_MSPCONFIGPATH=/run/msp/$identity" "$service" "$@"
 }
 
+run_timed_cli() {
+	local service="$1"
+	local identity="$2"
+	shift 2
+	compose run --rm --no-deps \
+		-e "CORE_PEER_MSPCONFIGPATH=/run/msp/$identity" \
+		-e PACTWAY_STAGE_TIMINGS=true \
+		"$service" "$@"
+}
+
 wait_healthy() {
 	local deadline=$((SECONDS + 180))
 	local services=(orderer peer-org1 peer-org2)
@@ -260,9 +281,7 @@ fresh() {
 	printf 'schema=1\nproject=%s\n' "$PROJECT" > "$RUN_DIR/.pq3-run"
 	printf '%s\n' "$RUN_ID" > "$ACTIVE_FILE"
 
-	if ! build_runtime_images; then
-		fail "build failed; this run is retained for diagnosis and can be removed with reset"
-	fi
+	build_runtime_images
 	if ! PACTWAY_HYBRID_PROFILE="$PROFILE" PACTWAY_ISOLATED_DEVELOPMENT=true \
 		go -C "$ROOT" run ./cmd/pactway-pq-gen \
 			-output="$RUN_DIR/material" \
@@ -450,7 +469,7 @@ submit_asset_transaction() {
 	org1_tls=/run/public/organizations/Org1/msp/tlscacerts/tls-ca.pem
 	org2_tls=/run/public/organizations/Org2/msp/tlscacerts/tls-ca.pem
 	printf -v args '{"function":"%s","Args":["%s","%s"]}' "$function" "$key" "$value"
-	if ! invoke_output="$(run_cli cli-org1 client peer chaincode invoke \
+	if ! invoke_output="$(run_timed_cli cli-org1 client peer chaincode invoke \
 		-o orderer0.ordererorg.pactway.local:7050 --tls --cafile "$orderer_tls" \
 		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" -c "$args" \
 		--peerAddresses peer0.org1.pactway.local:7051 --tlsRootCertFiles "$org1_tls" \
@@ -468,6 +487,7 @@ submit_asset_transaction() {
 	[[ "${#committed_txids[@]}" -eq 1 ]] ||
 		fail "$function did not produce exactly one committed transaction ID: $invoke_output"
 	local txid="${committed_txids[0]}"
+	record_stage_timings "$txid" "$invoke_output"
 
 	local org1_value org2_value
 	org1_value="$(run_cli cli-org1 client peer chaincode query \
@@ -495,6 +515,35 @@ submit_asset_transaction() {
 	sample_number="$(grep -c . "$RUN_DIR/evidence/transaction-ids.txt")"
 	record_duration "transaction_${sample_number}_${function}" "$started"
 	printf 'Both peers committed transaction %s and read %s=%s.\n' "$txid" "$key" "$value"
+}
+
+record_stage_timings() {
+	local expected_txid="$1" output="$2"
+	local line marker stage_field txid_field started_field completed_field duration_field
+	local stage txid started completed duration count=0
+	while IFS= read -r line; do
+		read -r marker stage_field txid_field started_field completed_field duration_field <<<"$line"
+		[[ "$marker" == "PQ3_STAGE_TIMING" ]] || continue
+		stage="${stage_field#stage=}"
+		txid="${txid_field#txid=}"
+		started="${started_field#started_at=}"
+		completed="${completed_field#completed_at=}"
+		duration="${duration_field#duration_ms=}"
+		[[ "$txid" == "$expected_txid" ]] ||
+			fail "stage timing was reported for an unexpected transaction: $txid"
+		[[ "$duration" =~ ^[0-9]+$ ]] ||
+			fail "stage timing has an invalid duration: $duration"
+		case "$stage" in
+			proposal_preparation|endorsement_collection|ordering_submission|finality_wait) ;;
+			*) fail "unexpected transaction timing stage: $stage" ;;
+		esac
+		printf '{"transaction_id":"%s","stage":"%s","started_at_utc":"%s","completed_at_utc":"%s","duration_ms":%s}\n' \
+			"$txid" "$stage" "$started" "$completed" "$duration" \
+			>> "$RUN_DIR/evidence/stage-timings.jsonl"
+		((count += 1))
+	done < <(grep -F 'PQ3_STAGE_TIMING ' <<<"$output" || true)
+	[[ "$count" -eq 4 ]] ||
+		fail "expected four local timing observations for transaction $expected_txid; found $count"
 }
 
 invoke_asset() {
@@ -744,6 +793,190 @@ reset_network() {
 	printf 'Reset only PQ3 run %s and its Compose project volumes.\n' "$RUN_ID"
 }
 
+run_acceptance_step() {
+	local label="$1"
+	shift
+	local log_file="$ACCEPTANCE_LOG_DIR/step-${#ACCEPTANCE_STEPS[@]}.log"
+	local command_text status=0
+	printf -v command_text '%q ' "$@"
+	ACCEPTANCE_CURRENT_STEP="$label"
+	if [[ "$1" == "$SCRIPT_DIR/pq3.sh" ]]; then
+		if PQ3_STATE_ROOT="$ACCEPTANCE_STATE_ROOT" "$@" > "$log_file" 2>&1; then
+			status=0
+		else
+			status=$?
+		fi
+	else
+		if "$@" > "$log_file" 2>&1; then
+			status=0
+		else
+			status=$?
+		fi
+	fi
+	if [[ "$status" -eq 0 ]]; then
+		ACCEPTANCE_STEPS+=("$label"$'\t'"$command_text"$'\t'passed)
+	else
+		ACCEPTANCE_STEPS+=("$label"$'\t'"$command_text"$'\t'"failed (exit $status)")
+		tail -n 40 "$log_file" >&2
+	fi
+	local acceptance_active_file="$ACCEPTANCE_STATE_ROOT/$REPO_KEY/active-run"
+	if [[ "$label" == "Build, generate, and start network" && -f "$acceptance_active_file" ]]; then
+		ACCEPTANCE_RUN_ID="$(<"$acceptance_active_file")"
+	fi
+	ACCEPTANCE_CURRENT_STEP=""
+	return "$status"
+}
+
+acceptance_step_result() {
+	local expected="$1" step label command_text result
+	for step in "${ACCEPTANCE_STEPS[@]}"; do
+		IFS=$'\t' read -r label command_text result <<<"$step"
+		if [[ "$label" == "$expected" ]]; then
+			printf '%s' "$result"
+			return
+		fi
+	done
+	printf 'not run'
+}
+
+acceptance_finalize() {
+	local status="$1" cleanup_status=0 source_commit source_branch source_dirty
+	trap - EXIT
+	local run_dir=""
+	local acceptance_active_file="$ACCEPTANCE_STATE_ROOT/$REPO_KEY/active-run"
+	if [[ -n "$ACCEPTANCE_RUN_ID" && -f "$acceptance_active_file" &&
+		"$(<"$acceptance_active_file")" == "$ACCEPTANCE_RUN_ID" ]]; then
+		local run_id
+		run_id="$(<"$acceptance_active_file")"
+		if [[ "$run_id" =~ ^run-[0-9]+-[0-9]+-[0-9]+$ ]]; then
+			run_dir="$ACCEPTANCE_STATE_ROOT/$REPO_KEY/$run_id"
+		fi
+	fi
+
+	if [[ -n "$run_dir" && -d "$run_dir/evidence" ]]; then
+		local evidence_output="$ACCEPTANCE_OUTPUT_DIR/evidence"
+		mkdir -p -- "$evidence_output"
+		for file in network-manifest.json orderer-channels.json chaincode-definition.txt \
+			transaction-ids.txt transaction-verification.json stage-timings.jsonl \
+			timings.txt missing-endorsement.txt recovery.txt; do
+			if [[ -f "$run_dir/evidence/$file" ]]; then
+				cp -- "$run_dir/evidence/$file" "$evidence_output/$file"
+			fi
+		done
+		if [[ -f "$run_dir/evidence/stage-timings.jsonl" ]]; then
+			local stage count
+			{
+				printf '{"measurement_source":"local CLI observations","limitations":"ordering_submission is the local broadcast call through its acknowledgment, not orderer consensus; finality_wait measures delivery of the transaction to all configured peers","samples":{'
+				local separator=""
+				for stage in proposal_preparation endorsement_collection ordering_submission finality_wait; do
+					count="$(grep -c "\"stage\":\"$stage\"" "$run_dir/evidence/stage-timings.jsonl" || true)"
+					printf '%s"%s":%s' "$separator" "$stage" "${count:-0}"
+					separator=","
+				done
+				printf '}}\n'
+			} > "$evidence_output/stage-timing-summary.json"
+		fi
+	fi
+
+	if [[ -n "$ACCEPTANCE_RUN_ID" && -f "$acceptance_active_file" &&
+		"$(<"$acceptance_active_file")" == "$ACCEPTANCE_RUN_ID" ]]; then
+		if PQ3_STATE_ROOT="$ACCEPTANCE_STATE_ROOT" "$SCRIPT_DIR/pq3.sh" reset \
+			> "$ACCEPTANCE_LOG_DIR/reset.log" 2>&1; then
+			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"$SCRIPT_DIR/pq3.sh reset"$'\t'passed)
+		else
+			cleanup_status=$?
+			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"$SCRIPT_DIR/pq3.sh reset"$'\t'"failed (exit $cleanup_status)")
+			cat "$ACCEPTANCE_LOG_DIR/reset.log" >&2
+			status=1
+		fi
+		rmdir -- "$ACCEPTANCE_STATE_ROOT/$REPO_KEY" "$ACCEPTANCE_STATE_ROOT" 2>/dev/null || true
+	fi
+
+	source_commit="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
+	source_branch="$(git -C "$ROOT" branch --show-current 2>/dev/null || printf unknown)"
+	if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+		source_dirty=true
+	else
+		source_dirty=false
+	fi
+	{
+		printf '# PQ3 Isolated Acceptance Report\n\n'
+		printf -- '- Result: **%s**\n' "$([[ "$status" -eq 0 ]] && printf PASS || printf FAIL)"
+		printf -- '- Candidate gate commit: `%s`\n' "$source_commit"
+		printf -- '- Branch: `%s` (worktree dirty: `%s`)\n' "$source_branch" "$source_dirty"
+		printf -- '- Profile: `%s`; isolated development only; transport: classical TLS.\n' "$PROFILE"
+		printf -- '- Generated credentials, ledgers, raw test logs, and block bytes are not included.\n\n'
+		printf '## Commands and results\n\n| Step | Command | Result |\n|---|---|---|\n'
+		local step label command_text result
+		for step in "${ACCEPTANCE_STEPS[@]}"; do
+			IFS=$'\t' read -r label command_text result <<<"$step"
+			printf '| %s | `%s` | %s |\n' "$label" "$command_text" "$result"
+		done
+		printf '\n## Gate commits and results\n\n| Gate | Candidate commit | Result |\n|---|---|---|\n'
+		printf '| PQ3.0 reproducible deployment | `%s` | %s |\n' \
+			"$source_commit" "$(acceptance_step_result "Build, generate, and start network")"
+		printf '| PQ3.1 channel activation and recovery | `%s` | %s / %s |\n' \
+			"$source_commit" "$(acceptance_step_result "Join orderer and both peers")" \
+			"$(acceptance_step_result "Verify persistence and recovery")"
+		printf '| PQ3.2 transaction and evidence | `%s` | %s / %s |\n' \
+			"$source_commit" "$(acceptance_step_result "Invoke and verify repeated transaction samples")" \
+			"$(acceptance_step_result "Re-verify latest exact transaction")"
+		printf '| PQ3.3 negative acceptance | `%s` | %s / %s |\n' \
+			"$source_commit" "$(acceptance_step_result "Hybrid MSP network acceptance")" \
+			"$(acceptance_step_result "Reject missing endorsement")"
+		printf '| PQ3.4 automation and evidence handoff | `%s` | %s |\n' \
+			"$source_commit" "$([[ "$status" -eq 0 ]] && printf PASS || printf FAIL)"
+		printf '\nThe candidate commit above is the source revision used for every gate. A dirty worktree means the tested source also includes uncommitted changes and is not represented by that commit alone.\n'
+		printf '\n## Timing scope and limitations\n\nStage durations are local wall-clock observations with UTC start/end timestamps and millisecond resolution. They are not signed protocol timestamps. The broadcast-call observation does not isolate ordering consensus; finality wait ends when delivery reports the transaction at all configured peers. Counts are included in `evidence/stage-timing-summary.json`.\n'
+		printf '\n## Unresolved limitations\n\n- The demo uses the temporary `rfc5612-test-only-v1` profile and classical TLS; it makes no production, PQ transport, HA, or BFT claim.\n'
+		if [[ -z "${PACTWAY_UPSTREAM_PEER:-}" ]]; then
+			printf -- '- Upstream-peer compatibility test was skipped because `PACTWAY_UPSTREAM_PEER` was not set to a verified binary.\n'
+		else
+			printf -- '- Upstream-peer compatibility test used the binary configured by `PACTWAY_UPSTREAM_PEER`; verify its provenance separately.\n'
+		fi
+	} > "$ACCEPTANCE_OUTPUT_DIR/report.md"
+	rm -rf -- "$ACCEPTANCE_LOG_DIR"
+	printf 'Sanitized PQ3 acceptance evidence: %s\n' "$ACCEPTANCE_OUTPUT_DIR"
+	exit "$status"
+}
+
+acceptance() {
+	local output_root="${PQ3_EVIDENCE_OUTPUT:-$ROOT/build/pq3/acceptance-evidence}"
+	case "$output_root/" in
+		"$STATE_ROOT/"*) fail "acceptance evidence output must be outside the private runtime directory" ;;
+	esac
+	mkdir -p -- "$output_root"
+	ACCEPTANCE_OUTPUT_DIR="$output_root/acceptance-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+	mkdir -m 700 -- "$ACCEPTANCE_OUTPUT_DIR"
+	ACCEPTANCE_LOG_DIR="$(mktemp -d)"
+	ACCEPTANCE_STATE_ROOT="$STATE_ROOT/acceptance-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+	trap 'acceptance_finalize "$?"' EXIT
+
+	if [[ "${PACTWAY_HYBRID_PROFILE:-}" != "$PROFILE" ||
+		"${PACTWAY_ISOLATED_DEVELOPMENT:-}" != "true" ]]; then
+		ACCEPTANCE_STEPS+=("Development-only profile guard"$'\t'"required profile and isolation variables"$'\t'failed)
+		fail "set PACTWAY_HYBRID_PROFILE=$PROFILE and PACTWAY_ISOLATED_DEVELOPMENT=true explicitly"
+	fi
+	ACCEPTANCE_STEPS+=("Development-only profile guard"$'\t'"required profile and isolation variables"$'\t'passed)
+	local ginkgo_focus='Pactway hybrid transaction (expiry replay|signature rejection)|persists the rotation before signer activation|Pactway hybrid network negative acceptance|Upstream channel capability compatibility'
+	run_acceptance_step "Shell syntax" bash -n "$SCRIPT_DIR/pq3.sh"
+	run_acceptance_step "Integration prerequisites" make -C "$ROOT" integration-test-prereqs
+	run_acceptance_step "Unit and tool validation" go -C "$ROOT" test -mod=vendor \
+		./cmd/pq3-verify ./integration/pq3 ./pq-crypto ./msp ./common/channelconfig \
+		./common/configtx ./orderer/common/msgprocessor
+	run_acceptance_step "Hybrid MSP network acceptance" go -C "$ROOT" test \
+		-timeout=40m -mod=vendor ./integration/msp "-ginkgo.focus=$ginkgo_focus" -ginkgo.v
+	run_acceptance_step "Build verifier and chaincode" go -C "$ROOT" build -mod=vendor \
+		./cmd/pq3-verify ./integration/pq3
+	run_acceptance_step "Build, generate, and start network" "$SCRIPT_DIR/pq3.sh" fresh
+	run_acceptance_step "Join orderer and both peers" "$SCRIPT_DIR/pq3.sh" join
+	run_acceptance_step "Deploy organization-specific chaincode" "$SCRIPT_DIR/pq3.sh" deploy
+	run_acceptance_step "Invoke and verify repeated transaction samples" "$SCRIPT_DIR/pq3.sh" invoke
+	run_acceptance_step "Re-verify latest exact transaction" "$SCRIPT_DIR/pq3.sh" verify
+	run_acceptance_step "Reject missing endorsement" "$SCRIPT_DIR/pq3.sh" negative-endorsement
+	run_acceptance_step "Verify persistence and recovery" "$SCRIPT_DIR/pq3.sh" recovery
+}
+
 usage() {
 	cat <<'EOF'
 Usage: integration/pq3/pq3.sh COMMAND
@@ -756,6 +989,7 @@ Commands:
   negative-endorsement  Verify a single-org endorsement cannot update state
   recovery   Exercise stop/start/restart/resume while preserving ledger state
   verify   Verify the latest transaction and peer-ledger commit evidence
+  acceptance  Run all validation and network gates, export sanitized evidence, then reset
   health   Show node health and wait for node health checks
   status   Show Compose service status
   stop     Stop this run without deleting credentials, configuration, or ledgers
@@ -787,6 +1021,9 @@ case "$command" in
 		;;
 	recovery)
 		exercise_recovery
+		;;
+	acceptance)
+		acceptance
 		;;
 	verify)
 		shift

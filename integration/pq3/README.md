@@ -21,6 +21,25 @@ export PACTWAY_ISOLATED_DEVELOPMENT=true
 
 ## Lifecycle
 
+The complete acceptance sequence is available as one command:
+
+```bash
+integration/pq3/pq3.sh acceptance
+```
+
+It runs shell/tool and unit validation, the focused hybrid MSP network suite,
+source-built deployment, channel activation, chaincode lifecycle, repeated
+transaction verification, negative endorsement, and recovery. It exports a
+sanitized report and whitelisted evidence under
+`build/pq3/acceptance-evidence/` before removing only the generated run's
+containers, volumes, and private material. The report records the commands,
+results, candidate gate commit, stage sample counts, and known limitations.
+Raw test logs, private credentials, ledger volumes, and transaction block
+bytes are not included. Set `PACTWAY_UPSTREAM_PEER` to a verified upstream
+peer binary to run the compatibility check rather than record it as skipped.
+
+The individual lifecycle commands remain useful for interactive inspection:
+
 ```bash
 integration/pq3/pq3.sh fresh
 integration/pq3/pq3.sh health
@@ -77,8 +96,11 @@ The isolated workflow runs peer-level rejection checks for invalid-PQ-signature
 and classical-only client proposals, expiry/replay acceptance, and classical-only
 and stale orderer signer rejection. Its negative-validation packages also
 exercise wrong MSP organizations and roles, unsupported certificate profiles,
-missing PQ keys, unauthorized
-configuration updates, and attempts to remove the required channel capability.
+and missing PQ keys. The live hybrid network acceptance test also attempts to
+start an orderer with unsupported-profile, wrong-role, wrong-organization, and
+missing-PQ-key identities; it submits an unauthorized application config update
+and an authorized attempt to remove the required channel capability, asserting
+the corresponding rejections.
 It checks that the verified upstream Fabric v3.1.5 peer rejects a channel requiring the
 fork-only hybrid capability. The workflow also checks channel activation,
 organization-specific chaincode lifecycle, two-organization endorsement,
@@ -107,18 +129,23 @@ reports `ENDORSEMENT_POLICY_FAILURE`; both peers' state remains unchanged, and
 the verifier rejects the exact transaction based on its committed validation
 code. `recovery` checks both peer memberships, the active orderer channel, and
 the latest asset key/value after stop/start, restart, and resume.
-The `PQ3 Isolated Network` workflow repeats these checks on a source-built,
-internal Docker network and does not upload generated credentials or runtime
-evidence.
+The `PQ3 Isolated Network` workflow runs the single acceptance command on a
+source-built, internal Docker network and uploads only the sanitized evidence
+report and its whitelisted evidence files. It does not upload generated
+credentials or private runtime artifacts.
 
 The verifier output and fetched block are stored under the run's private
 Linux-side evidence directory. They are demonstration evidence, not an
 independent production audit or a claim that the classical TLS transport is
-post-quantum secure.
-Elapsed whole-second measurements for successful fresh, join, deploy, each
-transaction sample, the full invoke run, and recovery are appended to
-`evidence/timings.txt`; they are environment-specific observations, not
-performance guarantees.
+post-quantum secure. Locally observed successful transaction timings are
+recorded per transaction and stage in `stage-timings.jsonl`, with UTC
+start/end times and millisecond durations. The stages are proposal preparation,
+endorsement collection, local broadcast submission/acknowledgment, and waiting
+for commit delivery from all configured peers. This does not isolate orderer
+consensus time, and these observations are neither signed protocol timestamps
+nor performance guarantees. Sample counts and those limitations are reported
+in `stage-timing-summary.json`. Coarse whole-second lifecycle durations remain
+in `timings.txt`.
 
 The demo has one Raft orderer and makes no availability or fault-tolerance
 claim. It does not implement settlement tokens or PQ4; settlement integration
