@@ -533,7 +533,7 @@ reject_missing_endorsement() {
 		-o orderer0.ordererorg.pactway.local:7050 --tls \
 		--cafile /run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem \
 		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
-		-c '{"function":"Set","Args":["pq3-asset","must-not-commit"]}' \
+		-c "{\"function\":\"Set\",\"Args\":[\"$CURRENT_STATE_KEY\",\"must-not-commit\"]}" \
 		--peerAddresses peer0.org1.pactway.local:7051 \
 		--tlsRootCertFiles /run/public/organizations/Org1/msp/tlscacerts/tls-ca.pem \
 		--waitForEvent --waitForEventTimeout 60s 2>&1)"; then
