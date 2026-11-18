@@ -29,14 +29,34 @@ integration/pq3/pq3.sh acceptance
 
 It runs shell/tool and unit validation, the focused hybrid MSP network suite,
 source-built deployment, channel activation, chaincode lifecycle, repeated
-transaction verification, negative endorsement, and recovery. It exports a
-sanitized report and whitelisted evidence under
-`build/pq3/acceptance-evidence/` before removing only the generated run's
-containers, volumes, and private material. The report records the commands,
-results, candidate gate commit, stage sample counts, and known limitations.
-Raw test logs, private credentials, ledger volumes, and transaction block
-bytes are not included. Set `PACTWAY_UPSTREAM_PEER` to a verified upstream
-peer binary to run the compatibility check rather than record it as skipped.
+transaction verification, negative endorsement, and recovery. The report
+records the commands, results, candidate gate commit, stage sample counts, and
+known limitations.
+The upstream compatibility test is mandatory: acceptance requires an
+executable Fabric v3.1.5 peer, verifies its reported version, and records its
+SHA-256. A missing, unusable, or wrong-version binary makes the run fail rather
+than silently skip PQ3.3. CI downloads the official release archive and checks
+its pinned SHA-256 before running the test. For local runs, set
+`PACTWAY_UPSTREAM_PEER` to a binary whose source and integrity you have verified,
+and set `PACTWAY_UPSTREAM_PEER_SHA256` to the expected SHA-256 of that executable.
+Acceptance compares the actual digest with the expected value before running the
+network test.
+
+Before resetting the generated run, acceptance writes the sanitized report and
+whitelisted evidence under `build/pq3/acceptance-evidence/`. Sanitized full
+step logs are retained in a separate owner-only local package under
+`<runtime-root>/protected-evidence/<repo-key>/acceptance-<run-id>/`. The runtime
+root defaults to `$XDG_DATA_HOME/pactway-pq3`, or
+`$HOME/.local/share/pactway-pq3` when `XDG_DATA_HOME` is unset;
+`PQ3_PROTECTED_EVIDENCE_ROOT` overrides the protected package root. That
+package preserves the public channel configuration block, public MSP/TLS
+certificates, exact committed blocks and peer transaction records, transaction
+verifier results, sanitized step logs, and a `SHA256SUMS` manifest before the
+runtime is reset. It is not uploaded; it includes
+temporary-profile evidence and must not be published. Private keys and private
+MSP material are excluded. Sanitized diagnostics for failed steps are also
+included in the uploaded evidence under `diagnostics/`; raw unsanitized logs
+are not published.
 
 The individual lifecycle commands remain useful for interactive inspection:
 
@@ -130,14 +150,19 @@ the verifier rejects the exact transaction based on its committed validation
 code. `recovery` checks both peer memberships, the active orderer channel, and
 the latest asset key/value after stop/start, restart, and resume.
 The `PQ3 Isolated Network` workflow runs the single acceptance command on a
-source-built, internal Docker network and uploads only the sanitized evidence
-report and its whitelisted evidence files. It does not upload generated
-credentials or private runtime artifacts.
+source-built, internal Docker network and uploads only the sanitized report,
+whitelisted evidence, and sanitized failed-step diagnostics. It separately
+checks that the protected local package contains the public verification
+inputs and no private-key files, then leaves that package out of the uploaded
+artifact. It does not upload generated credentials or private runtime
+artifacts.
 
 The verifier output and fetched block are stored under the run's private
-Linux-side evidence directory. They are demonstration evidence, not an
-independent production audit or a claim that the classical TLS transport is
-post-quantum secure. Locally observed successful transaction timings are
+Linux-side evidence directory while the network is active, then the required
+public inputs are copied into the protected local package before cleanup. They
+are demonstration evidence, not an independent production audit or a claim
+that the classical TLS transport is post-quantum secure. Locally observed
+successful transaction timings are
 recorded per transaction and stage in `stage-timings.jsonl`, with UTC
 start/end times and millisecond durations. The stages are proposal preparation,
 endorsement collection, local broadcast submission/acknowledgment, and waiting

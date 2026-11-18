@@ -86,5 +86,7 @@ var _ = Describe("Upstream channel capability compatibility", func() {
 		Expect(session.ExitCode()).NotTo(Equal(0))
 		output := strings.TrimSpace(string(session.Out.Contents()) + string(session.Err.Contents()))
 		Expect(output).To(ContainSubstring(capabilities.PactwayHybridCertificateV1))
+		_, err = GinkgoWriter.Write([]byte("PQ3_UPSTREAM_COMPATIBILITY_PASS\n"))
+		Expect(err).NotTo(HaveOccurred())
 	})
 })

@@ -34,11 +34,18 @@ CHAINCODE_ID_ORG2=""
 CURRENT_STATE_KEY=""
 CURRENT_STATE_VALUE=""
 ACCEPTANCE_OUTPUT_DIR=""
+ACCEPTANCE_PROTECTED_DIR=""
 ACCEPTANCE_LOG_DIR=""
 ACCEPTANCE_STATE_ROOT=""
 ACCEPTANCE_CURRENT_STEP=""
 ACCEPTANCE_RUN_ID=""
+ACCEPTANCE_ID=""
+ACCEPTANCE_UPSTREAM_PEER_VERSION=""
+ACCEPTANCE_UPSTREAM_PEER_SHA256=""
+ACCEPTANCE_UPSTREAM_PEER_TEST_EXECUTED=false
+ACCEPTANCE_LOG_COUNT=0
 ACCEPTANCE_STEPS=()
+ACCEPTANCE_LOG_RECORDS=()
 
 fail() {
 	printf 'pq3: %s\n' "$*" >&2
@@ -793,10 +800,90 @@ reset_network() {
 	printf 'Reset only PQ3 run %s and its Compose project volumes.\n' "$RUN_ID"
 }
 
+verify_upstream_peer() {
+	if [[ -z "${PACTWAY_UPSTREAM_PEER:-}" ]]; then
+		printf 'PACTWAY_UPSTREAM_PEER is required for PQ3.3 acceptance.\n' >&2
+		return 1
+	fi
+	if [[ ! -f "$PACTWAY_UPSTREAM_PEER" || ! -x "$PACTWAY_UPSTREAM_PEER" ]]; then
+		printf 'PACTWAY_UPSTREAM_PEER must name an executable peer binary.\n' >&2
+		return 1
+	fi
+	local expected_sha256="${PACTWAY_UPSTREAM_PEER_SHA256:-}"
+	if [[ ! "$expected_sha256" =~ ^[[:xdigit:]]{64}$ ]]; then
+		printf 'PACTWAY_UPSTREAM_PEER_SHA256 must contain the verified binary digest.\n' >&2
+		return 1
+	fi
+
+	local version_output
+	if ! version_output="$("$PACTWAY_UPSTREAM_PEER" version)"; then
+		printf 'Unable to query the upstream peer version.\n' >&2
+		return 1
+	fi
+	if ! grep -Eq "^[[:space:]]*Version: $FABRIC_VERSION([[:space:]]|$)" <<<"$version_output"; then
+		printf 'The upstream peer must report Fabric version %s.\n' "$FABRIC_VERSION" >&2
+		return 1
+	fi
+
+	local actual_sha256
+	actual_sha256="$(
+		sha256sum -- "$PACTWAY_UPSTREAM_PEER" | awk '{print $1}'
+	)"
+	if [[ ! "$actual_sha256" =~ ^[[:xdigit:]]{64}$ ||
+		"$actual_sha256" != "$expected_sha256" ]]; then
+		printf 'The upstream peer binary does not match PACTWAY_UPSTREAM_PEER_SHA256.\n' >&2
+		return 1
+	fi
+	ACCEPTANCE_UPSTREAM_PEER_VERSION="$FABRIC_VERSION"
+	ACCEPTANCE_UPSTREAM_PEER_SHA256="$actual_sha256"
+	printf 'version=%s\nsha256=%s\n' \
+		"$ACCEPTANCE_UPSTREAM_PEER_VERSION" "$ACCEPTANCE_UPSTREAM_PEER_SHA256"
+}
+
+sanitize_log() {
+	local input="$1" output="$2"
+	awk -v state_root="$STATE_ROOT" -v acceptance_state_root="$ACCEPTANCE_STATE_ROOT" '
+		/-----BEGIN [[:alnum:] ]*PRIVATE KEY-----/ {
+			print "[REDACTED PRIVATE KEY BLOCK]"
+			in_private_key = 1
+			next
+		}
+		in_private_key {
+			if (/-----END [[:alnum:] ]*PRIVATE KEY-----/) {
+				in_private_key = 0
+			}
+			next
+		}
+		{
+			line = $0
+			for (root_index = 1; root_index <= 2; root_index++) {
+				path_root = root_index == 1 ? state_root : acceptance_state_root
+				if (path_root != "") {
+					while ((path_index = index(line, path_root)) > 0) {
+						line = substr(line, 1, path_index - 1) "[PQ3_STATE_ROOT]" substr(line, path_index + length(path_root))
+					}
+				}
+			}
+			lower_line = tolower(line)
+			if (lower_line ~ /(password|passwd|secret|token|private[_ -]?key|authorization|cookie)[[:space:]]*[:=]/ ||
+				lower_line ~ /--(password|passwd|secret|token|private[_ -]?key)([[:space:]]|$)/) {
+				print "[REDACTED SENSITIVE VALUE LINE]"
+				next
+			}
+			gsub(/gh[pousr]_[[:alnum:]_]+|github_pat_[[:alnum:]_]+/, "[REDACTED TOKEN]", line)
+			gsub(/[Bb]earer[[:space:]]+[^[:space:]]+/, "Bearer [REDACTED]", line)
+			print line
+		}
+	' "$input" > "$output"
+}
+
 run_acceptance_step() {
 	local label="$1"
 	shift
-	local log_file="$ACCEPTANCE_LOG_DIR/step-${#ACCEPTANCE_STEPS[@]}.log"
+	local log_index="$ACCEPTANCE_LOG_COUNT" log_name log_file sanitized_log
+	printf -v log_name 'step-%02d.log' "$log_index"
+	log_file="$ACCEPTANCE_LOG_DIR/$log_name"
+	sanitized_log="$log_file.sanitized"
 	local command_text status=0
 	printf -v command_text '%q ' "$@"
 	ACCEPTANCE_CURRENT_STEP="$label"
@@ -813,12 +900,29 @@ run_acceptance_step() {
 			status=$?
 		fi
 	fi
+	if [[ "$label" == "Hybrid MSP network acceptance" ]]; then
+		if grep -Fq 'PQ3_UPSTREAM_COMPATIBILITY_PASS' "$log_file"; then
+			ACCEPTANCE_UPSTREAM_PEER_TEST_EXECUTED=true
+		else
+			printf 'Required upstream compatibility test did not emit its pass marker.\n' >> "$log_file"
+			status=1
+		fi
+	fi
+	if ! sanitize_log "$log_file" "$sanitized_log"; then
+		printf 'Could not sanitize the %s log.\n' "$label" >&2
+		status=1
+	fi
 	if [[ "$status" -eq 0 ]]; then
 		ACCEPTANCE_STEPS+=("$label"$'\t'"$command_text"$'\t'passed)
+		ACCEPTANCE_LOG_RECORDS+=("$log_name"$'\t'"$label"$'\t'passed)
 	else
 		ACCEPTANCE_STEPS+=("$label"$'\t'"$command_text"$'\t'"failed (exit $status)")
-		tail -n 40 "$log_file" >&2
+		ACCEPTANCE_LOG_RECORDS+=("$log_name"$'\t'"$label"$'\t'"failed (exit $status)")
+		if [[ -f "$sanitized_log" ]]; then
+			tail -n 40 "$sanitized_log" >&2
+		fi
 	fi
+	((ACCEPTANCE_LOG_COUNT += 1))
 	local acceptance_active_file="$ACCEPTANCE_STATE_ROOT/$REPO_KEY/active-run"
 	if [[ "$label" == "Build, generate, and start network" && -f "$acceptance_active_file" ]]; then
 		ACCEPTANCE_RUN_ID="$(<"$acceptance_active_file")"
@@ -839,8 +943,198 @@ acceptance_step_result() {
 	printf 'not run'
 }
 
+prepare_protected_evidence_dir() {
+	local protected_root="${PQ3_PROTECTED_EVIDENCE_ROOT:-$STATE_ROOT/protected-evidence}"
+	mkdir -p -- "$protected_root" || return 1
+	protected_root="$(cd -- "$protected_root" && pwd -P)" || return 1
+	local repo_root
+	repo_root="$(cd -- "$ROOT" && pwd -P)" || return 1
+	case "$protected_root/" in
+		"$repo_root/"*)
+			printf 'Protected evidence must be stored outside the repository.\n' >&2
+			return 1
+			;;
+	esac
+	local filesystem
+	filesystem="$(stat -f -c '%T' "$protected_root")" || return 1
+	case "$filesystem" in
+		9p|drvfs|ntfs3|cifs)
+			printf 'Protected evidence must be stored on the WSL/Linux filesystem, not %s.\n' \
+				"$filesystem" >&2
+			return 1
+			;;
+	esac
+
+	local repo_evidence_root="$protected_root/$REPO_KEY"
+	mkdir -p -- "$repo_evidence_root" || return 1
+	chmod 700 -- "$repo_evidence_root" || return 1
+	ACCEPTANCE_PROTECTED_DIR="$repo_evidence_root/acceptance-$ACCEPTANCE_ID"
+	mkdir -m 700 -- "$ACCEPTANCE_PROTECTED_DIR"
+}
+
+copy_protected_verification_inputs() {
+	local run_dir="$1" require_complete="$2"
+	local material_dir="$run_dir/material"
+	local input_dir="$ACCEPTANCE_PROTECTED_DIR/verification-inputs"
+	local public_dir="$material_dir/public"
+	mkdir -p -- "$input_dir/channel-config" "$input_dir/certificates/tls" \
+		"$input_dir/transactions" "$input_dir/verification-results" || return 1
+
+	if [[ -f "$public_dir/genesis.block" ]]; then
+		cp -- "$public_dir/genesis.block" "$input_dir/channel-config/genesis.block" || return 1
+	elif [[ "$require_complete" == true ]]; then
+		printf 'Missing generated channel configuration block.\n' >&2
+		return 1
+	fi
+	if [[ -d "$public_dir/organizations" ]]; then
+		cp -R -- "$public_dir/organizations" "$input_dir/certificates/" || return 1
+	elif [[ "$require_complete" == true ]]; then
+		printf 'Missing generated public organization certificates.\n' >&2
+		return 1
+	fi
+
+	local org node cert source_dir destination
+	for org in Org1 Org2 OrdererOrg; do
+		case "$org" in
+			Org1|Org2) node=peer0 ;;
+			OrdererOrg) node=orderer0 ;;
+		esac
+		source_dir="$material_dir/private/organizations/$org/nodes/$node/tls"
+		for cert in server.crt client.crt; do
+			if [[ -f "$source_dir/$cert" ]]; then
+				destination="$input_dir/certificates/tls/$org-$node-$cert"
+				cp -- "$source_dir/$cert" "$destination" || return 1
+			elif [[ "$require_complete" == true ]]; then
+				printf 'Missing public TLS certificate %s/%s.\n' "$org" "$cert" >&2
+				return 1
+			fi
+		done
+		source_dir="$material_dir/private/ca/$org/tls/ca.pem"
+		if [[ -f "$source_dir" ]]; then
+			cp -- "$source_dir" "$input_dir/certificates/tls/$org-ca.pem" || return 1
+		elif [[ "$require_complete" == true ]]; then
+			printf 'Missing public TLS CA certificate for %s.\n' "$org" >&2
+			return 1
+		fi
+	done
+
+	local transaction_files=0 transaction_count=0 report_count=0 txid suffix input_file report_file
+	local copy_status=0
+	shopt -s nullglob
+	for input_file in "$run_dir"/evidence/block-*.hex \
+		"$run_dir"/evidence/org1-transaction-*.hex \
+		"$run_dir"/evidence/org2-transaction-*.hex; do
+		[[ -f "$input_file" ]] || continue
+		if ! cp -- "$input_file" "$input_dir/transactions/"; then
+			copy_status=1
+			break
+		fi
+		((transaction_files += 1))
+	done
+	shopt -u nullglob
+	[[ "$copy_status" -eq 0 ]] || return 1
+
+	if [[ -f "$run_dir/evidence/transaction-ids.txt" ]]; then
+		while read -r txid _; do
+			[[ "$txid" =~ ^[[:xdigit:]]{64}$ ]] || continue
+			((transaction_count += 1))
+			for suffix in "block-$txid.hex" "org1-transaction-$txid.hex" "org2-transaction-$txid.hex"; do
+				[[ -s "$input_dir/transactions/$suffix" ]] || {
+					printf 'Missing committed transaction verification input %s.\n' "$suffix" >&2
+					return 1
+				}
+			done
+			report_file="$run_dir/evidence/transaction-$txid.json"
+			if [[ -s "$report_file" ]]; then
+				cp -- "$report_file" "$input_dir/verification-results/" || return 1
+				((report_count += 1))
+			elif [[ "$require_complete" == true ]]; then
+				printf 'Missing verifier result for transaction %s.\n' "$txid" >&2
+				return 1
+			fi
+		done < "$run_dir/evidence/transaction-ids.txt"
+	fi
+	if [[ -f "$run_dir/evidence/missing-endorsement-verification.json" ]]; then
+		cp -- "$run_dir/evidence/missing-endorsement-verification.json" \
+			"$input_dir/verification-results/" || return 1
+	fi
+	if [[ "$require_complete" == true && "$transaction_count" -lt 2 ]]; then
+		printf 'Expected at least two committed transactions in the protected evidence package.\n' >&2
+		return 1
+	fi
+	if [[ "$require_complete" == true && "$report_count" -lt 2 ]]; then
+		printf 'Expected verifier results for both successful transactions.\n' >&2
+		return 1
+	fi
+	if [[ "$require_complete" == true && "$transaction_files" -lt 6 ]]; then
+		printf 'Expected block and both peer transaction records for each committed transaction.\n' >&2
+		return 1
+	fi
+	return 0
+}
+
+export_sanitized_logs() {
+	local protected_log_dir="$ACCEPTANCE_PROTECTED_DIR/logs"
+	mkdir -p -- "$protected_log_dir" || return 1
+	: > "$protected_log_dir/index.txt" || return 1
+	local record log_name label result raw_log sanitized_log
+	for record in "${ACCEPTANCE_LOG_RECORDS[@]}"; do
+		IFS=$'\t' read -r log_name label result <<<"$record"
+		raw_log="$ACCEPTANCE_LOG_DIR/$log_name"
+		sanitized_log="$raw_log.sanitized"
+		if [[ -f "$raw_log" && ! -f "$sanitized_log" ]]; then
+			sanitize_log "$raw_log" "$sanitized_log" || return 1
+		fi
+		if [[ -f "$sanitized_log" ]]; then
+			cp -- "$sanitized_log" "$protected_log_dir/$log_name" || return 1
+			printf '%s\t%s\t%s\n' "$log_name" "$label" "$result" \
+				>> "$protected_log_dir/index.txt" || return 1
+			if [[ "$result" != passed ]]; then
+				mkdir -p -- "$ACCEPTANCE_OUTPUT_DIR/diagnostics" || return 1
+				cp -- "$sanitized_log" "$ACCEPTANCE_OUTPUT_DIR/diagnostics/$log_name" || return 1
+				printf '%s\t%s\t%s\n' "$log_name" "$label" "$result" \
+					>> "$ACCEPTANCE_OUTPUT_DIR/diagnostics/index.txt" || return 1
+			fi
+		fi
+	done
+}
+
+write_protected_evidence_manifest() {
+	if [[ -s "$ACCEPTANCE_PROTECTED_DIR/verification-inputs/channel-config/genesis.block" ]]; then
+		cat > "$ACCEPTANCE_PROTECTED_DIR/README.txt" <<'EOF' || return 1
+Local-only PQ3 verification package.
+
+verification-inputs contains the public channel configuration block, public MSP
+and TLS certificates, and exact committed block and peer transaction records.
+verification-results contains transaction-bound verifier output. logs contains
+sanitized full acceptance-step output. The package is owner-only and includes
+temporary-profile evidence; do not publish or upload it.
+Private keys and generated private MSP material are intentionally excluded.
+SHA256SUMS covers every package file except itself.
+EOF
+	else
+		cat > "$ACCEPTANCE_PROTECTED_DIR/README.txt" <<'EOF' || return 1
+Partial local-only PQ3 acceptance package.
+
+The network did not start or public verification inputs could not be exported.
+logs contains sanitized acceptance-step output for diagnosis. The package is
+owner-only; do not publish or upload it. Private keys and generated private MSP
+material are intentionally excluded.
+SHA256SUMS covers every package file except itself.
+EOF
+	fi
+	(
+		cd -- "$ACCEPTANCE_PROTECTED_DIR"
+		find . -type f ! -name SHA256SUMS -print0 |
+			sort -z |
+			xargs -0 -r sha256sum > SHA256SUMS
+	) || return 1
+	chmod -R u+rwX,go-rwx -- "$ACCEPTANCE_PROTECTED_DIR"
+}
+
 acceptance_finalize() {
 	local status="$1" cleanup_status=0 source_commit source_branch source_dirty
+	local require_complete=true evidence_output file stage count separator
 	trap - EXIT
 	local run_dir=""
 	local acceptance_active_file="$ACCEPTANCE_STATE_ROOT/$REPO_KEY/active-run"
@@ -854,28 +1148,65 @@ acceptance_finalize() {
 	fi
 
 	if [[ -n "$run_dir" && -d "$run_dir/evidence" ]]; then
-		local evidence_output="$ACCEPTANCE_OUTPUT_DIR/evidence"
-		mkdir -p -- "$evidence_output"
+		evidence_output="$ACCEPTANCE_OUTPUT_DIR/evidence"
+		if ! mkdir -p -- "$evidence_output"; then
+			printf 'Unable to create the sanitized evidence directory.\n' >&2
+			status=1
+		fi
 		for file in network-manifest.json orderer-channels.json chaincode-definition.txt \
 			transaction-ids.txt transaction-verification.json stage-timings.jsonl \
 			timings.txt missing-endorsement.txt recovery.txt; do
 			if [[ -f "$run_dir/evidence/$file" ]]; then
-				cp -- "$run_dir/evidence/$file" "$evidence_output/$file"
+				if ! cp -- "$run_dir/evidence/$file" "$evidence_output/$file"; then
+					printf 'Unable to export sanitized evidence file %s.\n' "$file" >&2
+					status=1
+				fi
 			fi
 		done
 		if [[ -f "$run_dir/evidence/stage-timings.jsonl" ]]; then
-			local stage count
-			{
+			if ! {
 				printf '{"measurement_source":"local CLI observations","limitations":"ordering_submission is the local broadcast call through its acknowledgment, not orderer consensus; finality_wait measures delivery of the transaction to all configured peers","samples":{'
-				local separator=""
+				separator=""
 				for stage in proposal_preparation endorsement_collection ordering_submission finality_wait; do
 					count="$(grep -c "\"stage\":\"$stage\"" "$run_dir/evidence/stage-timings.jsonl" || true)"
 					printf '%s"%s":%s' "$separator" "$stage" "${count:-0}"
 					separator=","
 				done
 				printf '}}\n'
-			} > "$evidence_output/stage-timing-summary.json"
+			} > "$evidence_output/stage-timing-summary.json"; then
+				printf 'Unable to write the stage timing summary.\n' >&2
+				status=1
+			fi
 		fi
+		if [[ -d "$evidence_output" ]]; then
+			if ! mkdir -p -- "$ACCEPTANCE_PROTECTED_DIR/sanitized-evidence" ||
+				! cp -R -- "$evidence_output/." "$ACCEPTANCE_PROTECTED_DIR/sanitized-evidence/"; then
+				printf 'Unable to preserve sanitized evidence in the protected package.\n' >&2
+				status=1
+			fi
+		fi
+
+		[[ "$status" -eq 0 ]] || require_complete=false
+		if copy_protected_verification_inputs "$run_dir" "$require_complete" \
+			> "$ACCEPTANCE_LOG_DIR/protected-inputs.log" 2>&1; then
+			if [[ "$require_complete" == true ]]; then
+				ACCEPTANCE_STEPS+=("Protected verification inputs"$'\t'"export public verifier inputs"$'\t'passed)
+				ACCEPTANCE_LOG_RECORDS+=("protected-inputs.log"$'\t'"Protected verification inputs"$'\t'passed)
+			else
+				ACCEPTANCE_STEPS+=("Protected verification inputs"$'\t'"export available public verifier inputs"$'\t'"partial (acceptance failed)")
+				ACCEPTANCE_LOG_RECORDS+=("protected-inputs.log"$'\t'"Protected verification inputs"$'\t'"partial (acceptance failed)")
+			fi
+		else
+			local copy_status=$?
+			ACCEPTANCE_STEPS+=("Protected verification inputs"$'\t'"export public verifier inputs"$'\t'"failed (exit $copy_status)")
+			ACCEPTANCE_LOG_RECORDS+=("protected-inputs.log"$'\t'"Protected verification inputs"$'\t'"failed (exit $copy_status)")
+			status=1
+		fi
+	elif [[ "$status" -eq 0 ]]; then
+		ACCEPTANCE_STEPS+=("Protected verification inputs"$'\t'"export public verifier inputs"$'\t'"not available (network did not start)")
+		status=1
+	else
+		ACCEPTANCE_STEPS+=("Protected verification inputs"$'\t'"export public verifier inputs"$'\t'"not available (network did not start)")
 	fi
 
 	if [[ -n "$ACCEPTANCE_RUN_ID" && -f "$acceptance_active_file" &&
@@ -883,13 +1214,29 @@ acceptance_finalize() {
 		if PQ3_STATE_ROOT="$ACCEPTANCE_STATE_ROOT" "$SCRIPT_DIR/pq3.sh" reset \
 			> "$ACCEPTANCE_LOG_DIR/reset.log" 2>&1; then
 			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"$SCRIPT_DIR/pq3.sh reset"$'\t'passed)
+			ACCEPTANCE_LOG_RECORDS+=("reset.log"$'\t'"Scoped runtime cleanup"$'\t'passed)
 		else
 			cleanup_status=$?
 			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"$SCRIPT_DIR/pq3.sh reset"$'\t'"failed (exit $cleanup_status)")
-			cat "$ACCEPTANCE_LOG_DIR/reset.log" >&2
+			ACCEPTANCE_LOG_RECORDS+=("reset.log"$'\t'"Scoped runtime cleanup"$'\t'"failed (exit $cleanup_status)")
 			status=1
 		fi
 		rmdir -- "$ACCEPTANCE_STATE_ROOT/$REPO_KEY" "$ACCEPTANCE_STATE_ROOT" 2>/dev/null || true
+	fi
+
+	if ! export_sanitized_logs; then
+		printf 'Unable to retain sanitized acceptance logs.\n' >&2
+		ACCEPTANCE_STEPS+=("Sanitized log retention"$'\t'"export full local logs and failed-step diagnostics"$'\t'failed)
+		status=1
+	else
+		ACCEPTANCE_STEPS+=("Sanitized log retention"$'\t'"export full local logs and failed-step diagnostics"$'\t'passed)
+	fi
+	if ! write_protected_evidence_manifest; then
+		printf 'Unable to write the protected evidence package manifest.\n' >&2
+		ACCEPTANCE_STEPS+=("Protected evidence manifest"$'\t'"write SHA256SUMS and owner-only package metadata"$'\t'failed)
+		status=1
+	else
+		ACCEPTANCE_STEPS+=("Protected evidence manifest"$'\t'"write SHA256SUMS and owner-only package metadata"$'\t'passed)
 	fi
 
 	source_commit="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
@@ -905,7 +1252,18 @@ acceptance_finalize() {
 		printf -- '- Candidate gate commit: `%s`\n' "$source_commit"
 		printf -- '- Branch: `%s` (worktree dirty: `%s`)\n' "$source_branch" "$source_dirty"
 		printf -- '- Profile: `%s`; isolated development only; transport: classical TLS.\n' "$PROFILE"
-		printf -- '- Generated credentials, ledgers, raw test logs, and block bytes are not included.\n\n'
+		if [[ "$ACCEPTANCE_UPSTREAM_PEER_TEST_EXECUTED" == true ]]; then
+			printf -- '- Upstream compatibility: required peer test executed against Fabric `%s`; binary SHA-256 `%s`.\n' \
+				"$ACCEPTANCE_UPSTREAM_PEER_VERSION" "$ACCEPTANCE_UPSTREAM_PEER_SHA256"
+		else
+			printf -- '- Upstream compatibility: **INCOMPLETE**; required upstream peer test did not execute successfully.\n'
+		fi
+		if [[ -s "$ACCEPTANCE_PROTECTED_DIR/verification-inputs/channel-config/genesis.block" ]]; then
+			printf -- '- Public verification inputs and sanitized full logs are preserved separately in an owner-only local package; it is not uploaded.\n'
+		else
+			printf -- '- The owner-only local package contains sanitized logs; public verification inputs were unavailable because the network did not start or export failed.\n'
+		fi
+		printf -- '- Private keys, generated private MSP material, and raw unsanitized logs are not included.\n\n'
 		printf '## Commands and results\n\n| Step | Command | Result |\n|---|---|---|\n'
 		local step label command_text result
 		for step in "${ACCEPTANCE_STEPS[@]}"; do
@@ -921,35 +1279,38 @@ acceptance_finalize() {
 		printf '| PQ3.2 transaction and evidence | `%s` | %s / %s |\n' \
 			"$source_commit" "$(acceptance_step_result "Invoke and verify repeated transaction samples")" \
 			"$(acceptance_step_result "Re-verify latest exact transaction")"
-		printf '| PQ3.3 negative acceptance | `%s` | %s / %s |\n' \
-			"$source_commit" "$(acceptance_step_result "Hybrid MSP network acceptance")" \
+		printf '| PQ3.3 negative acceptance | `%s` | %s / %s / %s / %s |\n' \
+			"$source_commit" "$(acceptance_step_result "Verified upstream peer binary")" \
+			"$([[ "$ACCEPTANCE_UPSTREAM_PEER_TEST_EXECUTED" == true ]] && printf executed || printf incomplete)" \
+			"$(acceptance_step_result "Hybrid MSP network acceptance")" \
 			"$(acceptance_step_result "Reject missing endorsement")"
 		printf '| PQ3.4 automation and evidence handoff | `%s` | %s |\n' \
 			"$source_commit" "$([[ "$status" -eq 0 ]] && printf PASS || printf FAIL)"
 		printf '\nThe candidate commit above is the source revision used for every gate. A dirty worktree means the tested source also includes uncommitted changes and is not represented by that commit alone.\n'
 		printf '\n## Timing scope and limitations\n\nStage durations are local wall-clock observations with UTC start/end timestamps and millisecond resolution. They are not signed protocol timestamps. The broadcast-call observation does not isolate ordering consensus; finality wait ends when delivery reports the transaction at all configured peers. Counts are included in `evidence/stage-timing-summary.json`.\n'
 		printf '\n## Unresolved limitations\n\n- The demo uses the temporary `rfc5612-test-only-v1` profile and classical TLS; it makes no production, PQ transport, HA, or BFT claim.\n'
-		if [[ -z "${PACTWAY_UPSTREAM_PEER:-}" ]]; then
-			printf -- '- Upstream-peer compatibility test was skipped because `PACTWAY_UPSTREAM_PEER` was not set to a verified binary.\n'
-		else
-			printf -- '- Upstream-peer compatibility test used the binary configured by `PACTWAY_UPSTREAM_PEER`; verify its provenance separately.\n'
-		fi
+		printf '\nFailed steps retain sanitized full logs under `diagnostics/` in this report package; all sanitized step logs remain in the protected local package.\n'
 	} > "$ACCEPTANCE_OUTPUT_DIR/report.md"
-	rm -rf -- "$ACCEPTANCE_LOG_DIR"
 	printf 'Sanitized PQ3 acceptance evidence: %s\n' "$ACCEPTANCE_OUTPUT_DIR"
+	printf 'Protected local verification package: %s\n' "$ACCEPTANCE_PROTECTED_DIR"
+	rm -rf -- "$ACCEPTANCE_LOG_DIR"
 	exit "$status"
 }
 
 acceptance() {
 	local output_root="${PQ3_EVIDENCE_OUTPUT:-$ROOT/build/pq3/acceptance-evidence}"
+	ACCEPTANCE_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 	case "$output_root/" in
 		"$STATE_ROOT/"*) fail "acceptance evidence output must be outside the private runtime directory" ;;
 	esac
 	mkdir -p -- "$output_root"
-	ACCEPTANCE_OUTPUT_DIR="$output_root/acceptance-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+	ACCEPTANCE_OUTPUT_DIR="$output_root/acceptance-$ACCEPTANCE_ID"
 	mkdir -m 700 -- "$ACCEPTANCE_OUTPUT_DIR"
 	ACCEPTANCE_LOG_DIR="$(mktemp -d)"
-	ACCEPTANCE_STATE_ROOT="$STATE_ROOT/acceptance-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+	ACCEPTANCE_STATE_ROOT="$STATE_ROOT/acceptance-$ACCEPTANCE_ID"
+	if ! prepare_protected_evidence_dir; then
+		fail "unable to create a protected local evidence directory outside the repository"
+	fi
 	trap 'acceptance_finalize "$?"' EXIT
 
 	if [[ "${PACTWAY_HYBRID_PROFILE:-}" != "$PROFILE" ||
@@ -958,6 +1319,7 @@ acceptance() {
 		fail "set PACTWAY_HYBRID_PROFILE=$PROFILE and PACTWAY_ISOLATED_DEVELOPMENT=true explicitly"
 	fi
 	ACCEPTANCE_STEPS+=("Development-only profile guard"$'\t'"required profile and isolation variables"$'\t'passed)
+	run_acceptance_step "Verified upstream peer binary" verify_upstream_peer
 	local ginkgo_focus='Pactway hybrid transaction (expiry replay|signature rejection)|persists the rotation before signer activation|Pactway hybrid network negative acceptance|Upstream channel capability compatibility'
 	run_acceptance_step "Shell syntax" bash -n "$SCRIPT_DIR/pq3.sh"
 	run_acceptance_step "Integration prerequisites" make -C "$ROOT" integration-test-prereqs
@@ -965,7 +1327,7 @@ acceptance() {
 		./cmd/pq3-verify ./integration/pq3 ./pq-crypto ./msp ./common/channelconfig \
 		./common/configtx ./orderer/common/msgprocessor
 	run_acceptance_step "Hybrid MSP network acceptance" go -C "$ROOT" test \
-		-timeout=40m -mod=vendor ./integration/msp "-ginkgo.focus=$ginkgo_focus" -ginkgo.v
+		-count=1 -timeout=40m -mod=vendor ./integration/msp "-ginkgo.focus=$ginkgo_focus" -ginkgo.v
 	run_acceptance_step "Build verifier and chaincode" go -C "$ROOT" build -mod=vendor \
 		./cmd/pq3-verify ./integration/pq3
 	run_acceptance_step "Build, generate, and start network" "$SCRIPT_DIR/pq3.sh" fresh
