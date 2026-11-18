@@ -60,6 +60,9 @@ integration/pq3/pq3.sh reset
 
 - `Org1MSP` and `Org2MSP` each operate one peer; `OrdererOrgMSP` operates one
   Raft orderer.
+- Each organization installs and approves its own CCAAS package and runs a
+  separate chaincode-server process; neither peer shares the other
+  organization's execution service.
 - Peer and orderer images are locally built from this repository; Compose uses
   `pull_policy: never` and a private local image namespace.
 - Node services receive only their own local MSP and TLS material. The CLI
@@ -70,33 +73,40 @@ integration/pq3/pq3.sh reset
 - The Compose network is internal. If a future presentation requires host
   access, any port publication must be loopback-only and separately reviewed.
 
-The isolated workflow runs a peer-level invalid-PQ-signature rejection check,
-expiry/replay acceptance, and checks that the verified upstream Fabric v3.1.5
-peer rejects a channel requiring the fork-only hybrid capability. It also
-checks channel activation, chaincode lifecycle, two-organization endorsement,
-cryptographic evidence, negative endorsement, and state-preserving recovery.
-Starting three containers alone is not PQ3 completion. The upstream check
-demonstrates rejection of this unsupported capability, not interoperability.
+The isolated workflow runs peer-level rejection checks for invalid-PQ-signature
+and classical-only client proposals, expiry/replay acceptance, and classical-only
+and stale orderer signer rejection. Its negative-validation packages also
+exercise wrong MSP organizations and roles, unsupported certificate profiles,
+missing PQ keys, unauthorized
+configuration updates, and attempts to remove the required channel capability.
+It checks that the verified upstream Fabric v3.1.5 peer rejects a channel requiring the
+fork-only hybrid capability. The workflow also checks channel activation,
+organization-specific chaincode lifecycle, two-organization endorsement,
+transaction-bound cryptographic and commit evidence, negative endorsement, and
+state-preserving recovery. Starting three containers alone is not PQ3
+completion. The upstream check demonstrates rejection of this unsupported
+capability, not interoperability.
 
-`deploy` installs the external CCAAS package for both organizations, approves
-and commits sequence 1 with
-`AND('Org1MSP.peer','Org2MSP.peer')`, and starts the chaincode server.
-`invoke` submits an asset transaction to both peers, checks the committed value
-at each peer, fetches the latest block, and runs `pq3-verify` against the
-generated channel config. The verifier parses the actual block and transaction
-bytes, checks the block data hash and orderer block signature, verifies client
-and endorsement signatures using the channel MSPs, requires the authenticated
-hybrid channel capability, and confirms both peer MSPs endorsed the requested
-chaincode transaction. Orderer-delivered blocks do not carry the peer's
-transaction validation filter, so the verifier reports
-`transaction_status_available: false` when that metadata is absent; the dual
-peer state queries separately confirm that the asset write committed.
+`deploy` installs a distinct external CCAAS package on each organization's peer,
+approves the corresponding package IDs, commits sequence 1 with
+`AND('Org1MSP.peer','Org2MSP.peer')`, and starts the two chaincode servers.
+Each `invoke` run creates a unique asset key, submits an `InitAsset` transaction
+followed by a state-changing `Set`, and checks the expected value on both
+peers after each commit. It queries each peer's QSCC ledger for the exact
+transaction and its committed block. `pq3-verify` requires the transaction's
+validation code to be `VALID` in the block and both peer ledgers, compares the
+exact committed envelope across them, verifies the orderer block signature and
+the client/endorsement signatures, and checks that the endorsed write set and
+both peer state reads match the expected key and value. The report is bound to
+that transaction ID; it cannot succeed based on an unrelated newest block or
+signatures alone. Repeated `invoke` runs use fresh asset keys and retain
+transaction-specific reports.
 
 `negative-endorsement` submits a write with only Org1's endorsement. The peer
 reports `ENDORSEMENT_POLICY_FAILURE`; both peers' state remains unchanged, and
-the evidence verifier rejects the resulting transaction bytes because the
-Org2 endorsement is absent. `recovery` checks both peer memberships, the active
-orderer channel, and the ledger state after stop/start, restart, and resume.
+the verifier rejects the exact transaction based on its committed validation
+code. `recovery` checks both peer memberships, the active orderer channel, and
+the latest asset key/value after stop/start, restart, and resume.
 The `PQ3 Isolated Network` workflow repeats these checks on a source-built,
 internal Docker network and does not upload generated credentials or runtime
 evidence.
@@ -105,9 +115,10 @@ The verifier output and fetched block are stored under the run's private
 Linux-side evidence directory. They are demonstration evidence, not an
 independent production audit or a claim that the classical TLS transport is
 post-quantum secure.
-Elapsed whole-second measurements for successful fresh, join, deploy, invoke,
-and recovery commands are appended to `evidence/timings.txt`; they are
-environment-specific observations, not performance guarantees.
+Elapsed whole-second measurements for successful fresh, join, deploy, each
+transaction sample, the full invoke run, and recovery are appended to
+`evidence/timings.txt`; they are environment-specific observations, not
+performance guarantees.
 
 The demo has one Raft orderer and makes no availability or fault-tolerance
 claim. It does not implement settlement tokens or PQ4; settlement integration

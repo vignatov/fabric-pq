@@ -9,11 +9,14 @@ package msp
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +24,7 @@ import (
 	"time"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp/signer"
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	mspprotos "github.com/hyperledger/fabric-protos-go-apiv2/msp"
@@ -153,12 +157,38 @@ var _ = Describe("Pactway hybrid transaction signature rejection", func() {
 		if err != nil {
 			Expect(strings.ToLower(err.Error())).To(ContainSubstring("access denied"))
 			Expect(err.Error()).To(ContainSubstring("Org1MSP"))
-			return
+		} else {
+			Expect(response).NotTo(BeNil())
+			Expect(response.GetResponse()).NotTo(BeNil())
+			Expect(response.GetResponse().GetStatus()).NotTo(Equal(int32(200)))
+			Expect(strings.ToLower(response.GetResponse().GetMessage())).To(ContainSubstring("quantum signature"))
 		}
-		Expect(response).NotTo(BeNil())
-		Expect(response.GetResponse()).NotTo(BeNil())
-		Expect(response.GetResponse().GetStatus()).NotTo(Equal(int32(200)))
-		Expect(strings.ToLower(response.GetResponse().GetMessage())).To(ContainSubstring("quantum signature"))
+
+		classicalSigner, classicalIdentity := newClassicalOnlyProposalSigner(output, csp)
+		classicalInvocation := &peer.ChaincodeInvocationSpec{
+			ChaincodeSpec: &peer.ChaincodeSpec{
+				Type:        peer.ChaincodeSpec_GOLANG,
+				ChaincodeId: &peer.ChaincodeID{Name: "not-installed"},
+				Input:       &peer.ChaincodeInput{Args: [][]byte{[]byte("invoke")}},
+			},
+		}
+		classicalProposal, _, err := protoutil.CreateChaincodeProposal(
+			common.HeaderType_ENDORSER_TRANSACTION, "testchannel", classicalInvocation, classicalIdentity,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		classicalSignedProposal, err := protoutil.GetSignedProposal(classicalProposal, classicalSigner)
+		Expect(err).NotTo(HaveOccurred())
+		classicalCtx, cancelClassical := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelClassical()
+		classicalResponse, err := peer.NewEndorserClient(conn).ProcessProposal(classicalCtx, classicalSignedProposal)
+		if err != nil {
+			Expect(strings.ToLower(err.Error())).To(ContainSubstring("access denied"))
+		} else {
+			Expect(classicalResponse).NotTo(BeNil())
+			Expect(classicalResponse.GetResponse()).NotTo(BeNil())
+			Expect(classicalResponse.GetResponse().GetStatus()).NotTo(Equal(int32(200)))
+			Expect(strings.ToLower(classicalResponse.GetResponse().GetMessage())).To(ContainSubstring("pactway"))
+		}
 	})
 })
 
@@ -166,6 +196,71 @@ type invalidPQProposalSigner struct {
 	serialized   []byte
 	csp          bccsp.BCCSP
 	classicalKey bccsp.Key
+}
+
+type classicalProposalSigner struct {
+	serialized []byte
+	csp        bccsp.BCCSP
+	key        bccsp.Key
+}
+
+func newClassicalOnlyProposalSigner(outputDir string, csp bccsp.BCCSP) (classicalProposalSigner, []byte) {
+	intermediatePEM, err := os.ReadFile(filepath.Join(outputDir, "public", "organizations", "Org1", "msp", "intermediatecerts", "intermediate.pem"))
+	Expect(err).NotTo(HaveOccurred())
+	intermediateBlock, _ := pem.Decode(intermediatePEM)
+	Expect(intermediateBlock).NotTo(BeNil())
+	intermediate, err := x509.ParseCertificate(intermediateBlock.Bytes)
+	Expect(err).NotTo(HaveOccurred())
+
+	caKeyStoreDir := filepath.Join(outputDir, "private", "ca", "Org1", "intermediate", "keystore")
+	caKeyStore, err := sw.NewFileBasedKeyStore(nil, caKeyStoreDir, true)
+	Expect(err).NotTo(HaveOccurred())
+	caCSP, err := sw.NewDefaultSecurityLevelWithKeystore(caKeyStore)
+	Expect(err).NotTo(HaveOccurred())
+	caKey := replayPrivateKey(caCSP, caKeyStoreDir, intermediate.RawSubjectPublicKeyInfo)
+	caSigner, err := signer.New(caCSP, caKey)
+	Expect(err).NotTo(HaveOccurred())
+
+	key, err := csp.KeyGen(&bccsp.ECDSAP256KeyGenOpts{Temporary: true})
+	Expect(err).NotTo(HaveOccurred())
+	publicKey, err := key.PublicKey()
+	Expect(err).NotTo(HaveOccurred())
+	publicDER, err := publicKey.Bytes()
+	Expect(err).NotTo(HaveOccurred())
+	classicalPublicKey, err := x509.ParsePKIXPublicKey(publicDER)
+	Expect(err).NotTo(HaveOccurred())
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	Expect(err).NotTo(HaveOccurred())
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:         "classical-only-client",
+			OrganizationalUnit: []string{"client"},
+		},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		AuthorityKeyId:        intermediate.SubjectKeyId,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, intermediate, classicalPublicKey, caSigner)
+	Expect(err).NotTo(HaveOccurred())
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	serializedIdentity, err := proto.Marshal(&mspprotos.SerializedIdentity{
+		Mspid:   "Org1MSP",
+		IdBytes: certificatePEM,
+	})
+	Expect(err).NotTo(HaveOccurred())
+	return classicalProposalSigner{serialized: serializedIdentity, csp: csp, key: key}, serializedIdentity
+}
+
+func (s classicalProposalSigner) Serialize() ([]byte, error) {
+	return s.serialized, nil
+}
+
+func (s classicalProposalSigner) Sign(message []byte) ([]byte, error) {
+	return s.csp.Sign(s.key, message, nil)
 }
 
 func (s invalidPQProposalSigner) Serialize() ([]byte, error) {

@@ -125,16 +125,33 @@ services:
       retries: 40
       start_period: 10s
 
-  ccaas:
+  ccaas-org1:
     image: localhost/pactway-pq3/ccaas:${PQ3_IMAGE_TAG:?}
     pull_policy: never
     environment:
-      CHAINCODE_ID: ${PQ3_CHAINCODE_ID:-}
+      CHAINCODE_ID: ${PQ3_CHAINCODE_ID_ORG1:-}
       CHAINCODE_SERVER_ADDRESS: 0.0.0.0:9999
     networks:
       pq3:
         aliases:
-          - pq3-chaincode
+          - pq3-chaincode-org1
+    healthcheck:
+      test: ["CMD", "bash", "-ec", "echo > /dev/tcp/127.0.0.1/9999"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+      start_period: 3s
+
+  ccaas-org2:
+    image: localhost/pactway-pq3/ccaas:${PQ3_IMAGE_TAG:?}
+    pull_policy: never
+    environment:
+      CHAINCODE_ID: ${PQ3_CHAINCODE_ID_ORG2:-}
+      CHAINCODE_SERVER_ADDRESS: 0.0.0.0:9999
+    networks:
+      pq3:
+        aliases:
+          - pq3-chaincode-org2
     healthcheck:
       test: ["CMD", "bash", "-ec", "echo > /dev/tcp/127.0.0.1/9999"]
       interval: 3s

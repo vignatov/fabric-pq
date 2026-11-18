@@ -31,11 +31,11 @@ jobs:
           go-version: 1.27.4
           cache: true
 
-      - name: Check PQ3 scripts and tools
+      - name: Run hybrid-negative unit and tool validation
         run: |
           bash -n integration/pq3/pq3.sh
           go test -mod=vendor ./cmd/pq3-verify ./integration/pq3
-          go test -mod=vendor ./pq-crypto ./msp ./common/channelconfig ./orderer/common/msgprocessor
+          go test -mod=vendor ./pq-crypto ./msp ./common/channelconfig ./common/configtx ./orderer/common/msgprocessor
           go build -mod=vendor ./cmd/pq3-verify ./integration/pq3
         env:
           PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
@@ -59,7 +59,7 @@ jobs:
       - name: Run hybrid MSP transaction acceptance
         run: |
           make ccaasbuilder
-          go test -mod=vendor ./integration/msp -ginkgo.focus='Pactway hybrid transaction (expiry replay|signature rejection)|Upstream channel capability compatibility' -ginkgo.v
+          go test -timeout=30m -mod=vendor ./integration/msp -ginkgo.focus='Pactway hybrid transaction (expiry replay|signature rejection)|persists the rotation before signer activation|Upstream channel capability compatibility' -ginkgo.v
         env:
           PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
           PACTWAY_ISOLATED_DEVELOPMENT: "true"

@@ -29,7 +29,10 @@ readonly REPO_KEY="$(printf '%s' "$ROOT" | sha256sum | cut -c1-12)"
 readonly STATE_DIR="$STATE_ROOT/$REPO_KEY"
 readonly ACTIVE_FILE="$STATE_DIR/active-run"
 
-CHAINCODE_ID=""
+CHAINCODE_ID_ORG1=""
+CHAINCODE_ID_ORG2=""
+CURRENT_STATE_KEY=""
+CURRENT_STATE_VALUE=""
 
 fail() {
 	printf 'pq3: %s\n' "$*" >&2
@@ -151,6 +154,7 @@ build_runtime_images() {
   "peer_image_id": "$(docker image inspect --format '{{.Id}}' "$PEER_IMAGE")",
   "orderer_image": "$ORDERER_IMAGE",
   "orderer_image_id": "$(docker image inspect --format '{{.Id}}' "$ORDERER_IMAGE")",
+  "chaincode_execution_service_count": 2,
   "chaincode_image": "$CC_IMAGE",
   "chaincode_image_id": "$(docker image inspect --format '{{.Id}}' "$CC_IMAGE")",
   "admin_tools_image": "$TOOLS_IMAGE",
@@ -189,11 +193,15 @@ load_active() {
 		IMAGE_TAG=""
 	fi
 	[[ -f "$RUN_DIR/ccaas-image" ]] && CC_IMAGE="$(<"$RUN_DIR/ccaas-image")" || CC_IMAGE=""
-	[[ -f "$RUN_DIR/chaincode-id" ]] && CHAINCODE_ID="$(<"$RUN_DIR/chaincode-id")" || CHAINCODE_ID=""
+	[[ -f "$RUN_DIR/chaincode-id-org1" ]] && CHAINCODE_ID_ORG1="$(<"$RUN_DIR/chaincode-id-org1")" || CHAINCODE_ID_ORG1=""
+	[[ -f "$RUN_DIR/chaincode-id-org2" ]] && CHAINCODE_ID_ORG2="$(<"$RUN_DIR/chaincode-id-org2")" || CHAINCODE_ID_ORG2=""
+	[[ -f "$RUN_DIR/current-state-key" ]] && CURRENT_STATE_KEY="$(<"$RUN_DIR/current-state-key")" || CURRENT_STATE_KEY=""
+	[[ -f "$RUN_DIR/current-state-value" ]] && CURRENT_STATE_VALUE="$(<"$RUN_DIR/current-state-value")" || CURRENT_STATE_VALUE=""
 	export PQ3_RUN_DIR="$RUN_DIR"
 	export PQ3_MATERIAL_DIR="$RUN_DIR/material"
 	export PQ3_IMAGE_TAG="$IMAGE_TAG"
-	export PQ3_CHAINCODE_ID="$CHAINCODE_ID"
+	export PQ3_CHAINCODE_ID_ORG1="$CHAINCODE_ID_ORG1"
+	export PQ3_CHAINCODE_ID_ORG2="$CHAINCODE_ID_ORG2"
 	COMPOSE_FILE="$RUN_DIR/config/compose.yaml"
 	if [[ -f "$COMPOSE_FILE" ]]; then
 		PROJECT="$PROJECT" docker compose --profile cli --project-name "$PROJECT" \
@@ -217,7 +225,9 @@ run_cli() {
 wait_healthy() {
 	local deadline=$((SECONDS + 180))
 	local services=(orderer peer-org1 peer-org2)
-	[[ -n "$CHAINCODE_ID" ]] && services+=(ccaas)
+	if [[ -n "$CHAINCODE_ID_ORG1" && -n "$CHAINCODE_ID_ORG2" ]]; then
+		services+=(ccaas-org1 ccaas-org2)
+	fi
 	while (( SECONDS < deadline )); do
 		local all_healthy=true service container_id status
 		for service in "${services[@]}"; do
@@ -272,7 +282,8 @@ fresh() {
 	export PQ3_RUN_DIR="$RUN_DIR"
 	export PQ3_MATERIAL_DIR="$RUN_DIR/material"
 	export PQ3_IMAGE_TAG="$IMAGE_TAG"
-	export PQ3_CHAINCODE_ID=""
+	export PQ3_CHAINCODE_ID_ORG1=""
+	export PQ3_CHAINCODE_ID_ORG2=""
 	compose up --detach --wait --wait-timeout 180 orderer peer-org1 peer-org2
 	wait_healthy
 	record_duration fresh_total "$started"
@@ -335,43 +346,65 @@ deploy_chaincode() {
 	run_cli cli-org2 admin peer channel list | grep -Fq "$CHANNEL_ID" ||
 		fail "Org2 peer has not joined $CHANNEL_ID; run join first"
 
-	local package_dir="$RUN_DIR/package"
+	local package_dir_org1="$RUN_DIR/package-org1"
+	local package_dir_org2="$RUN_DIR/package-org2"
 	local public_dir="$PQ3_MATERIAL_DIR/public"
-	mkdir -m 700 -p -- "$package_dir/code"
+	mkdir -m 700 -p -- "$package_dir_org1/code" "$package_dir_org2/code"
 	mkdir -p -- "$public_dir"
-	cat > "$package_dir/metadata.json" <<EOF
+	cat > "$package_dir_org1/metadata.json" <<EOF
 {"type":"ccaas","label":"pq3asset_1.0"}
 EOF
-	cat > "$package_dir/code/connection.json" <<'EOF'
+	cat > "$package_dir_org2/metadata.json" <<EOF
+{"type":"ccaas","label":"pq3asset_1.0"}
+EOF
+	cat > "$package_dir_org1/code/connection.json" <<'EOF'
 {
-  "address": "pq3-chaincode:9999",
+  "address": "pq3-chaincode-org1:9999",
   "dial_timeout": "10s",
   "tls_required": false
 }
 EOF
-	tar -czf "$package_dir/code.tar.gz" -C "$package_dir/code" connection.json
-	tar -czf "$public_dir/pq3asset.tar.gz" -C "$package_dir" metadata.json code.tar.gz
+	cat > "$package_dir_org2/code/connection.json" <<'EOF'
+{
+  "address": "pq3-chaincode-org2:9999",
+  "dial_timeout": "10s",
+  "tls_required": false
+}
+EOF
+	tar -czf "$package_dir_org1/code.tar.gz" -C "$package_dir_org1/code" connection.json
+	tar -czf "$package_dir_org2/code.tar.gz" -C "$package_dir_org2/code" connection.json
+	tar -czf "$public_dir/pq3asset-org1.tar.gz" -C "$package_dir_org1" metadata.json code.tar.gz
+	tar -czf "$public_dir/pq3asset-org2.tar.gz" -C "$package_dir_org2" metadata.json code.tar.gz
 
-	local package_id installed
-	package_id="$(run_cli cli-org1 admin peer lifecycle chaincode calculatepackageid \
-		/run/public/pq3asset.tar.gz)"
-	[[ "$package_id" == pq3asset_1.0:* ]] ||
-		fail "unexpected CCAAS package identifier: $package_id"
-	for service in cli-org1 cli-org2; do
-		installed="$(run_cli "$service" admin peer lifecycle chaincode queryinstalled)"
-		if ! grep -Fq "$package_id" <<<"$installed"; then
-			run_cli "$service" admin peer lifecycle chaincode install /run/public/pq3asset.tar.gz
-		fi
-	done
+	local package_id_org1 package_id_org2 installed
+	package_id_org1="$(run_cli cli-org1 admin peer lifecycle chaincode calculatepackageid \
+		/run/public/pq3asset-org1.tar.gz)"
+	package_id_org2="$(run_cli cli-org2 admin peer lifecycle chaincode calculatepackageid \
+		/run/public/pq3asset-org2.tar.gz)"
+	[[ "$package_id_org1" == pq3asset_1.0:* && "$package_id_org2" == pq3asset_1.0:* ]] ||
+		fail "unexpected CCAAS package identifiers: Org1=$package_id_org1 Org2=$package_id_org2"
+	[[ "$package_id_org1" != "$package_id_org2" ]] ||
+		fail "organization-specific CCAAS packages unexpectedly have the same identifier"
+	installed="$(run_cli cli-org1 admin peer lifecycle chaincode queryinstalled)"
+	if ! grep -Fq "$package_id_org1" <<<"$installed"; then
+		run_cli cli-org1 admin peer lifecycle chaincode install /run/public/pq3asset-org1.tar.gz
+	fi
+	installed="$(run_cli cli-org2 admin peer lifecycle chaincode queryinstalled)"
+	if ! grep -Fq "$package_id_org2" <<<"$installed"; then
+		run_cli cli-org2 admin peer lifecycle chaincode install /run/public/pq3asset-org2.tar.gz
+	fi
 
 	local policy="AND('Org1MSP.peer','Org2MSP.peer')"
-	for service in cli-org1 cli-org2; do
-		run_cli "$service" admin peer lifecycle chaincode approveformyorg \
-			-o orderer0.ordererorg.pactway.local:7050 --tls --cafile /run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem \
-			--channelID "$CHANNEL_ID" --name "$CHAINCODE_NAME" \
-			--version "$CHAINCODE_VERSION" --package-id "$package_id" \
-			--sequence "$CHAINCODE_SEQUENCE" --signature-policy "$policy"
-	done
+	run_cli cli-org1 admin peer lifecycle chaincode approveformyorg \
+		-o orderer0.ordererorg.pactway.local:7050 --tls --cafile /run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem \
+		--channelID "$CHANNEL_ID" --name "$CHAINCODE_NAME" \
+		--version "$CHAINCODE_VERSION" --package-id "$package_id_org1" \
+		--sequence "$CHAINCODE_SEQUENCE" --signature-policy "$policy"
+	run_cli cli-org2 admin peer lifecycle chaincode approveformyorg \
+		-o orderer0.ordererorg.pactway.local:7050 --tls --cafile /run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem \
+		--channelID "$CHANNEL_ID" --name "$CHAINCODE_NAME" \
+		--version "$CHAINCODE_VERSION" --package-id "$package_id_org2" \
+		--sequence "$CHAINCODE_SEQUENCE" --signature-policy "$policy"
 	run_cli cli-org1 admin peer lifecycle chaincode commit \
 		-o orderer0.ordererorg.pactway.local:7050 --tls --cafile /run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem \
 		--channelID "$CHANNEL_ID" --name "$CHAINCODE_NAME" \
@@ -390,60 +423,112 @@ EOF
 	grep -Fq "Sequence: $CHAINCODE_SEQUENCE" <<<"$committed" ||
 		fail "committed definition did not report sequence $CHAINCODE_SEQUENCE"
 
-	printf '%s\n' "$package_id" > "$RUN_DIR/chaincode-id"
-	CHAINCODE_ID="$package_id"
-	export PQ3_CHAINCODE_ID="$CHAINCODE_ID"
-	compose up --detach --wait --wait-timeout 60 ccaas
+	printf '%s\n' "$package_id_org1" > "$RUN_DIR/chaincode-id-org1"
+	printf '%s\n' "$package_id_org2" > "$RUN_DIR/chaincode-id-org2"
+	CHAINCODE_ID_ORG1="$package_id_org1"
+	CHAINCODE_ID_ORG2="$package_id_org2"
+	export PQ3_CHAINCODE_ID_ORG1="$CHAINCODE_ID_ORG1"
+	export PQ3_CHAINCODE_ID_ORG2="$CHAINCODE_ID_ORG2"
+	compose up --detach --wait --wait-timeout 60 ccaas-org1 ccaas-org2
 	wait_healthy
 	printf '%s\n' "$committed" > "$RUN_DIR/evidence/chaincode-definition.txt"
+	{
+		printf 'Org1MSP=%s\n' "$package_id_org1"
+		printf 'Org2MSP=%s\n' "$package_id_org2"
+	} > "$RUN_DIR/evidence/chaincode-package-ids.txt"
 	record_duration chaincode_deploy "$started"
 	printf 'Committed %s v%s with endorsement policy %s.\n' \
 		"$CHAINCODE_NAME" "$CHAINCODE_VERSION" "$policy"
+	printf 'Org1 and Org2 installed and approved distinct CCAAS package IDs: %s %s\n' \
+		"$package_id_org1" "$package_id_org2"
+}
+
+submit_asset_transaction() {
+	local function="$1" key="$2" value="$3"
+	local started=$SECONDS orderer_tls org1_tls org2_tls args invoke_output
+	orderer_tls=/run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem
+	org1_tls=/run/public/organizations/Org1/msp/tlscacerts/tls-ca.pem
+	org2_tls=/run/public/organizations/Org2/msp/tlscacerts/tls-ca.pem
+	printf -v args '{"function":"%s","Args":["%s","%s"]}' "$function" "$key" "$value"
+	if ! invoke_output="$(run_cli cli-org1 client peer chaincode invoke \
+		-o orderer0.ordererorg.pactway.local:7050 --tls --cafile "$orderer_tls" \
+		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" -c "$args" \
+		--peerAddresses peer0.org1.pactway.local:7051 --tlsRootCertFiles "$org1_tls" \
+		--peerAddresses peer0.org2.pactway.local:8051 --tlsRootCertFiles "$org2_tls" \
+		--waitForEvent --waitForEventTimeout 60s 2>&1)"; then
+		fail "$function invoke failed: $invoke_output"
+	fi
+
+	local -a committed_txids
+	mapfile -t committed_txids < <(
+		grep -Eo 'txid \[[[:xdigit:]]{64}\] committed with status \(VALID\)' <<<"$invoke_output" |
+			sed -E 's/txid \[([[:xdigit:]]{64})\].*/\1/' |
+			sort -u
+	)
+	[[ "${#committed_txids[@]}" -eq 1 ]] ||
+		fail "$function did not produce exactly one committed transaction ID: $invoke_output"
+	local txid="${committed_txids[0]}"
+
+	local org1_value org2_value
+	org1_value="$(run_cli cli-org1 client peer chaincode query \
+		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
+		-c "{\"function\":\"Get\",\"Args\":[\"$key\"]}")"
+	org2_value="$(run_cli cli-org2 client peer chaincode query \
+		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
+		-c "{\"function\":\"Get\",\"Args\":[\"$key\"]}")"
+	[[ "$org1_value" == "$value" ]] ||
+		fail "Org1 query after $txid returned unexpected asset value: $org1_value"
+	[[ "$org2_value" == "$value" ]] ||
+		fail "Org2 query after $txid returned unexpected asset value: $org2_value"
+
+	printf '%s %s\n' "$txid" "$function" >> "$RUN_DIR/evidence/transaction-ids.txt"
+	CURRENT_STATE_KEY="$key"
+	CURRENT_STATE_VALUE="$value"
+	printf '%s\n' "$CURRENT_STATE_KEY" > "$RUN_DIR/current-state-key"
+	printf '%s\n' "$CURRENT_STATE_VALUE" > "$RUN_DIR/current-state-value"
+	local report_name="transaction-$txid.json"
+	verify_evidence "$txid" "$key" "$value" "$org1_value" "$org2_value" "$report_name"
+	if [[ "$function" == Set ]]; then
+		cp -- "$RUN_DIR/evidence/$report_name" "$RUN_DIR/evidence/transaction-verification.json"
+	fi
+	local sample_number
+	sample_number="$(grep -c . "$RUN_DIR/evidence/transaction-ids.txt")"
+	record_duration "transaction_${sample_number}_${function}" "$started"
+	printf 'Both peers committed transaction %s and read %s=%s.\n' "$txid" "$key" "$value"
 }
 
 invoke_asset() {
 	load_active
 	local started=$SECONDS
-	[[ -n "$CHAINCODE_ID" ]] || fail "chaincode is not deployed; run deploy first"
+	[[ -n "$CHAINCODE_ID_ORG1" && -n "$CHAINCODE_ID_ORG2" ]] ||
+		fail "chaincode is not deployed; run deploy first"
 	require_isolated_profile
 	wait_healthy
-
-	local orderer_tls=/run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem
-	local org1_tls=/run/public/organizations/Org1/msp/tlscacerts/tls-ca.pem
-	local org2_tls=/run/public/organizations/Org2/msp/tlscacerts/tls-ca.pem
-	local args='{"function":"InitAsset","Args":["pq3-asset","initial-value"]}'
-	run_cli cli-org1 client peer chaincode invoke \
-		-o orderer0.ordererorg.pactway.local:7050 --tls --cafile "$orderer_tls" \
-		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" -c "$args" \
-		--peerAddresses peer0.org1.pactway.local:7051 --tlsRootCertFiles "$org1_tls" \
-		--peerAddresses peer0.org2.pactway.local:8051 --tlsRootCertFiles "$org2_tls" \
-		--waitForEvent --waitForEventTimeout 60s
-	local org1_value org2_value
-	org1_value="$(run_cli cli-org1 client peer chaincode query \
-		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
-		-c '{"function":"Get","Args":["pq3-asset"]}')"
-	org2_value="$(run_cli cli-org2 client peer chaincode query \
-		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
-		-c '{"function":"Get","Args":["pq3-asset"]}')"
-	[[ "$org1_value" == *initial-value* ]] ||
-		fail "Org1 query returned unexpected asset value: $org1_value"
-	[[ "$org2_value" == *initial-value* ]] ||
-		fail "Org2 query returned unexpected asset value: $org2_value"
-	printf 'Both peers read the committed asset value: %s\n' "$org1_value"
-	verify_evidence
+	mkdir -p -- "$RUN_DIR/evidence"
+	CURRENT_STATE_KEY="pq3-asset-$(date -u +%Y%m%d%H%M%S)-$$-$RANDOM"
+	submit_asset_transaction InitAsset "$CURRENT_STATE_KEY" initial-value
+	submit_asset_transaction Set "$CURRENT_STATE_KEY" updated-value-1
 	record_duration invoke_and_verify "$started"
 }
 
 reject_missing_endorsement() {
 	load_active
-	[[ -n "$CHAINCODE_ID" ]] || fail "chaincode is not deployed; run deploy first"
+	[[ -n "$CHAINCODE_ID_ORG1" && -n "$CHAINCODE_ID_ORG2" ]] ||
+		fail "chaincode is not deployed; run deploy first"
+	[[ -n "$CURRENT_STATE_KEY" && -n "$CURRENT_STATE_VALUE" ]] ||
+		fail "no successful asset transaction is available for comparison"
 	require_isolated_profile
 	wait_healthy
 
-	local before after invoke_output invoke_status verification_output
-	before="$(run_cli cli-org1 client peer chaincode query \
+	local before_org1 before_org2 after_org1 after_org2 invoke_output invoke_status verification_output txid
+	before_org1="$(run_cli cli-org1 client peer chaincode query \
 		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
-		-c '{"function":"Get","Args":["pq3-asset"]}')"
+		-c "{\"function\":\"Get\",\"Args\":[\"$CURRENT_STATE_KEY\"]}")"
+	before_org2="$(run_cli cli-org2 client peer chaincode query \
+		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
+		-c "{\"function\":\"Get\",\"Args\":[\"$CURRENT_STATE_KEY\"]}")"
+	[[ "$before_org1" == "$CURRENT_STATE_VALUE" && "$before_org2" == "$CURRENT_STATE_VALUE" ]] ||
+		fail "peer state before negative invocation was unexpected: Org1=$before_org1 Org2=$before_org2"
 	if invoke_output="$(run_cli cli-org1 client peer chaincode invoke \
 		-o orderer0.ordererorg.pactway.local:7050 --tls \
 		--cafile /run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem \
@@ -456,25 +541,43 @@ reject_missing_endorsement() {
 	else
 		invoke_status=$?
 	fi
-	after="$(run_cli cli-org1 client peer chaincode query \
+	after_org1="$(run_cli cli-org1 client peer chaincode query \
 		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
-		-c '{"function":"Get","Args":["pq3-asset"]}')"
-	[[ "$before" == "$after" ]] ||
-		fail "single-organization endorsement changed committed state: before=$before after=$after"
-	if verification_output="$(verify_evidence missing-endorsement-verification.txt 2>&1)"; then
-		fail "evidence verifier accepted a transaction missing Org2MSP endorsement"
+		-c "{\"function\":\"Get\",\"Args\":[\"$CURRENT_STATE_KEY\"]}")"
+	after_org2="$(run_cli cli-org2 client peer chaincode query \
+		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
+		-c "{\"function\":\"Get\",\"Args\":[\"$CURRENT_STATE_KEY\"]}")"
+	[[ "$before_org1" == "$after_org1" && "$before_org2" == "$after_org2" ]] ||
+		fail "single-organization endorsement changed committed state: before=($before_org1,$before_org2) after=($after_org1,$after_org2)"
+	[[ "$invoke_output" == *"ENDORSEMENT_POLICY_FAILURE"* ]] ||
+		fail "single-organization invoke did not report endorsement policy failure: $invoke_output"
+	local -a rejected_txids
+	mapfile -t rejected_txids < <(
+		grep -Eo 'txid \[[[:xdigit:]]{64}\] committed with status \(ENDORSEMENT_POLICY_FAILURE\)' <<<"$invoke_output" |
+			sed -E 's/txid \[([[:xdigit:]]{64})\].*/\1/' |
+			sort -u
+	)
+	[[ "${#rejected_txids[@]}" -eq 1 ]] ||
+		fail "single-organization invocation did not identify exactly one rejected transaction: $invoke_output"
+	txid="${rejected_txids[0]}"
+	if verification_output="$(verify_evidence "$txid" "$CURRENT_STATE_KEY" "$CURRENT_STATE_VALUE" \
+		"$after_org1" "$after_org2" missing-endorsement-verification.json 2>&1)"; then
+		fail "evidence verifier accepted invalid transaction $txid"
 	fi
-	grep -Fq "missing endorsement from Org2MSP" <<<"$verification_output" ||
-		fail "missing-endorsement evidence failed for an unexpected reason: $verification_output"
+	grep -Fq "validation code ENDORSEMENT_POLICY_FAILURE" <<<"$verification_output" ||
+		fail "invalid transaction was rejected for an unexpected reason: $verification_output"
 
 	{
+		printf 'tx_id=%s\n' "$txid"
 		printf 'single_endorser_invoke_exit_code=%s\n' "$invoke_status"
 		printf 'single_endorser_invoke_output=%s\n' "$invoke_output"
-		printf 'state_before=%s\n' "$before"
-		printf 'state_after=%s\n' "$after"
+		printf 'state_before_org1=%s\n' "$before_org1"
+		printf 'state_before_org2=%s\n' "$before_org2"
+		printf 'state_after_org1=%s\n' "$after_org1"
+		printf 'state_after_org2=%s\n' "$after_org2"
 		printf 'verifier_rejection=%s\n' "$verification_output"
 	} > "$RUN_DIR/evidence/missing-endorsement.txt"
-	printf 'Rejected single-org endorsement; both the state check and byte-level verifier confirmed Org2MSP was required.\n'
+	printf 'Rejected transaction %s with ENDORSEMENT_POLICY_FAILURE; both peer ledgers retained the prior value.\n' "$txid"
 }
 
 assert_persisted_network_state() {
@@ -493,11 +596,13 @@ assert_persisted_network_state() {
 		--client-key /run/orderer-tls/client.key)"
 	grep -Fq "\"name\": \"$CHANNEL_ID\"" <<<"$orderer_channels" ||
 		fail "orderer lost $CHANNEL_ID after $stage"
+	[[ -n "$CURRENT_STATE_KEY" && -n "$CURRENT_STATE_VALUE" ]] ||
+		fail "no committed asset state is available after $stage"
 	for service in cli-org1 cli-org2; do
 		value="$(run_cli "$service" client peer chaincode query \
 			-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
-			-c '{"function":"Get","Args":["pq3-asset"]}')"
-		[[ "$value" == *initial-value* ]] ||
+			-c "{\"function\":\"Get\",\"Args\":[\"$CURRENT_STATE_KEY\"]}")"
+		[[ "$value" == "$CURRENT_STATE_VALUE" ]] ||
 			fail "$service returned unexpected state after $stage: $value"
 	done
 	printf '%s: channel active and state preserved (%s)\n' "$stage" "$value"
@@ -507,7 +612,8 @@ exercise_recovery() {
 	load_active
 	local started=$SECONDS
 	require_isolated_profile
-	[[ -n "$CHAINCODE_ID" ]] || fail "chaincode is not deployed; run deploy first"
+	[[ -n "$CHAINCODE_ID_ORG1" && -n "$CHAINCODE_ID_ORG2" ]] ||
+		fail "chaincode is not deployed; run deploy first"
 	assert_persisted_network_state "before lifecycle cycle"
 	stop_network
 	start_network
@@ -519,9 +625,11 @@ exercise_recovery() {
 	{
 		printf 'run_id=%s\n' "$RUN_ID"
 		printf 'channel_id=%s\n' "$CHANNEL_ID"
-		printf 'chaincode_id=%s\n' "$CHAINCODE_ID"
+		printf 'chaincode_id_org1=%s\n' "$CHAINCODE_ID_ORG1"
+		printf 'chaincode_id_org2=%s\n' "$CHAINCODE_ID_ORG2"
 		printf 'lifecycle=stop,start,restart,resume\n'
-		printf 'both_peer_state=initial-value\n'
+		printf 'both_peer_state_key=%s\n' "$CURRENT_STATE_KEY"
+		printf 'both_peer_state=%s\n' "$CURRENT_STATE_VALUE"
 	} > "$RUN_DIR/evidence/recovery.txt"
 	record_duration recovery_cycle "$started"
 }
@@ -529,30 +637,46 @@ exercise_recovery() {
 verify_evidence() {
 	load_active
 	require_isolated_profile
-	[[ -n "$CHAINCODE_ID" ]] || fail "chaincode is not deployed; run deploy first"
-	local report_name="${1:-transaction-verification.json}"
+	[[ -n "$CHAINCODE_ID_ORG1" && -n "$CHAINCODE_ID_ORG2" ]] ||
+		fail "chaincode is not deployed; run deploy first"
+	local txid="${1:-}" state_key="${2:-}" expected_value="${3:-}"
+	local org1_state="${4:-}" org2_state="${5:-}"
+	local report_name="${6:-transaction-verification.json}"
+	[[ "$txid" =~ ^[[:xdigit:]]{64}$ ]] || fail "a transaction ID is required for verification"
+	[[ -n "$state_key" ]] || fail "the state key is required for verification"
+	[[ -n "$expected_value" ]] || fail "the expected state value is required for verification"
 	[[ "$report_name" =~ ^[A-Za-z0-9._-]+$ ]] || fail "invalid evidence report name"
 	mkdir -p -- "$RUN_DIR/evidence"
-	go -C "$ROOT" build -mod=vendor -trimpath -buildvcs=false \
-		-o "$ROOT/build/pq3/pq3-verify" ./cmd/pq3-verify
-	cp -- "$ROOT/build/pq3/pq3-verify" "$RUN_DIR/tools/pq3-verify"
-	TOOLS_IMAGE="$DOCKER_NAMESPACE/tools:$IMAGE_TAG"
-	build_tools_image
-	compose run --rm --no-deps \
-		--volume "$RUN_DIR/evidence:/run/evidence" \
-		-e CORE_PEER_MSPCONFIGPATH=/run/msp/admin cli-org1 \
-		peer channel fetch newest /run/evidence/latest.block \
-		-c "$CHANNEL_ID" -o orderer0.ordererorg.pactway.local:7050 \
-		--tls --cafile /run/public/organizations/OrdererOrg/msp/tlscacerts/tls-ca.pem
+	[[ -n "$org1_state" && -n "$org2_state" ]] ||
+		fail "state reads from both peers are required for transaction verification"
+	local block_file="$RUN_DIR/evidence/block-$txid.hex"
+	local org1_transaction_file="$RUN_DIR/evidence/org1-transaction-$txid.hex"
+	local org2_transaction_file="$RUN_DIR/evidence/org2-transaction-$txid.hex"
+	local query_block query_transaction
+	printf -v query_block '{"function":"GetBlockByTxID","Args":["%s","%s"]}' "$CHANNEL_ID" "$txid"
+	printf -v query_transaction '{"function":"GetTransactionByID","Args":["%s","%s"]}' "$CHANNEL_ID" "$txid"
+	run_cli cli-org1 admin peer chaincode query \
+		-C "$CHANNEL_ID" -n qscc -c "$query_block" --hex > "$block_file"
+	run_cli cli-org1 admin peer chaincode query \
+		-C "$CHANNEL_ID" -n qscc -c "$query_transaction" --hex > "$org1_transaction_file"
+	run_cli cli-org2 admin peer chaincode query \
+		-C "$CHANNEL_ID" -n qscc -c "$query_transaction" --hex > "$org2_transaction_file"
 	compose run --rm --no-deps \
 		--volume "$RUN_DIR/evidence:/run/evidence" \
 		-e PACTWAY_HYBRID_PROFILE="$PROFILE" \
 		-e PACTWAY_ISOLATED_DEVELOPMENT=true \
 		--entrypoint /usr/local/bin/pq3-verify cli-orderer-admin \
 		--config-block /run/public/genesis.block \
-		--block /run/evidence/latest.block \
+		--block "/run/evidence/block-$txid.hex" \
 		--require-chaincode "$CHAINCODE_NAME" \
-		--require-orgs Org1MSP,Org2MSP |
+		--require-orgs Org1MSP,Org2MSP \
+		--tx-id "$txid" \
+		--processed-transaction-org1 "/run/evidence/org1-transaction-$txid.hex" \
+		--processed-transaction-org2 "/run/evidence/org2-transaction-$txid.hex" \
+		--require-state-key "$state_key" \
+		--require-state-value "$expected_value" \
+		--org1-state "$org1_state" \
+		--org2-state "$org2_state" |
 		tee "$RUN_DIR/evidence/$report_name"
 }
 
@@ -581,9 +705,29 @@ restart_network() {
 resume_network() {
 	load_active
 	local services=(orderer peer-org1 peer-org2)
-	[[ -n "$CHAINCODE_ID" ]] && services+=(ccaas)
+	if [[ -n "$CHAINCODE_ID_ORG1" && -n "$CHAINCODE_ID_ORG2" ]]; then
+		services+=(ccaas-org1 ccaas-org2)
+	fi
 	compose up --detach --wait --wait-timeout 180 --pull never "${services[@]}"
 	wait_healthy
+}
+
+verify_latest_transaction() {
+	load_active
+	[[ -f "$RUN_DIR/evidence/transaction-ids.txt" ]] ||
+		fail "no successful transaction evidence is available; run invoke first"
+	local txid org1_state org2_state
+	txid="$(tail -n1 "$RUN_DIR/evidence/transaction-ids.txt" | cut -d ' ' -f1)"
+	[[ -n "$CURRENT_STATE_KEY" && -n "$CURRENT_STATE_VALUE" ]] ||
+		fail "the latest committed state is unavailable"
+	org1_state="$(run_cli cli-org1 client peer chaincode query \
+		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
+		-c "{\"function\":\"Get\",\"Args\":[\"$CURRENT_STATE_KEY\"]}")"
+	org2_state="$(run_cli cli-org2 client peer chaincode query \
+		-C "$CHANNEL_ID" -n "$CHAINCODE_NAME" \
+		-c "{\"function\":\"Get\",\"Args\":[\"$CURRENT_STATE_KEY\"]}")"
+	verify_evidence "$txid" "$CURRENT_STATE_KEY" "$CURRENT_STATE_VALUE" \
+		"$org1_state" "$org2_state" transaction-verification.json
 }
 
 reset_network() {
@@ -611,7 +755,7 @@ Commands:
   invoke   Submit a two-peer-endorsed transaction and verify state at both peers
   negative-endorsement  Verify a single-org endorsement cannot update state
   recovery   Exercise stop/start/restart/resume while preserving ledger state
-  verify   Fetch and cryptographically verify the latest transaction block
+  verify   Verify the latest transaction and peer-ledger commit evidence
   health   Show node health and wait for node health checks
   status   Show Compose service status
   stop     Stop this run without deleting credentials, configuration, or ledgers
@@ -646,7 +790,7 @@ case "$command" in
 		;;
 	verify)
 		shift
-		verify_evidence
+		verify_latest_transaction
 		;;
 	health)
 		shift

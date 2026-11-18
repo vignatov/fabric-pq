@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,6 +20,8 @@ import (
 
 	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset"
+	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset/kvrwset"
 	mspprotos "github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	peer "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/channelconfig"
@@ -31,10 +34,17 @@ import (
 
 type result struct {
 	ChannelID                  string   `json:"channel_id"`
+	TxID                       string   `json:"tx_id"`
 	BlockNumber                uint64   `json:"block_number"`
 	BlockSignatureValid        bool     `json:"block_signature_valid"`
 	HybridChannelRequired      bool     `json:"hybrid_channel_required"`
 	TransactionStatusAvailable bool     `json:"transaction_status_available"`
+	Org1ValidationCode         string   `json:"org1_validation_code"`
+	Org2ValidationCode         string   `json:"org2_validation_code"`
+	StateKey                   string   `json:"state_key"`
+	StateValue                 string   `json:"state_value"`
+	Org1State                  string   `json:"org1_state"`
+	Org2State                  string   `json:"org2_state"`
 	TransactionsChecked        int      `json:"transactions_checked"`
 	VerifiedEndorsements       int      `json:"verified_endorsements"`
 	VerifiedChaincode          string   `json:"verified_chaincode"`
@@ -43,12 +53,25 @@ type result struct {
 
 func main() {
 	configPath := flag.String("config-block", "", "path to the channel config block")
-	blockPath := flag.String("block", "", "path to the transaction block")
+	blockPath := flag.String("block", "", "path to the hex-encoded committed transaction block")
 	chaincode := flag.String("require-chaincode", "", "require and verify a valid transaction for this chaincode")
 	orgs := flag.String("require-orgs", "", "comma-separated MSP IDs required to endorse the requested chaincode")
+	txID := flag.String("tx-id", "", "transaction ID to verify")
+	org1ProcessedPath := flag.String("processed-transaction-org1", "", "path to Org1 QSCC GetTransactionByID hex output")
+	org2ProcessedPath := flag.String("processed-transaction-org2", "", "path to Org2 QSCC GetTransactionByID hex output")
+	stateKey := flag.String("require-state-key", "", "require this key in the transaction's endorsed write set")
+	stateValue := flag.String("require-state-value", "", "required value in the transaction's endorsed write set")
+	org1State := flag.String("org1-state", "", "state read from Org1 after commit")
+	org2State := flag.String("org2-state", "", "state read from Org2 after commit")
 	flag.Parse()
-	if *configPath == "" || *blockPath == "" || *chaincode == "" || *orgs == "" {
-		fail(errors.New("--config-block, --block, --require-chaincode, and --require-orgs are required"))
+	if *configPath == "" || *blockPath == "" || *chaincode == "" || *orgs == "" ||
+		*txID == "" || *org1ProcessedPath == "" || *org2ProcessedPath == "" ||
+		*stateKey == "" || *stateValue == "" {
+		fail(errors.New("--config-block, --block, --require-chaincode, --require-orgs, --tx-id, both processed-transaction files, and required state are required"))
+	}
+	if *org1State != *stateValue || *org2State != *stateValue {
+		fail(fmt.Errorf("peer state does not match required committed value %q: Org1=%q Org2=%q",
+			*stateValue, *org1State, *org2State))
 	}
 
 	if _, err := oqs.HybridCertificateProfileFromEnvironment(); err != nil {
@@ -58,7 +81,7 @@ func main() {
 		fail(fmt.Errorf("initialize BCCSP: %w", err))
 	}
 	configBlock := readBlock(*configPath)
-	block := readBlock(*blockPath)
+	block := readHexBlock(*blockPath)
 	if configBlock.GetHeader().GetNumber() != 0 {
 		fail(fmt.Errorf("config block number must be 0, got %d", configBlock.GetHeader().GetNumber()))
 	}
@@ -93,16 +116,12 @@ func main() {
 		fail(fmt.Errorf("verify transaction block signature: %w", err))
 	}
 
-	filterIndex := int(cb.BlockMetadataIndex_TRANSACTIONS_FILTER)
-	var validationFlags []byte
-	if len(block.GetMetadata().GetMetadata()) > filterIndex {
-		validationFlags = block.GetMetadata().GetMetadata()[filterIndex]
+	targetEnvelope, targetIndex, err := findCommittedTransaction(block, *txID)
+	if err != nil {
+		fail(err)
 	}
-	statusAvailable := len(validationFlags) == len(block.GetData().GetData())
-	if len(validationFlags) != 0 && !statusAvailable {
-		fail(fmt.Errorf("transaction validation filter has %d entries for %d envelopes",
-			len(validationFlags), len(block.GetData().GetData())))
-	}
+	org1ValidationCode := verifyProcessedTransaction(*org1ProcessedPath, *txID, targetEnvelope)
+	org2ValidationCode := verifyProcessedTransaction(*org2ProcessedPath, *txID, targetEnvelope)
 	requiredOrgs := splitSet(*orgs)
 	if len(requiredOrgs) == 0 {
 		fail(errors.New("--require-orgs must include at least one MSP ID"))
@@ -110,13 +129,20 @@ func main() {
 	mspManager := bundle.MSPManager()
 	verified := result{
 		ChannelID:                  channelID,
+		TxID:                       *txID,
 		BlockNumber:                block.GetHeader().GetNumber(),
 		BlockSignatureValid:        true,
 		HybridChannelRequired:      true,
-		TransactionStatusAvailable: statusAvailable,
+		TransactionStatusAvailable: true,
+		Org1ValidationCode:         org1ValidationCode.String(),
+		Org2ValidationCode:         org2ValidationCode.String(),
+		StateKey:                   *stateKey,
+		StateValue:                 *stateValue,
+		Org1State:                  *org1State,
+		Org2State:                  *org2State,
 	}
 	for txIndex, rawEnvelope := range block.GetData().GetData() {
-		if statusAvailable && peer.TxValidationCode(validationFlags[txIndex]) != peer.TxValidationCode_VALID {
+		if txIndex != targetIndex {
 			continue
 		}
 		envelope := &cb.Envelope{}
@@ -185,6 +211,11 @@ func main() {
 			chaincodeAction := &peer.ChaincodeAction{}
 			if err := proto.Unmarshal(responsePayload.GetExtension(), chaincodeAction); err != nil {
 				fail(fmt.Errorf("unmarshal chaincode action %d: %w", txIndex, err))
+			}
+			if chaincodeAction.GetChaincodeId().GetName() == *chaincode {
+				if err := verifyStateWrite(chaincodeAction.GetResults(), *chaincode, *stateKey, *stateValue); err != nil {
+					fail(fmt.Errorf("transaction %s state write: %w", *txID, err))
+				}
 			}
 			endorsingMSPs := make(map[string]struct{})
 			for endorsementIndex, endorsement := range actionPayload.GetAction().GetEndorsements() {
@@ -258,6 +289,129 @@ func readBlock(path string) *cb.Block {
 		fail(fmt.Errorf("parse block %s: %w", path, err))
 	}
 	return block
+}
+
+func readHexBlock(path string) *cb.Block {
+	raw := readHex(path)
+	block, err := protoutil.UnmarshalBlock(raw)
+	if err != nil {
+		fail(fmt.Errorf("parse hex-encoded block %s: %w", path, err))
+	}
+	return block
+}
+
+func readHex(path string) []byte {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fail(fmt.Errorf("read hex data %s: %w", path, err))
+	}
+	decoded, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		fail(fmt.Errorf("decode hex data %s: %w", path, err))
+	}
+	return decoded
+}
+
+func findCommittedTransaction(block *cb.Block, txID string) (*cb.Envelope, int, error) {
+	if block.GetHeader() == nil || block.GetData() == nil || block.GetMetadata() == nil {
+		return nil, -1, errors.New("committed block is missing header, data, or metadata")
+	}
+	filterIndex := int(cb.BlockMetadataIndex_TRANSACTIONS_FILTER)
+	if len(block.GetMetadata().GetMetadata()) <= filterIndex {
+		return nil, -1, errors.New("committed block has no transaction validation filter")
+	}
+	validationFlags := block.GetMetadata().GetMetadata()[filterIndex]
+	if len(validationFlags) == 0 {
+		return nil, -1, errors.New("committed block has no transaction validation filter")
+	}
+	if len(validationFlags) != len(block.GetData().GetData()) {
+		return nil, -1, fmt.Errorf("transaction validation filter has %d entries for %d envelopes",
+			len(validationFlags), len(block.GetData().GetData()))
+	}
+	matchingIndex := -1
+	var matchingEnvelope *cb.Envelope
+	for index, rawEnvelope := range block.GetData().GetData() {
+		candidateTxID, err := protoutil.GetOrComputeTxIDFromEnvelope(rawEnvelope)
+		if err != nil {
+			return nil, -1, fmt.Errorf("read transaction ID at index %d: %w", index, err)
+		}
+		if candidateTxID != txID {
+			continue
+		}
+		if matchingIndex >= 0 {
+			return nil, -1, fmt.Errorf("transaction ID %s appears more than once in block %d", txID, block.GetHeader().GetNumber())
+		}
+		matchingEnvelope, err = protoutil.GetEnvelopeFromBlock(rawEnvelope)
+		if err != nil {
+			return nil, -1, fmt.Errorf("unmarshal transaction %s: %w", txID, err)
+		}
+		matchingIndex = index
+	}
+	if matchingIndex < 0 {
+		return nil, -1, fmt.Errorf("transaction %s is not present in committed block %d", txID, block.GetHeader().GetNumber())
+	}
+	code := peer.TxValidationCode(validationFlags[matchingIndex])
+	if code != peer.TxValidationCode_VALID {
+		return nil, -1, fmt.Errorf("transaction %s has validation code %s in committed block", txID, code.String())
+	}
+	return matchingEnvelope, matchingIndex, nil
+}
+
+func verifyProcessedTransaction(path, txID string, expectedEnvelope *cb.Envelope) peer.TxValidationCode {
+	raw := readHex(path)
+	code, err := validateProcessedTransaction(raw, txID, expectedEnvelope)
+	if err != nil {
+		fail(fmt.Errorf("peer ledger transaction %s (%s): %w", txID, path, err))
+	}
+	return code
+}
+
+func validateProcessedTransaction(raw []byte, txID string, expectedEnvelope *cb.Envelope) (peer.TxValidationCode, error) {
+	processed := &peer.ProcessedTransaction{}
+	if err := proto.Unmarshal(raw, processed); err != nil {
+		return peer.TxValidationCode_INVALID_OTHER_REASON, fmt.Errorf("parse processed transaction: %w", err)
+	}
+	code := peer.TxValidationCode(processed.GetValidationCode())
+	if code != peer.TxValidationCode_VALID {
+		return code, fmt.Errorf("has validation code %s", code.String())
+	}
+	if !proto.Equal(processed.GetTransactionEnvelope(), expectedEnvelope) {
+		return code, errors.New("envelope does not match the committed block transaction")
+	}
+	envelopeBytes, err := proto.Marshal(processed.GetTransactionEnvelope())
+	if err != nil {
+		return code, fmt.Errorf("marshal envelope: %w", err)
+	}
+	processedTxID, err := protoutil.GetOrComputeTxIDFromEnvelope(envelopeBytes)
+	if err != nil {
+		return code, fmt.Errorf("read transaction ID: %w", err)
+	}
+	if processedTxID != txID {
+		return code, fmt.Errorf("returned transaction %s, expected %s", processedTxID, txID)
+	}
+	return code, nil
+}
+
+func verifyStateWrite(results []byte, chaincode, key, value string) error {
+	transactionRWSet := &rwset.TxReadWriteSet{}
+	if err := proto.Unmarshal(results, transactionRWSet); err != nil {
+		return fmt.Errorf("unmarshal endorsed read-write set: %w", err)
+	}
+	for _, namespaceRWSet := range transactionRWSet.GetNsRwset() {
+		if namespaceRWSet.GetNamespace() != chaincode {
+			continue
+		}
+		kvRWSet := &kvrwset.KVRWSet{}
+		if err := proto.Unmarshal(namespaceRWSet.GetRwset(), kvRWSet); err != nil {
+			return fmt.Errorf("unmarshal %s key-value read-write set: %w", chaincode, err)
+		}
+		for _, write := range kvRWSet.GetWrites() {
+			if write.GetKey() == key && !write.GetIsDelete() && bytes.Equal(write.GetValue(), []byte(value)) {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("endorsed transaction does not write %q=%q in chaincode %s", key, value, chaincode)
 }
 
 func verifyBlockDataHash(block *cb.Block) error {
