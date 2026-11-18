@@ -820,7 +820,7 @@ verify_upstream_peer() {
 		printf 'Unable to query the upstream peer version.\n' >&2
 		return 1
 	fi
-	if ! grep -Eq "^[[:space:]]*Version: $FABRIC_VERSION([[:space:]]|$)" <<<"$version_output"; then
+	if ! grep -Eq "^[[:space:]]*Version: v?$FABRIC_VERSION([[:space:]]|$)" <<<"$version_output"; then
 		printf 'The upstream peer must report Fabric version %s.\n' "$FABRIC_VERSION" >&2
 		return 1
 	fi
