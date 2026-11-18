@@ -24,7 +24,7 @@ import (
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
-	"github.com/hyperledger/fabric/pq-crypto"
+	oqs "github.com/hyperledger/fabric/pq-crypto"
 	"github.com/hyperledger/fabric/protoutil"
 	"google.golang.org/protobuf/proto"
 )
@@ -284,7 +284,7 @@ func withTimestamp(identity msp.Identity, timestamp time.Time) (msp.Identity, er
 
 func splitSet(value string) map[string]struct{} {
 	set := make(map[string]struct{})
-	for _, entry := range strings.Split(value, ",") {
+	for entry := range strings.SplitSeq(value, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry != "" {
 			set[entry] = struct{}{}
