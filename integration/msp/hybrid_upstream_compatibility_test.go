@@ -61,12 +61,17 @@ var _ = Describe("Upstream channel capability compatibility", func() {
 		_, err = GinkgoWriter.Write([]byte("PQ3_UPSTREAM_COMPATIBILITY_PASS\n"))
 		Expect(err).NotTo(HaveOccurred())
 	})
+})
 
+var _ = Describe("Permanent profile compatibility with unsupported binaries", func() {
 	It("rejects permanent-profile channels with unsupported PQ2 and upstream binaries", func() {
 		unsupportedPQ2Peer := os.Getenv("PACTWAY_UNSUPPORTED_PQ2_PEER")
 		upstreamPeer := os.Getenv("PACTWAY_UPSTREAM_PEER")
 		if unsupportedPQ2Peer == "" && upstreamPeer == "" {
-			Skip("set PACTWAY_UNSUPPORTED_PQ2_PEER or PACTWAY_UPSTREAM_PEER to a verified peer binary")
+			Skip("set PACTWAY_UNSUPPORTED_PQ2_PEER and PACTWAY_UPSTREAM_PEER to verified peer binaries")
+		}
+		if unsupportedPQ2Peer == "" || upstreamPeer == "" {
+			Fail("both PACTWAY_UNSUPPORTED_PQ2_PEER and PACTWAY_UPSTREAM_PEER must name verified peer binaries")
 		}
 
 		testDir, err := os.MkdirTemp("", "upstream-channel-capability")
@@ -99,9 +104,6 @@ var _ = Describe("Upstream channel capability compatibility", func() {
 			{name: "unsupported PQ2", binary: unsupportedPQ2Peer},
 			{name: "unmodified upstream Fabric", binary: upstreamPeer},
 		} {
-			if test.binary == "" {
-				continue
-			}
 			By("checking " + test.name)
 			expectUnsupportedPeerToRejectCapability(
 				test.binary,

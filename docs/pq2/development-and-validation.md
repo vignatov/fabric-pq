@@ -804,7 +804,7 @@ its archive and extracted binary hashes are listed above.
 The compatibility tests were rerun on the current branch with both binaries:
 
 ```text
-PATH=/usr/local/go/bin:/usr/bin:/bin GOFLAGS=-p=1 PACTWAY_ISOLATED_DEVELOPMENT=true PACTWAY_HYBRID_PROFILE=rfc5612-test-only-v1 PACTWAY_UNSUPPORTED_PQ2_PEER=/tmp/pq25-unsupported-pq2/peer PACTWAY_UPSTREAM_PEER=/tmp/pq25-upstream/bin/peer go test -count=1 ./integration/msp -run ^TestMSP$ -ginkgo.focus="Upstream channel capability compatibility" -timeout=20m -v
+PATH=/usr/local/go/bin:/usr/bin:/bin GOFLAGS=-p=1 PACTWAY_ISOLATED_DEVELOPMENT=true PACTWAY_HYBRID_PROFILE=rfc5612-test-only-v1 PACTWAY_UNSUPPORTED_PQ2_PEER=/tmp/pq25-unsupported-pq2/peer PACTWAY_UPSTREAM_PEER=/tmp/pq25-upstream/bin/peer go test -count=1 ./integration/msp -run ^TestMSP$ -ginkgo.focus="Upstream channel capability compatibility|Permanent profile compatibility with unsupported binaries" -timeout=20m -v
 ```
 
 Result: passed; the temporary-profile compatibility case rejected the legacy
@@ -814,6 +814,10 @@ binaries (2 passed, 8 unrelated specs skipped). The temporary-profile case
 also preserves the `PQ3_UPSTREAM_COMPATIBILITY_PASS` marker consumed by the
 existing PQ3 acceptance gate; the permanent-profile case emits the distinct
 `PQ25_UNSUPPORTED_BINARY_COMPATIBILITY_PASS` marker.
+
+The permanent-profile test was also run with only `PACTWAY_UPSTREAM_PEER` set.
+It failed with the required message that both binaries must be supplied, and
+did not emit the permanent-profile pass marker.
 
 The release guard was also checked with
 `bash ci/scripts/check_release_hybrid_profile.sh`. It returned the expected

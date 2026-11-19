@@ -126,6 +126,87 @@ func testHybridCertificateV1GenerationAndIssuerChain(t *testing.T, profileName s
 	require.Error(t, ValidateHybridCertificateChain(chains[0], otherProfile, true))
 }
 
+func TestHybridCertificateRejectsOtherRegisteredProfileExtensions(t *testing.T) {
+	for profileIndex, profileName := range []string{TemporaryHybridProfileV1, PermanentHybridProfileV1} {
+		t.Run(profileName, func(t *testing.T) {
+			profile, err := HybridCertificateProfileByName(profileName, profileUseTest)
+			require.NoError(t, err)
+
+			otherProfileName := TemporaryHybridProfileV1
+			if profileName == TemporaryHybridProfileV1 {
+				otherProfileName = PermanentHybridProfileV1
+			}
+			otherProfile, err := HybridCertificateProfileByName(otherProfileName, profileUseTest)
+			require.NoError(t, err)
+
+			otherClassical := feasibilityECDSAKey(int64(30 + profileIndex))
+			otherPQ := feasibilityMLDSAKey(t, byte(0x30+profileIndex))
+			otherTemplate := feasibilityCertificateTemplate(
+				int64(30+profileIndex),
+				"other registered profile",
+				otherClassical,
+				true,
+			)
+			otherDER, err := CreateHybridCertificate(
+				rand.Reader,
+				otherProfile,
+				otherTemplate,
+				otherTemplate,
+				&otherClassical.PublicKey,
+				otherClassical,
+				otherPQ.PublicKey,
+				otherPQ,
+			)
+			require.NoError(t, err)
+			otherCertificate, err := x509.ParseCertificate(otherDER)
+			require.NoError(t, err)
+
+			require.ErrorContains(
+				t,
+				ValidateHybridCertificateChain([]*x509.Certificate{otherCertificate}, profile, false),
+				"different registered profile",
+			)
+
+			otherExtensions := make([]pkix.Extension, 0, 2)
+			for _, extension := range otherCertificate.Extensions {
+				if isWithinOIDNamespace(extension.Id, otherProfile.namespaceOID) {
+					otherExtensions = append(otherExtensions, extension)
+				}
+			}
+			require.Len(t, otherExtensions, 2)
+
+			classical := feasibilityECDSAKey(int64(40 + profileIndex))
+			pq := feasibilityMLDSAKey(t, byte(0x40+profileIndex))
+			template := feasibilityCertificateTemplate(
+				int64(40+profileIndex),
+				"mixed registered profiles",
+				classical,
+				true,
+			)
+			template.ExtraExtensions = append(template.ExtraExtensions, otherExtensions...)
+			mixedDER, err := CreateHybridCertificate(
+				rand.Reader,
+				profile,
+				template,
+				template,
+				&classical.PublicKey,
+				classical,
+				pq.PublicKey,
+				pq,
+			)
+			require.NoError(t, err)
+			mixedCertificate, err := x509.ParseCertificate(mixedDER)
+			require.NoError(t, err)
+
+			require.ErrorContains(
+				t,
+				ValidateHybridCertificateChain([]*x509.Certificate{mixedCertificate}, profile, true),
+				"different registered profile",
+			)
+		})
+	}
+}
+
 func TestHybridCertificateV1RequiresSelfIssuedTrustAnchor(t *testing.T) {
 	profile, err := HybridCertificateProfileByName(TemporaryHybridProfileV1, profileUseTest)
 	require.NoError(t, err)

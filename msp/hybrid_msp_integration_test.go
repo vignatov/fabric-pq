@@ -87,7 +87,7 @@ func TestHybridMSPRejectsCredentialsFromTheOtherProfile(t *testing.T) {
 			t.Setenv("PACTWAY_HYBRID_PROFILE", test.selected)
 			instance, err := newBccspMsp(MSPv1_0, cryptoProvider)
 			require.NoError(t, err)
-			require.ErrorContains(t, instance.Setup(mspConfig), "PQ-required MSP identity")
+			require.ErrorContains(t, instance.Setup(mspConfig), "different registered profile")
 		})
 	}
 }
