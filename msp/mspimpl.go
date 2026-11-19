@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -329,8 +330,8 @@ func (msp *bccspmsp) Setup(conf1 *m.MSPConfig) error {
 	return nil
 }
 
-// SetHybridRequired enables fail-closed hybrid certificate and signature
-// validation for identities belonging to an authenticated PQ-required channel.
+// SetHybridRequired enables hybrid validation for a local MSP using its
+// explicitly selected environment profile.
 func (msp *bccspmsp) SetHybridRequired(required bool) error {
 	if !required {
 		if msp.hybridRequired {
@@ -342,8 +343,33 @@ func (msp *bccspmsp) SetHybridRequired(required bool) error {
 	if err != nil {
 		return errors.WithMessage(err, "selecting the hybrid certificate profile")
 	}
+	return msp.setHybridProfile(profile)
+}
+
+// SetHybridProfile pins hybrid validation to the profile selected by an
+// authenticated channel capability. Local configuration may confirm, but not
+// override, that profile.
+func (msp *bccspmsp) SetHybridProfile(name string) error {
+	if name == "" {
+		return errors.New("authenticated channel hybrid certificate profile is required")
+	}
+	if localProfile := os.Getenv("PACTWAY_HYBRID_PROFILE"); localProfile != "" && localProfile != name {
+		return errors.Errorf(
+			"local hybrid certificate profile %q does not match authenticated channel profile %q",
+			localProfile,
+			name,
+		)
+	}
+	profile, err := oqs.HybridCertificateProfileByName(name, oqs.CurrentHybridProfileUse())
+	if err != nil {
+		return errors.WithMessage(err, "selecting the authenticated channel hybrid certificate profile")
+	}
+	return msp.setHybridProfile(profile)
+}
+
+func (msp *bccspmsp) setHybridProfile(profile oqs.HybridCertificateProfile) error {
 	if msp.hybridProfile != nil && msp.hybridProfile.Name() != profile.Name() {
-		return errors.New("hybrid certificate profile selection cannot be changed after MSP setup")
+		return errors.New("hybrid certificate profile selection conflicts with the configured MSP profile")
 	}
 	if err := msp.ValidateHybridSigner(); err != nil {
 		return err

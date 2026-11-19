@@ -149,6 +149,10 @@ func run(args []string) error {
 }
 
 func generateDemo(opts options, profile oqs.HybridCertificateProfile) error {
+	channelCapability, err := hybridProfileChannelCapability(profile.Name())
+	if err != nil {
+		return err
+	}
 	if opts.ordererPort == 0 {
 		return errors.New("orderer port must be nonzero")
 	}
@@ -198,7 +202,7 @@ func generateDemo(opts options, profile oqs.HybridCertificateProfile) error {
 		return err
 	}
 
-	genesisProfile.Capabilities = ensureCapability(genesisProfile.Capabilities, capabilities.PactwayHybridCertificateV1)
+	genesisProfile.Capabilities = ensureCapability(genesisProfile.Capabilities, channelCapability)
 	genesisProfile.Orderer.Addresses = nil
 	genesisProfile.Orderer.Organizations = []*genesisconfig.Organization{ordererOrg.profileOrganization()}
 	genesisProfile.Orderer.EtcdRaft.Consenters = []*etcdraft.Consenter{{
@@ -231,7 +235,7 @@ func generateDemo(opts options, profile oqs.HybridCertificateProfile) error {
 		FabricProfile:            opts.fabricProfile,
 		HybridProfile:            profile.Name(),
 		DevelopmentOnly:          profile.DevelopmentOnly(),
-		ChannelCapability:        capabilities.PactwayHybridCertificateV1,
+		ChannelCapability:        channelCapability,
 		Organizations:            []string{"Org1MSP", "Org2MSP", ordererMSPID},
 		GenesisSHA256:            hex.EncodeToString(digest[:]),
 		TLSTransport:             "classical ECDSA; enrollment certificates use the selected hybrid profile",
@@ -245,6 +249,17 @@ func generateDemo(opts options, profile oqs.HybridCertificateProfile) error {
 		return err
 	}
 	return nil
+}
+
+func hybridProfileChannelCapability(profile string) (string, error) {
+	switch profile {
+	case oqs.TemporaryHybridProfileV1:
+		return capabilities.PactwayHybridCertificateV1, nil
+	case oqs.PermanentHybridProfileV1:
+		return capabilities.PactwayHybridCertificatePactwayV1, nil
+	default:
+		return "", fmt.Errorf("unsupported hybrid certificate profile %q", profile)
+	}
 }
 
 func generateOrganization(

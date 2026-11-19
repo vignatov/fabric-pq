@@ -42,6 +42,13 @@ func (c testHybridChannelCapabilities) PactwayHybridCertificateV1() bool {
 	return c.required
 }
 
+func (c testHybridChannelCapabilities) PactwayHybridCertificateProfile() string {
+	if c.required {
+		return "rfc5612-test-only-v1"
+	}
+	return ""
+}
+
 type testHybridChannel struct {
 	channelconfig.Channel
 	required bool

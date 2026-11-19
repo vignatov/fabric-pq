@@ -22,6 +22,7 @@ import (
 
 const (
 	TemporaryHybridProfileV1 = "rfc5612-test-only-v1"
+	PermanentHybridProfileV1 = "pactway-hybrid-certificate-v1"
 	hybridCertificateDomain  = "Pactway-Hybrid-Certificate-v1"
 	hybridCertificateVersion = 1
 	hybridSignatureLength    = 3309
@@ -60,6 +61,13 @@ var hybridProfileRegistry = map[string]hybridProfileDefinition{
 		namespaceOID:    asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1},
 		profileKeyOID:   asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1, 1},
 		pqSignatureOID:  asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1, 2},
+		developmentOnly: true,
+	},
+	PermanentHybridProfileV1: {
+		version:         hybridCertificateVersion,
+		namespaceOID:    asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1},
+		profileKeyOID:   asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1, 1},
+		pqSignatureOID:  asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1, 2},
 		developmentOnly: true,
 	},
 }

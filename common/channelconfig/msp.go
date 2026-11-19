@@ -24,10 +24,10 @@ type pendingMSPConfig struct {
 
 // MSPConfigHandler
 type MSPConfigHandler struct {
-	version        msp.MSPVersion
-	idMap          map[string]*pendingMSPConfig
-	bccsp          bccsp.BCCSP
-	hybridRequired bool
+	version       msp.MSPVersion
+	idMap         map[string]*pendingMSPConfig
+	bccsp         bccsp.BCCSP
+	hybridProfile string
 }
 
 func NewMSPConfigHandler(mspVersion msp.MSPVersion, bccsp bccsp.BCCSP) *MSPConfigHandler {
@@ -45,7 +45,7 @@ func (bh *MSPConfigHandler) ProposeMSP(mspConfig *mspprotos.MSPConfig) (msp.MSP,
 
 	switch mspConfig.GetType() {
 	case int32(msp.FABRIC):
-		if bh.hybridRequired {
+		if bh.hybridProfile != "" {
 			config := &mspprotos.FabricMSPConfig{}
 			if err := proto.Unmarshal(mspConfig.GetConfig(), config); err != nil {
 				return nil, errors.WithMessage(err, "unmarshaling PQ-required Fabric MSP config")
@@ -63,12 +63,12 @@ func (bh *MSPConfigHandler) ProposeMSP(mspConfig *mspprotos.MSPConfig) (msp.MSP,
 		if err != nil {
 			return nil, errors.WithMessage(err, "creating the MSP manager failed")
 		}
-		if bh.hybridRequired {
-			hybridMSP, ok := mspInst.(interface{ SetHybridRequired(bool) error })
+		if bh.hybridProfile != "" {
+			hybridMSP, ok := mspInst.(interface{ SetHybridProfile(string) error })
 			if !ok {
 				return nil, errors.New("PQ-required channel MSP does not support Pactway hybrid certificates")
 			}
-			if err := hybridMSP.SetHybridRequired(true); err != nil {
+			if err := hybridMSP.SetHybridProfile(bh.hybridProfile); err != nil {
 				return nil, errors.WithMessage(err, "configuring PQ-required channel MSP")
 			}
 		}
@@ -79,7 +79,7 @@ func (bh *MSPConfigHandler) ProposeMSP(mspConfig *mspprotos.MSPConfig) (msp.MSP,
 			return nil, errors.WithMessage(err, "creating the MSP cache failed")
 		}
 	case int32(msp.IDEMIX):
-		if bh.hybridRequired {
+		if bh.hybridProfile != "" {
 			return nil, errors.New("PQ-required channel does not permit an Idemix MSP")
 		}
 		// create the idemix msp instance

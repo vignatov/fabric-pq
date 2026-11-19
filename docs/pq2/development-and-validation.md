@@ -47,12 +47,31 @@ establish independent trusted time, and is not a human security sign-off.
 
 ## Temporary-profile restriction
 
-The only currently registered profile is `rfc5612-test-only-v1`. Its
+The temporary registered profile is `rfc5612-test-only-v1`. Its
 `1.3.6.1.4.1.32473.1.1` and `.1.2` identifiers are temporary development/test
 fixtures. They are not Thinkstratum Ltd identifiers and must not be used in a
-released or externally deployed network. Production OIDs, final ASN.1, and
-production golden DER vectors remain pending the official PEN and profile
-approval.
+released or externally deployed network.
+
+The permanent profile is `pactway-hybrid-certificate-v1`, version 1, using
+Thinkstratum Ltd PEN `67732`:
+
+- Enterprise root: `1.3.6.1.4.1.67732`.
+- Pactway namespace: `1.3.6.1.4.1.67732.1`.
+- Profile/key extension: `1.3.6.1.4.1.67732.1.1`.
+- PQ-signature extension: `1.3.6.1.4.1.67732.1.2`.
+
+The authenticated `PactwayHybridCertificatePactwayV1` channel capability pins
+that exact profile, version, namespace, extension OIDs, and ML-DSA-65 algorithm
+requirements. `PactwayHybridCertificateV1` remains bound to the temporary
+profile. The distinct capability makes prior PQ2 and upstream binaries reject
+permanent-profile channels as unsupported. New binaries reject conflicting
+capabilities, local profile mismatches, and profile changes/removal in channel
+updates. No namespace fallback or in-place channel migration is supported.
+
+Permanent OID ownership is not production approval. Both profiles remain
+development-only, and permanent-profile generation and validation require
+isolated development. The release guard remains fail-closed while any
+development-only profile is registered.
 
 The release workflow runs `ci/scripts/check_release_hybrid_profile.sh` before
 building binaries or container images. It fails while any development-only
@@ -113,6 +132,48 @@ Before using the output:
 
 TLS and transport remain classical. This demo is not complete
 quantum-resistant network security.
+
+### Generate a fresh permanent-OID development network
+
+Permanent-profile artifacts are also restricted to isolated development.
+Generate a new output directory; do not reuse PQ3 or temporary-profile
+identities, MSPs, ledgers, or genesis material.
+
+```bash
+PACTWAY_HYBRID_PROFILE=pactway-hybrid-certificate-v1 \
+PACTWAY_ISOLATED_DEVELOPMENT=true go run ./cmd/pactway-pq-gen \
+  -output=pq2.5-permanent-demo \
+  -configtx-dir=sampleconfig \
+  -fabric-profile=SampleAppChannelEtcdRaft \
+  -channel-id=pactway-pq2.5-demo \
+  -hybrid-profile=pactway-hybrid-certificate-v1
+```
+
+Verify that `public/manifest.json` identifies
+`pactway-hybrid-certificate-v1`, sets `development_only` to `true`, and names
+`PactwayHybridCertificatePactwayV1`. Verify the genesis digest before
+distribution. Provision nodes only with their own fresh local MSP and TLS
+secrets. This procedure does not authorize external deployment.
+
+### Permanent-profile transition procedure
+
+1. Leave existing temporary-profile and PQ3 networks, identities, ledgers, and
+   configuration unchanged.
+2. Generate a new permanent-profile output directory using the command above.
+   Never reuse keys, certificates, MSP directories, or genesis material from
+   an existing network.
+3. Verify every generated enrollment chain against the permanent profile and
+   confirm the manifest's profile name, development-only status, channel
+   capability, and genesis digest.
+4. Provision a new isolated network using the fresh identities and genesis.
+   Every validating binary must support
+   `PactwayHybridCertificatePactwayV1`; prior PQ2 and upstream binaries are
+   expected to reject that channel as unsupported.
+5. Treat profile mismatch, an unrecognized capability, or an invalid chain as
+   a hard failure. Do not retry with the temporary namespace or update an
+   existing channel to switch profiles.
+6. Do not externally deploy generated artifacts. Permanent OIDs do not satisfy
+   the separate production profile, compatibility, and security approvals.
 
 Ordinary peer, orderer and client processes using these temporary-profile
 identities must explicitly select the same profile and opt into isolated use:
@@ -653,9 +714,9 @@ has occurred. This acceptance does not constitute production approval or PQ3
 authorization. The following gates remain open before production acceptance
 or external use:
 
-- Obtain the official Thinkstratum Ltd PEN, approve the permanent ASN.1/profile
-  and OIDs, regenerate all certificates/MSPs/genesis and production fixtures,
-  and rerun the complete acceptance suite and unsupported-binary gate.
+- Separately approve the permanent ASN.1/profile, compatibility behavior, and
+  security requirements before any production acceptance; the PEN allocation
+  itself is recorded above and does not satisfy those approvals.
 - Independently review the custom certificate profile and approve an enforceable
   time threat model. Submitter/orderer-controlled timestamps are not independent
   proof of signing or endorsement time; accurate receiver clocks and the
@@ -676,12 +737,102 @@ deploy temporary-profile artifacts, bypass the release guard, or begin PQ3.
 PQ3 must not start until the maintainer explicitly reviews and accepts the PQ2
 handoff and separately authorizes the next phase. PQ2's development-only
 acceptance is not that authorization. Remaining production prerequisites
-include obtaining the official Thinkstratum Ltd PEN; reviewing and approving
-the production ASN.1/profile and permanent OIDs; regenerating all certificate,
-MSP and genesis material; rerunning the complete PQ2 tests and unsupported
-binary gate; and independent security review. The handoff must also carry
+include reviewing and approving the production ASN.1/profile, compatibility
+behavior, and security requirements; independently reviewing the production
+profile; and approving an enforceable time design. The handoff must also carry
 forward the time-design and distributed-liveness gates above, classical TLS
 and CRL limitations, and production key-custody requirements. Recording these
 items does not approve their design or move them silently into an authorized
 PQ3 implementation. PQ2 does not include settlement application development
 or a claim of fully quantum-resistant networking.
+
+## PQ2.5 permanent namespace acceptance
+
+PQ2.5 registers the permanent profile and its OIDs while retaining the
+temporary test profile. The permanent channel capability is an authenticated
+profile/version selector; local environment settings only agree with, and
+never override, that policy. Fresh genesis and fresh identities are mandatory.
+Existing PQ3 temporary-profile networks and scripts are intentionally
+unchanged.
+
+The release workflow still blocks as long as a development-only profile is
+present. Any future profile-aware release gate requires separate approval;
+namespace ownership alone does not grant production permission. The required
+acceptance command results for the current implementation are recorded in the
+PQ2.5 review evidence below.
+
+### PQ2.5 review evidence
+
+The following focused checks passed on WSL Ubuntu 24.04 with Go 1.27.4:
+
+```text
+PATH=/usr/local/go/bin:/usr/bin:/bin GOFLAGS=-p=1 go test -count=1 ./common/capabilities ./common/channelconfig ./pq-crypto ./msp ./cmd/pactway-pq-gen
+PATH=/usr/local/go/bin:/usr/bin:/bin GOFLAGS=-p=1 go vet ./common/capabilities ./common/channelconfig ./pq-crypto ./msp ./cmd/pactway-pq-gen ./integration/msp
+```
+
+Both commands exited 0. The profile suite verifies permanent OID encoding,
+classical and full-TBS ML-DSA signatures, root/intermediate/leaf validation,
+profile cross-rejection, and the regenerated DER fixture. MSP/channel tests
+cover local/channel mismatches and enforcement update/downgrade rejection.
+The generator test creates fresh permanent-profile certificates, local MSPs,
+genesis material, and a development-only public manifest.
+
+The unsupported-binary integration test was run with actual binaries:
+
+- Pre-PQ2.5 peer built from source commit
+  `c19e53942a1e10e3a1c8f945e6edb59d9123ebf9`, SHA-256
+  `a5511e90f1559c27def4cbbadf21b1031ff57e1191b6512aec676be0d4dbc6d7`.
+- Unmodified official Fabric `v3.1.5` peer, commit `86c1172`, SHA-256
+  `46a760292a0622bebd8e593b391485f1aa281cb505b2488968ecc4d9e1d5cf89`.
+  The downloaded Linux/amd64 release archive was verified against its
+  published SHA-256
+  `b9c31fd490991e76f8acb1835dee09fc19fee5428cb13e190ee6e0bdd2c37858`.
+
+The unsupported PQ2 peer was built from the historical source with:
+
+```bash
+mkdir -p /tmp/pq25-unsupported-pq2
+git archive c19e53942a1e10e3a1c8f945e6edb59d9123ebf9 | tar -x -C /tmp/pq25-unsupported-pq2
+cd /tmp/pq25-unsupported-pq2
+PATH=/usr/local/go/bin:/usr/bin:/bin GOFLAGS=-p=1 go build -mod=mod -o /tmp/pq25-unsupported-pq2/peer ./cmd/peer
+```
+
+The official upstream peer came from
+`https://github.com/hyperledger/fabric/releases/download/v3.1.5/hyperledger-fabric-linux-amd64-3.1.5.tar.gz`;
+its archive and extracted binary hashes are listed above.
+
+Exact integration command:
+
+```text
+PATH=/usr/local/go/bin:/usr/bin:/bin PACTWAY_ISOLATED_DEVELOPMENT=true PACTWAY_HYBRID_PROFILE=pactway-hybrid-certificate-v1 PACTWAY_UNSUPPORTED_PQ2_PEER=/tmp/pq25-unsupported-pq2/peer PACTWAY_UPSTREAM_PEER=/tmp/pq25-upstream/bin/peer GOFLAGS=-p=1 go test -count=1 ./integration/msp -run ^TestMSP$ -ginkgo.focus="permanent-profile channels with unsupported PQ2 and upstream binaries" -timeout=20m -v
+```
+
+Result: passed; the selected compatibility spec rejected the permanent
+capability with both binaries (1 passed, 8 unrelated specs skipped).
+
+The release guard was also checked with
+`bash ci/scripts/check_release_hybrid_profile.sh`. It returned the expected
+blocking message, `release blocked: hybrid profile registry contains a
+development-only profile`; no release exception was introduced.
+
+`make basic-checks` stopped at its pre-existing license-header check because
+`docs/.gitignore` lacks the repository-required SPDX and traditional Apache
+headers. That unrelated file was not modified.
+
+The full Fabric unit baseline was run with
+`PATH=/usr/local/go/bin:/usr/bin:/bin GOFLAGS=-p=1 make unit-test`. It exited
+2 after `real 60m0.330s`, with two failures outside the changed files:
+
+- `core/chaincode/persistence`: 61 of 62 specs passed; the corrupted-gzip
+  case expected `error reading as gzip stream: unexpected EOF` but received
+  `error reading as gzip stream: gzip: invalid header`. The isolated rerun
+  `PATH=/usr/local/go/bin:/usr/bin:/bin GOFLAGS=-p=1 go test -count=1 ./core/chaincode/persistence`
+  exited 1 with the same failure.
+- `core/container/externalbuilder`: 55 of 72 specs passed; 17 could not launch
+  test helper executables, for example
+  `fork/exec testdata/goodbuilder/bin/build: no such file or directory`.
+
+The full output showed no other failing packages. The two failures are
+recorded rather than changing unrelated tests or fixtures. PQ3 network scripts
+and runtime state were not modified or exercised.
+PQ3 network scripts and runtime state were not modified or exercised.

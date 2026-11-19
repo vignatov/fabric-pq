@@ -70,7 +70,7 @@ func TestMSPConfigFailure(t *testing.T) {
 
 func TestPQRequiredChannelRejectsIdemixMSP(t *testing.T) {
 	mspCH := NewMSPConfigHandler(msp.MSPv1_0, factory.GetDefault())
-	mspCH.hybridRequired = true
+	mspCH.hybridProfile = "rfc5612-test-only-v1"
 
 	_, err := mspCH.ProposeMSP(&mspprotos.MSPConfig{Type: int32(msp.IDEMIX)})
 	require.ErrorContains(t, err, "PQ-required channel does not permit an Idemix MSP")
@@ -97,9 +97,35 @@ func TestPQRequiredChannelRejectsClassicalOnlyMSP(t *testing.T) {
 	require.NoError(t, err)
 
 	mspCH := NewMSPConfigHandler(msp.MSPv1_0, factory.GetDefault())
-	mspCH.hybridRequired = true
+	mspCH.hybridProfile = "rfc5612-test-only-v1"
 	_, err = mspCH.ProposeMSP(mspConfig)
 	require.ErrorContains(t, err, "Pactway Hybrid Certificate v1")
+}
+
+func TestAuthenticatedPermanentProfileRejectsTemporaryLocalSelection(t *testing.T) {
+	t.Setenv("PACTWAY_HYBRID_PROFILE", oqs.TemporaryHybridProfileV1)
+	mspConfig, err := msp.GetVerifyingMspConfig(
+		configtest.GetDevMspDir(),
+		"SampleOrg",
+		msp.ProviderTypeToString(msp.FABRIC),
+	)
+	require.NoError(t, err)
+	fabricConfig := &mspprotos.FabricMSPConfig{}
+	require.NoError(t, proto.Unmarshal(mspConfig.GetConfig(), fabricConfig))
+	fabricConfig.FabricNodeOus = &mspprotos.FabricNodeOUs{
+		Enable:              true,
+		ClientOuIdentifier:  &mspprotos.FabricOUIdentifier{OrganizationalUnitIdentifier: "client"},
+		PeerOuIdentifier:    &mspprotos.FabricOUIdentifier{OrganizationalUnitIdentifier: "peer"},
+		AdminOuIdentifier:   &mspprotos.FabricOUIdentifier{OrganizationalUnitIdentifier: "admin"},
+		OrdererOuIdentifier: &mspprotos.FabricOUIdentifier{OrganizationalUnitIdentifier: "orderer"},
+	}
+	mspConfig.Config, err = proto.Marshal(fabricConfig)
+	require.NoError(t, err)
+
+	handler := NewMSPConfigHandler(msp.MSPv1_4_3, factory.GetDefault())
+	handler.hybridProfile = oqs.PermanentHybridProfileV1
+	_, err = handler.ProposeMSP(mspConfig)
+	require.ErrorContains(t, err, "does not match authenticated channel profile")
 }
 
 func TestPQRequiredMSPRequiresPeerAndOrdererNodeOUs(t *testing.T) {
@@ -182,7 +208,7 @@ func TestPQRequiredMSPConfigRejectsMissingNodeOUs(t *testing.T) {
 	serialized, err := proto.Marshal(&mspprotos.FabricMSPConfig{Name: "PQ2TestMSP"})
 	require.NoError(t, err)
 	handler := NewMSPConfigHandler(msp.MSPv1_4_3, factory.GetDefault())
-	handler.hybridRequired = true
+	handler.hybridProfile = "rfc5612-test-only-v1"
 
 	_, err = handler.ProposeMSP(&mspprotos.MSPConfig{
 		Type:   int32(msp.FABRIC),

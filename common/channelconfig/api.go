@@ -139,6 +139,9 @@ type ChannelCapabilities interface {
 
 	// PactwayHybridCertificateV1 reports whether the channel requires hybrid enrollment certificates.
 	PactwayHybridCertificateV1() bool
+
+	// PactwayHybridCertificateProfile returns the exact hybrid certificate profile required by the channel.
+	PactwayHybridCertificateProfile() string
 }
 
 // ApplicationCapabilities defines the capabilities for the application portion of a channel

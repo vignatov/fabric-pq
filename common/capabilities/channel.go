@@ -7,6 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 package capabilities
 
 import (
+	"errors"
+
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/msp"
 )
@@ -33,8 +35,15 @@ const (
 	ChannelV3_0 = "V3_0"
 
 	// PactwayHybridCertificateV1 requires all channel MSP signing identities
-	// to use the explicitly selected Pactway Hybrid Certificate v1 profile.
+	// to use the temporary, explicitly selected Pactway Hybrid Certificate v1
+	// profile. It is retained for isolated legacy development networks.
 	PactwayHybridCertificateV1 = "PactwayHybridCertificateV1"
+
+	// PactwayHybridCertificatePactwayV1 pins the permanent
+	// pactway-hybrid-certificate-v1 profile, version 1, namespace
+	// 1.3.6.1.4.1.67732.1, profile/key OID .1.1, PQ-signature OID .1.2,
+	// and ML-DSA-65 algorithm. Older binaries reject this distinct capability.
+	PactwayHybridCertificatePactwayV1 = "PactwayHybridCertificatePactwayV1"
 )
 
 // ChannelProvider provides capabilities information for channel level config.
@@ -47,6 +56,7 @@ type ChannelProvider struct {
 	v20                        bool
 	v30                        bool
 	pactwayHybridCertificateV1 bool
+	pactwayHybridPactwayV1     bool
 }
 
 // NewChannelProvider creates a channel capabilities provider.
@@ -60,7 +70,17 @@ func NewChannelProvider(capabilities map[string]*cb.Capability) *ChannelProvider
 	_, cp.v20 = capabilities[ChannelV2_0]
 	_, cp.v30 = capabilities[ChannelV3_0]
 	_, cp.pactwayHybridCertificateV1 = capabilities[PactwayHybridCertificateV1]
+	_, cp.pactwayHybridPactwayV1 = capabilities[PactwayHybridCertificatePactwayV1]
 	return cp
+}
+
+// Supported returns an error for unknown capabilities or conflicting
+// temporary and permanent profile requirements.
+func (cp *ChannelProvider) Supported() error {
+	if cp.pactwayHybridCertificateV1 && cp.pactwayHybridPactwayV1 {
+		return errors.New("conflicting Pactway hybrid certificate profile capabilities")
+	}
+	return cp.registry.Supported()
 }
 
 // Type returns a descriptive string for logging purposes.
@@ -75,6 +95,8 @@ func (cp *ChannelProvider) HasCapability(capability string) bool {
 	case ChannelV3_0:
 		return true
 	case PactwayHybridCertificateV1:
+		return true
+	case PactwayHybridCertificatePactwayV1:
 		return true
 	case ChannelV2_0:
 		return true
@@ -94,7 +116,23 @@ func (cp *ChannelProvider) HasCapability(capability string) bool {
 // PactwayHybridCertificateV1 reports whether this channel requires hybrid
 // enrollment certificates and application signatures for every Fabric MSP.
 func (cp *ChannelProvider) PactwayHybridCertificateV1() bool {
-	return cp.pactwayHybridCertificateV1
+	return cp.pactwayHybridCertificateV1 || cp.pactwayHybridPactwayV1
+}
+
+// PactwayHybridCertificateProfile returns the exact profile selected by the
+// authenticated channel capability, or an empty string when none is required.
+func (cp *ChannelProvider) PactwayHybridCertificateProfile() string {
+	if cp.pactwayHybridCertificateV1 && cp.pactwayHybridPactwayV1 {
+		return ""
+	}
+	switch {
+	case cp.pactwayHybridPactwayV1:
+		return "pactway-hybrid-certificate-v1"
+	case cp.pactwayHybridCertificateV1:
+		return "rfc5612-test-only-v1"
+	default:
+		return ""
+	}
 }
 
 // MSPVersion returns the level of MSP support required by this channel.

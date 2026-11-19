@@ -19,39 +19,51 @@ channel policy. The former alternate-key certificate construction signed only
 key material and could leave its signature reusable after changes to
 certificate fields. Merely finding a PQ extension is not an identity policy.
 
-The project selected Thinkstratum Ltd as the intended IANA Private Enterprise
-Number (PEN) owner. The PEN has not yet been allocated. The proposed production
-subtree and final ASN.1 profile must remain unfrozen until allocation and
-profile approval.
+Thinkstratum Ltd has received IANA Private Enterprise Number (PEN) `67732`.
+The permanent allocation is:
+
+- `1.3.6.1.4.1.67732`: Thinkstratum Ltd enterprise root.
+- `1.3.6.1.4.1.67732.1`: Pactway namespace.
+- `1.3.6.1.4.1.67732.1.1`: Hybrid Certificate v1 profile/key extension.
+- `1.3.6.1.4.1.67732.1.2`: Hybrid Certificate v1 PQ-signature extension.
+
+The allocation records namespace ownership only. It is not approval of the
+certificate profile for external deployment or production security acceptance.
 
 ## Decision
 
-Implement a new, explicitly versioned Pactway hybrid-certificate profile using
-the project's own allocated namespace when available. Do not adopt or claim
-RFC 10073 composite compliance. During authorized development only, use the
-RFC 5612 example enterprise number `32473`:
+Register the permanent profile as `pactway-hybrid-certificate-v1`, profile
+version 1, using the PEN 67732 OIDs above. Do not adopt or claim RFC 10073
+composite compliance. Preserve the RFC 5612 example enterprise number `32473`
+only for the existing temporary profile:
 
 - `1.3.6.1.4.1.32473.1.1`: temporary profile/key extension.
 - `1.3.6.1.4.1.32473.1.2`: temporary PQ-signature extension.
 
-These are test fixtures, not identifiers assigned to Thinkstratum Ltd. The
-temporary identifiers are centralized in the profile registry and must not be
-used in released or externally deployed networks. Runtime selection must name
-one profile explicitly; there is no acceptance of multiple namespaces as a
-fallback. The release workflow blocks while the registry contains any
-development-only profile.
+The temporary identifiers are test fixtures, not identifiers assigned to
+Thinkstratum Ltd, and remain restricted to isolated development. Both
+registered profiles are initially isolated-development-only, including the
+permanent OIDs. Runtime selection names one profile explicitly; there is no
+namespace fallback.
 
-The current registry contains only one profile, and runtime selection uses the
-explicit `PACTWAY_HYBRID_PROFILE` process setting. The authenticated channel
-capability identifies that hybrid certificates are required, but does not
-identify a choice among multiple profiles. Before adding another profile,
-extend authenticated channel/MSP configuration to pin the required profile
-identifier (including its version and algorithm set); every peer, orderer and
-client must enforce that same selection against its local runtime configuration
-and fail closed on missing or mismatched values. A process-local environment
-setting alone must never let channel participants silently select different
-certificate profiles. Profile rollover needs an explicitly reviewed channel
-migration; it must not be treated as an automatic fallback.
+The authenticated channel capability
+`PactwayHybridCertificatePactwayV1` pins the exact
+`pactway-hybrid-certificate-v1` identifier, profile version 1, namespace
+`1.3.6.1.4.1.67732.1`, profile/key OID `.1.1`, PQ-signature OID `.1.2`, and
+the version-1 ML-DSA-65 algorithm requirements. The older
+`PactwayHybridCertificateV1` capability remains reserved for isolated
+`rfc5612-test-only-v1` networks. Their distinct capability names ensure
+existing PQ2 binaries and upstream Fabric reject permanent-profile channels
+as unsupported rather than interpreting them under the legacy capability.
+Channel MSP setup derives profile selection from authenticated policy; a set
+local `PACTWAY_HYBRID_PROFILE` must agree and cannot override it.
+
+The release workflow currently blocks while any development-only profile
+remains registered. Preserve this guard. Future profile-aware release
+enforcement should require that every enabled profile has explicit profile,
+compatibility, and security approval, and must continue to reject
+development-only profiles. Do not weaken the existing guard or broaden PQ2.5
+into production release work.
 
 The profile keeps the ordinary classical X.509 signature and adds exactly one
 profile/key extension and one PQ signature extension. The key extension
@@ -80,10 +92,10 @@ trusted because it is configured, not because it self-signs.
 ## MSP policy and migration
 
 - The authenticated channel capability `PactwayHybridCertificateV1` requires
-  every channel enrollment MSP to use valid hybrid certificate chains and
-  hybrid application signatures. The capability is included from fresh
-  genesis, cannot be removed by a config update, and required channels reject
-  Idemix MSPs.
+  the temporary profile; `PactwayHybridCertificatePactwayV1` requires the
+  permanent profile and its fixed version-1 OID and algorithm semantics. Each
+  capability is included from fresh genesis, cannot be removed or downgraded
+  by a config update, and required channels reject Idemix MSPs.
 - Local signing MSPs use the `PQ_REQUIRED` sidecar and must prove possession of
   matching classical and ML-DSA private keys at setup. A local marker cannot
   override channel policy. Channel/verifying MSP configs receive policy from
@@ -97,9 +109,10 @@ trusted because it is configured, not because it self-signs.
   Classical TLS certificates, TLS trust roots, revocation transport and
   consensus/gossip transport are outside the hybrid profile and remain
   classical.
-- The migration target is a fresh genesis and new identities. Do not add
-  legacy alternate-key certificate verification or reuse historical demo
-  private keys without separate authorization.
+- Permanent-profile adoption is fresh-network-only: generate new identities,
+  certificates, MSP material, and genesis configuration. Do not migrate an
+  existing channel in place, add automatic namespace fallback, or reuse
+  historical demo private keys.
 
 ## Time and authorization trust model
 

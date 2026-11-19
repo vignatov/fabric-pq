@@ -19,7 +19,16 @@ import (
 )
 
 func TestHybridCertificateV1GenerationAndIssuerChain(t *testing.T) {
-	profile, err := HybridCertificateProfileByName(TemporaryHybridProfileV1, profileUseTest)
+	for _, profileName := range []string{TemporaryHybridProfileV1, PermanentHybridProfileV1} {
+		t.Run(profileName, func(t *testing.T) {
+			testHybridCertificateV1GenerationAndIssuerChain(t, profileName)
+		})
+	}
+}
+
+func testHybridCertificateV1GenerationAndIssuerChain(t *testing.T, profileName string) {
+	t.Helper()
+	profile, err := HybridCertificateProfileByName(profileName, profileUseTest)
 	require.NoError(t, err)
 
 	rootClassical := feasibilityECDSAKey(7)
@@ -102,6 +111,19 @@ func TestHybridCertificateV1GenerationAndIssuerChain(t *testing.T) {
 	require.Equal(t, 1, info.Version)
 	require.True(t, info.SignatureAlgorithm.Algorithm.Equal(oidMLDSA65))
 	require.Empty(t, info.SignatureAlgorithm.Parameters.FullBytes)
+	require.NoError(t, leaf.CheckSignatureFrom(intermediate))
+	if profileName == PermanentHybridProfileV1 {
+		require.Equal(t, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1, 1}, profile.ProfileKeyOID())
+		require.Equal(t, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1, 2}, profile.PQSignatureOID())
+	}
+
+	otherProfileName := TemporaryHybridProfileV1
+	if profileName == TemporaryHybridProfileV1 {
+		otherProfileName = PermanentHybridProfileV1
+	}
+	otherProfile, err := HybridCertificateProfileByName(otherProfileName, profileUseTest)
+	require.NoError(t, err)
+	require.Error(t, ValidateHybridCertificateChain(chains[0], otherProfile, true))
 }
 
 func TestHybridCertificateV1RequiresSelfIssuedTrustAnchor(t *testing.T) {
@@ -410,6 +432,16 @@ func TestTemporaryHybridProfileRequiresExplicitDevelopmentUse(t *testing.T) {
 	profile, err := HybridCertificateProfileByName(TemporaryHybridProfileV1, ProfileUseIsolatedDevelopment)
 	require.NoError(t, err)
 	require.True(t, profile.DevelopmentOnly())
+}
+
+func TestPermanentHybridProfileRemainsIsolatedDevelopmentOnly(t *testing.T) {
+	_, err := HybridCertificateProfileByName(PermanentHybridProfileV1, ProfileUseProduction)
+	require.ErrorContains(t, err, "development-only")
+
+	profile, err := HybridCertificateProfileByName(PermanentHybridProfileV1, ProfileUseIsolatedDevelopment)
+	require.NoError(t, err)
+	require.True(t, profile.DevelopmentOnly())
+	require.Equal(t, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1}, profile.namespaceOID)
 }
 
 func TestHybridCertificateV1TBSReconstructionRejectsTrailingData(t *testing.T) {

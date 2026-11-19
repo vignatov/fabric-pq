@@ -47,7 +47,7 @@ type feasibilityDERValue struct {
 }
 
 func TestFullTBSCertificatePQFeasibility(t *testing.T) {
-	registeredProfile, err := HybridCertificateProfileByName(TemporaryHybridProfileV1, profileUseTest)
+	registeredProfile, err := HybridCertificateProfileByName(PermanentHybridProfileV1, profileUseTest)
 	require.NoError(t, err)
 	profile := feasibilityProfileRegistryEntry{
 		version:        registeredProfile.version,
