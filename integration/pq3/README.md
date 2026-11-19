@@ -58,6 +58,34 @@ MSP material are excluded. Sanitized diagnostics for failed steps are also
 included in the uploaded evidence under `diagnostics/`; raw unsanitized logs
 are not published.
 
+For the review handoff, run `acceptance` from a clean checkout of the exact PR
+head on a trusted Linux/WSL machine. Keep the printed protected package and its
+matching sanitized report locally. The report and the package's
+`sanitized-evidence/network-manifest.json` identify the tested revision; run
+`sha256sum --check SHA256SUMS` from the package directory before reviewing the
+inputs. This is a separate, reproducible run of the same revision, not a way to
+recover the exact inputs of a completed hosted CI job. The hosted runner's
+protected copy is checked in CI and discarded with the runner.
+
+If evidence export fails, acceptance returns nonzero and skips automatic reset.
+It prints the private run directory, the `PQ3_STATE_ROOT` to use, and the
+owner-only scratch log directory. Do not copy or publish those directories.
+After fixing the storage or permissions problem, use the printed state root and
+a writable protected destination outside the repository:
+
+```bash
+export PQ3_STATE_ROOT='<printed acceptance state root>'
+export PQ3_PROTECTED_EVIDENCE_ROOT='<protected Linux directory outside the repo>'
+integration/pq3/pq3.sh recover-evidence
+# After verifying the new package, remove only that run:
+integration/pq3/pq3.sh reset
+```
+
+`recover-evidence` checks and exports the already saved verification inputs; it
+does not recreate missing transactions or turn a failed run into a pass. If
+recovery fails, do not reset until the required evidence is safe. The scratch
+logs may contain private data; delete them locally after diagnosis.
+
 The individual lifecycle commands remain useful for interactive inspection:
 
 ```bash

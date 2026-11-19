@@ -1106,8 +1106,9 @@ Local-only PQ3 verification package.
 
 verification-inputs contains the public channel configuration block, public MSP
 and TLS certificates, and exact committed block and peer transaction records.
-verification-results contains transaction-bound verifier output. logs contains
-sanitized full acceptance-step output. The package is owner-only and includes
+verification-inputs/verification-results contains transaction-bound verifier
+output. When present, logs contains sanitized acceptance-step output. The
+package is owner-only and includes
 temporary-profile evidence; do not publish or upload it.
 Private keys and generated private MSP material are intentionally excluded.
 SHA256SUMS covers every package file except itself.
@@ -1124,17 +1125,34 @@ SHA256SUMS covers every package file except itself.
 EOF
 	fi
 	(
-		cd -- "$ACCEPTANCE_PROTECTED_DIR"
+		cd -- "$ACCEPTANCE_PROTECTED_DIR" || return 1
 		find . -type f ! -name SHA256SUMS -print0 |
 			sort -z |
 			xargs -0 -r sha256sum > SHA256SUMS
 	) || return 1
-	chmod -R u+rwX,go-rwx -- "$ACCEPTANCE_PROTECTED_DIR"
+	chmod -R u+rwX,go-rwx -- "$ACCEPTANCE_PROTECTED_DIR" || return 1
+	(cd -- "$ACCEPTANCE_PROTECTED_DIR" && sha256sum --check --quiet SHA256SUMS)
+}
+
+recover_evidence() {
+	load_active
+	ACCEPTANCE_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+	prepare_protected_evidence_dir || fail "unable to create a protected recovery package"
+	printf 'Protected recovery package (incomplete until verified): %s\n' "$ACCEPTANCE_PROTECTED_DIR"
+	copy_protected_verification_inputs "$RUN_DIR" true ||
+		fail "recovery export failed; the private runtime was not reset"
+	local metadata="$ACCEPTANCE_PROTECTED_DIR/sanitized-evidence"
+	mkdir -p -- "$metadata"
+	cp -- "$RUN_DIR/evidence/"{network-manifest.json,transaction-ids.txt} "$metadata/"
+	write_protected_evidence_manifest || fail "recovery package integrity check failed"
+	printf 'Recovery package verified. The private runtime was not reset.\n'
 }
 
 acceptance_finalize() {
 	local status="$1" cleanup_status=0 source_commit source_branch source_dirty
-	local require_complete=true evidence_output file stage count separator
+	local require_complete=true export_failed=false runtime_retained=false
+	local evidence_output file stage count separator
+	[[ "$status" -eq 0 ]] || require_complete=false
 	trap - EXIT
 	local run_dir=""
 	local acceptance_active_file="$ACCEPTANCE_STATE_ROOT/$REPO_KEY/active-run"
@@ -1151,7 +1169,7 @@ acceptance_finalize() {
 		evidence_output="$ACCEPTANCE_OUTPUT_DIR/evidence"
 		if ! mkdir -p -- "$evidence_output"; then
 			printf 'Unable to create the sanitized evidence directory.\n' >&2
-			status=1
+			export_failed=true
 		fi
 		for file in network-manifest.json orderer-channels.json chaincode-definition.txt \
 			transaction-ids.txt transaction-verification.json stage-timings.jsonl \
@@ -1159,7 +1177,7 @@ acceptance_finalize() {
 			if [[ -f "$run_dir/evidence/$file" ]]; then
 				if ! cp -- "$run_dir/evidence/$file" "$evidence_output/$file"; then
 					printf 'Unable to export sanitized evidence file %s.\n' "$file" >&2
-					status=1
+					export_failed=true
 				fi
 			fi
 		done
@@ -1175,18 +1193,17 @@ acceptance_finalize() {
 				printf '}}\n'
 			} > "$evidence_output/stage-timing-summary.json"; then
 				printf 'Unable to write the stage timing summary.\n' >&2
-				status=1
+				export_failed=true
 			fi
 		fi
 		if [[ -d "$evidence_output" ]]; then
 			if ! mkdir -p -- "$ACCEPTANCE_PROTECTED_DIR/sanitized-evidence" ||
 				! cp -R -- "$evidence_output/." "$ACCEPTANCE_PROTECTED_DIR/sanitized-evidence/"; then
 				printf 'Unable to preserve sanitized evidence in the protected package.\n' >&2
-				status=1
+				export_failed=true
 			fi
 		fi
 
-		[[ "$status" -eq 0 ]] || require_complete=false
 		if copy_protected_verification_inputs "$run_dir" "$require_complete" \
 			> "$ACCEPTANCE_LOG_DIR/protected-inputs.log" 2>&1; then
 			if [[ "$require_complete" == true ]]; then
@@ -1200,43 +1217,52 @@ acceptance_finalize() {
 			local copy_status=$?
 			ACCEPTANCE_STEPS+=("Protected verification inputs"$'\t'"export public verifier inputs"$'\t'"failed (exit $copy_status)")
 			ACCEPTANCE_LOG_RECORDS+=("protected-inputs.log"$'\t'"Protected verification inputs"$'\t'"failed (exit $copy_status)")
-			status=1
+			export_failed=true
 		fi
 	elif [[ "$status" -eq 0 ]]; then
 		ACCEPTANCE_STEPS+=("Protected verification inputs"$'\t'"export public verifier inputs"$'\t'"not available (network did not start)")
-		status=1
+		export_failed=true
 	else
 		ACCEPTANCE_STEPS+=("Protected verification inputs"$'\t'"export public verifier inputs"$'\t'"not available (network did not start)")
-	fi
-
-	if [[ -n "$ACCEPTANCE_RUN_ID" && -f "$acceptance_active_file" &&
-		"$(<"$acceptance_active_file")" == "$ACCEPTANCE_RUN_ID" ]]; then
-		if PQ3_STATE_ROOT="$ACCEPTANCE_STATE_ROOT" "$SCRIPT_DIR/pq3.sh" reset \
-			> "$ACCEPTANCE_LOG_DIR/reset.log" 2>&1; then
-			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"$SCRIPT_DIR/pq3.sh reset"$'\t'passed)
-			ACCEPTANCE_LOG_RECORDS+=("reset.log"$'\t'"Scoped runtime cleanup"$'\t'passed)
-		else
-			cleanup_status=$?
-			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"$SCRIPT_DIR/pq3.sh reset"$'\t'"failed (exit $cleanup_status)")
-			ACCEPTANCE_LOG_RECORDS+=("reset.log"$'\t'"Scoped runtime cleanup"$'\t'"failed (exit $cleanup_status)")
-			status=1
-		fi
-		rmdir -- "$ACCEPTANCE_STATE_ROOT/$REPO_KEY" "$ACCEPTANCE_STATE_ROOT" 2>/dev/null || true
 	fi
 
 	if ! export_sanitized_logs; then
 		printf 'Unable to retain sanitized acceptance logs.\n' >&2
 		ACCEPTANCE_STEPS+=("Sanitized log retention"$'\t'"export full local logs and failed-step diagnostics"$'\t'failed)
-		status=1
+		export_failed=true
 	else
 		ACCEPTANCE_STEPS+=("Sanitized log retention"$'\t'"export full local logs and failed-step diagnostics"$'\t'passed)
 	fi
 	if ! write_protected_evidence_manifest; then
 		printf 'Unable to write the protected evidence package manifest.\n' >&2
 		ACCEPTANCE_STEPS+=("Protected evidence manifest"$'\t'"write SHA256SUMS and owner-only package metadata"$'\t'failed)
-		status=1
+		export_failed=true
 	else
 		ACCEPTANCE_STEPS+=("Protected evidence manifest"$'\t'"write SHA256SUMS and owner-only package metadata"$'\t'passed)
+	fi
+
+	if [[ "$export_failed" == true ]]; then
+		status=1
+		if [[ -n "$run_dir" ]]; then
+			runtime_retained=true
+			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"reset after evidence export"$'\t'"skipped (evidence export failed)")
+			printf 'Evidence export failed; private runtime retained at %q.\n' "$run_dir" >&2
+			printf 'Use PQ3_STATE_ROOT=%q with the recovery instructions in the PQ3 README.\n' "$ACCEPTANCE_STATE_ROOT" >&2
+		fi
+	elif [[ -n "$run_dir" ]]; then
+		if PQ3_STATE_ROOT="$ACCEPTANCE_STATE_ROOT" "$SCRIPT_DIR/pq3.sh" reset \
+			> "$ACCEPTANCE_LOG_DIR/reset.log" 2>&1; then
+			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"$SCRIPT_DIR/pq3.sh reset"$'\t'passed)
+			rmdir -- "$ACCEPTANCE_STATE_ROOT/$REPO_KEY" "$ACCEPTANCE_STATE_ROOT" 2>/dev/null || true
+		else
+			cleanup_status=$?
+			ACCEPTANCE_STEPS+=("Scoped runtime cleanup"$'\t'"$SCRIPT_DIR/pq3.sh reset"$'\t'"failed (exit $cleanup_status)")
+			status=1
+			if ! mkdir -p -- "$ACCEPTANCE_OUTPUT_DIR/diagnostics" ||
+				! sanitize_log "$ACCEPTANCE_LOG_DIR/reset.log" "$ACCEPTANCE_OUTPUT_DIR/diagnostics/reset.log"; then
+				printf 'Unable to retain sanitized reset diagnostics.\n' >&2
+			fi
+		fi
 	fi
 
 	source_commit="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
@@ -1258,10 +1284,15 @@ acceptance_finalize() {
 		else
 			printf -- '- Upstream compatibility: **INCOMPLETE**; required upstream peer test did not execute successfully.\n'
 		fi
-		if [[ -s "$ACCEPTANCE_PROTECTED_DIR/verification-inputs/channel-config/genesis.block" ]]; then
+		if [[ "$runtime_retained" == true ]]; then
+			printf -- '- Evidence export failed; automatic reset was skipped. The private runtime location is printed to the operator console, not included in this report.\n'
+		elif [[ -s "$ACCEPTANCE_PROTECTED_DIR/verification-inputs/channel-config/genesis.block" ]]; then
 			printf -- '- Public verification inputs and sanitized full logs are preserved separately in an owner-only local package; it is not uploaded.\n'
 		else
 			printf -- '- The owner-only local package contains sanitized logs; public verification inputs were unavailable because the network did not start or export failed.\n'
+		fi
+		if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+			printf -- '- The hosted runner copy is ephemeral. Use a protected local acceptance run at this source revision for the review handoff; it is separate from this CI run.\n'
 		fi
 		printf -- '- Private keys, generated private MSP material, and raw unsanitized logs are not included.\n\n'
 		printf '## Commands and results\n\n| Step | Command | Result |\n|---|---|---|\n'
@@ -1293,7 +1324,11 @@ acceptance_finalize() {
 	} > "$ACCEPTANCE_OUTPUT_DIR/report.md"
 	printf 'Sanitized PQ3 acceptance evidence: %s\n' "$ACCEPTANCE_OUTPUT_DIR"
 	printf 'Protected local verification package: %s\n' "$ACCEPTANCE_PROTECTED_DIR"
-	rm -rf -- "$ACCEPTANCE_LOG_DIR"
+	if [[ "$export_failed" == true ]]; then
+		printf 'Owner-only step logs retained at %q; do not publish them.\n' "$ACCEPTANCE_LOG_DIR" >&2
+	else
+		rm -rf -- "$ACCEPTANCE_LOG_DIR"
+	fi
 	exit "$status"
 }
 
@@ -1352,6 +1387,7 @@ Commands:
   recovery   Exercise stop/start/restart/resume while preserving ledger state
   verify   Verify the latest transaction and peer-ledger commit evidence
   acceptance  Run all validation and network gates, export sanitized evidence, then reset
+  recover-evidence  Export and check saved verifier inputs without resetting the active run
   health   Show node health and wait for node health checks
   status   Show Compose service status
   stop     Stop this run without deleting credentials, configuration, or ledgers
@@ -1386,6 +1422,9 @@ case "$command" in
 		;;
 	acceptance)
 		acceptance
+		;;
+	recover-evidence)
+		recover_evidence
 		;;
 	verify)
 		shift
