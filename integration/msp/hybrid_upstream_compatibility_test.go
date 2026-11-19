@@ -23,6 +23,45 @@ import (
 )
 
 var _ = Describe("Upstream channel capability compatibility", func() {
+	It("rejects temporary-profile channels with unmodified upstream Fabric", func() {
+		upstreamPeer := os.Getenv("PACTWAY_UPSTREAM_PEER")
+		if upstreamPeer == "" {
+			Skip("set PACTWAY_UPSTREAM_PEER to a verified peer binary")
+		}
+
+		testDir, err := os.MkdirTemp("", "upstream-channel-capability")
+		Expect(err).NotTo(HaveOccurred())
+		var network *nwo.Network
+		var peerProcess ifrit.Process
+		DeferCleanup(func() {
+			if peerProcess != nil {
+				peerProcess.Signal(syscall.SIGTERM)
+				Eventually(peerProcess.Wait(), network.EventuallyTimeout).Should(Receive())
+			}
+			if network != nil {
+				network.Cleanup()
+			}
+			Expect(os.RemoveAll(testDir)).To(Succeed())
+		})
+
+		network = nwo.New(nwo.BasicEtcdRaft(), testDir, nil, StartPort(), components)
+		network.Profiles[0].ChannelCapabilities = []string{
+			"V3_0",
+			capabilities.PactwayHybridCertificateV1,
+		}
+		network.GenerateConfigTree()
+		network.Bootstrap()
+
+		expectUnsupportedPeerToRejectCapability(
+			upstreamPeer,
+			capabilities.PactwayHybridCertificateV1,
+			network,
+			&peerProcess,
+		)
+		_, err = GinkgoWriter.Write([]byte("PQ3_UPSTREAM_COMPATIBILITY_PASS\n"))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
 	It("rejects permanent-profile channels with unsupported PQ2 and upstream binaries", func() {
 		unsupportedPQ2Peer := os.Getenv("PACTWAY_UNSUPPORTED_PQ2_PEER")
 		upstreamPeer := os.Getenv("PACTWAY_UPSTREAM_PEER")
@@ -64,12 +103,24 @@ var _ = Describe("Upstream channel capability compatibility", func() {
 				continue
 			}
 			By("checking " + test.name)
-			expectUnsupportedPeerToRejectPermanentCapability(test.binary, network, &peerProcess)
+			expectUnsupportedPeerToRejectCapability(
+				test.binary,
+				capabilities.PactwayHybridCertificatePactwayV1,
+				network,
+				&peerProcess,
+			)
 		}
+		_, err = GinkgoWriter.Write([]byte("PQ25_UNSUPPORTED_BINARY_COMPATIBILITY_PASS\n"))
+		Expect(err).NotTo(HaveOccurred())
 	})
 })
 
-func expectUnsupportedPeerToRejectPermanentCapability(binary string, network *nwo.Network, peerProcess *ifrit.Process) {
+func expectUnsupportedPeerToRejectCapability(
+	binary string,
+	requiredCapability string,
+	network *nwo.Network,
+	peerProcess *ifrit.Process,
+) {
 	peer := network.Peer("Org1", "peer0")
 	peerConfigPath := network.PeerDir(peer)
 	peerRunner := ginkgomon.New(ginkgomon.Config{
@@ -103,10 +154,8 @@ func expectUnsupportedPeerToRejectPermanentCapability(binary string, network *nw
 	Eventually(session, network.EventuallyTimeout).Should(gexec.Exit())
 	Expect(session.ExitCode()).NotTo(Equal(0))
 	output := strings.TrimSpace(string(session.Out.Contents()) + string(session.Err.Contents()))
-	Expect(output).To(ContainSubstring(capabilities.PactwayHybridCertificatePactwayV1))
+	Expect(output).To(ContainSubstring(requiredCapability))
 	(*peerProcess).Signal(syscall.SIGTERM)
 	Eventually((*peerProcess).Wait(), network.EventuallyTimeout).Should(Receive())
 	*peerProcess = nil
-	_, err = GinkgoWriter.Write([]byte("PQ25_UNSUPPORTED_BINARY_COMPATIBILITY_PASS\n"))
-	Expect(err).NotTo(HaveOccurred())
 }

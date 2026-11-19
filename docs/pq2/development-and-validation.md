@@ -801,14 +801,19 @@ The official upstream peer came from
 `https://github.com/hyperledger/fabric/releases/download/v3.1.5/hyperledger-fabric-linux-amd64-3.1.5.tar.gz`;
 its archive and extracted binary hashes are listed above.
 
-Exact integration command:
+The compatibility tests were rerun on the current branch with both binaries:
 
 ```text
-PATH=/usr/local/go/bin:/usr/bin:/bin PACTWAY_ISOLATED_DEVELOPMENT=true PACTWAY_HYBRID_PROFILE=pactway-hybrid-certificate-v1 PACTWAY_UNSUPPORTED_PQ2_PEER=/tmp/pq25-unsupported-pq2/peer PACTWAY_UPSTREAM_PEER=/tmp/pq25-upstream/bin/peer GOFLAGS=-p=1 go test -count=1 ./integration/msp -run ^TestMSP$ -ginkgo.focus="permanent-profile channels with unsupported PQ2 and upstream binaries" -timeout=20m -v
+PATH=/usr/local/go/bin:/usr/bin:/bin GOFLAGS=-p=1 PACTWAY_ISOLATED_DEVELOPMENT=true PACTWAY_HYBRID_PROFILE=rfc5612-test-only-v1 PACTWAY_UNSUPPORTED_PQ2_PEER=/tmp/pq25-unsupported-pq2/peer PACTWAY_UPSTREAM_PEER=/tmp/pq25-upstream/bin/peer go test -count=1 ./integration/msp -run ^TestMSP$ -ginkgo.focus="Upstream channel capability compatibility" -timeout=20m -v
 ```
 
-Result: passed; the selected compatibility spec rejected the permanent
-capability with both binaries (1 passed, 8 unrelated specs skipped).
+Result: passed; the temporary-profile compatibility case rejected the legacy
+capability with unmodified upstream Fabric, and the permanent-profile case
+rejected the new capability with both unsupported PQ2 and upstream Fabric
+binaries (2 passed, 8 unrelated specs skipped). The temporary-profile case
+also preserves the `PQ3_UPSTREAM_COMPATIBILITY_PASS` marker consumed by the
+existing PQ3 acceptance gate; the permanent-profile case emits the distinct
+`PQ25_UNSUPPORTED_BINARY_COMPATIBILITY_PASS` marker.
 
 The release guard was also checked with
 `bash ci/scripts/check_release_hybrid_profile.sh`. It returned the expected
