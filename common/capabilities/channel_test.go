@@ -126,6 +126,24 @@ func TestPactwayHybridCertificateV1(t *testing.T) {
 	})
 	require.NoError(t, cp.Supported())
 	require.True(t, cp.PactwayHybridCertificateV1())
+	require.Equal(t, "rfc5612-test-only-v1", cp.PactwayHybridCertificateProfile())
+}
+
+func TestPactwayHybridCertificatePactwayV1(t *testing.T) {
+	cp := NewChannelProvider(map[string]*cb.Capability{
+		PactwayHybridCertificatePactwayV1: {},
+	})
+	require.NoError(t, cp.Supported())
+	require.True(t, cp.PactwayHybridCertificateV1())
+	require.Equal(t, "pactway-hybrid-certificate-v1", cp.PactwayHybridCertificateProfile())
+}
+
+func TestConflictingPactwayHybridCertificateProfilesAreUnsupported(t *testing.T) {
+	cp := NewChannelProvider(map[string]*cb.Capability{
+		PactwayHybridCertificateV1:        {},
+		PactwayHybridCertificatePactwayV1: {},
+	})
+	require.EqualError(t, cp.Supported(), "conflicting Pactway hybrid certificate profile capabilities")
 }
 
 func TestChannelNotSupported(t *testing.T) {

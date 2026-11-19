@@ -22,6 +22,7 @@ import (
 
 const (
 	TemporaryHybridProfileV1 = "rfc5612-test-only-v1"
+	PermanentHybridProfileV1 = "pactway-hybrid-certificate-v1"
 	hybridCertificateDomain  = "Pactway-Hybrid-Certificate-v1"
 	hybridCertificateVersion = 1
 	hybridSignatureLength    = 3309
@@ -60,6 +61,13 @@ var hybridProfileRegistry = map[string]hybridProfileDefinition{
 		namespaceOID:    asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1},
 		profileKeyOID:   asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1, 1},
 		pqSignatureOID:  asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1, 2},
+		developmentOnly: true,
+	},
+	PermanentHybridProfileV1: {
+		version:         hybridCertificateVersion,
+		namespaceOID:    asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1},
+		profileKeyOID:   asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1, 1},
+		pqSignatureOID:  asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1, 2},
 		developmentOnly: true,
 	},
 }
@@ -162,10 +170,17 @@ func HasPactwayHybridExtensions(extensions []pkix.Extension, profile HybridCerti
 
 func HasRegisteredHybridCertificateExtensions(extensions []pkix.Extension) bool {
 	for _, extension := range extensions {
-		for _, definition := range hybridProfileRegistry {
-			if isWithinOIDNamespace(extension.Id, definition.namespaceOID) {
-				return true
-			}
+		if isRegisteredHybridCertificateExtension(extension.Id) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRegisteredHybridCertificateExtension(oid asn1.ObjectIdentifier) bool {
+	for _, definition := range hybridProfileRegistry {
+		if isWithinOIDNamespace(oid, definition.namespaceOID) {
+			return true
 		}
 	}
 	return false
@@ -389,6 +404,11 @@ func ParseHybridCertificate(certificate *x509.Certificate, profile HybridCertifi
 			signatureCount++
 		case isWithinOIDNamespace(extension.Id, profile.namespaceOID):
 			return nil, true, fmt.Errorf("unsupported Pactway hybrid certificate extension OID %s", extension.Id.String())
+		case isRegisteredHybridCertificateExtension(extension.Id):
+			return nil, true, fmt.Errorf(
+				"Pactway hybrid certificate extension OID %s belongs to a different registered profile",
+				extension.Id.String(),
+			)
 		}
 	}
 	if profileCount == 0 && signatureCount == 0 {

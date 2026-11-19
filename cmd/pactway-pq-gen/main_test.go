@@ -398,6 +398,112 @@ func TestGenerateThreeOrganizationHybridDemo(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestGeneratePermanentProfileFreshNetwork(t *testing.T) {
+	t.Setenv("PACTWAY_ISOLATED_DEVELOPMENT", "true")
+	t.Setenv("PACTWAY_HYBRID_PROFILE", oqs.PermanentHybridProfileV1)
+	profile, err := oqs.HybridCertificateProfileByName(
+		oqs.PermanentHybridProfileV1,
+		oqs.ProfileUseIsolatedDevelopment,
+	)
+	require.NoError(t, err)
+
+	outputDir := filepath.Join(t.TempDir(), "pq2-permanent-demo")
+	err = run([]string{
+		"-output=" + outputDir,
+		"-configtx-dir=" + filepath.Join("..", "..", "sampleconfig"),
+		"-fabric-profile=" + genesisconfig.SampleAppChannelEtcdRaftProfile,
+		"-channel-id=pactway-permanent-test-channel",
+		"-hybrid-profile=" + oqs.PermanentHybridProfileV1,
+	})
+	require.NoError(t, err)
+
+	publicDir := filepath.Join(outputDir, "public")
+	genesisBytes, err := os.ReadFile(filepath.Join(publicDir, "genesis.block"))
+	require.NoError(t, err)
+	block, err := protoutil.UnmarshalBlock(genesisBytes)
+	require.NoError(t, err)
+	envelope, err := protoutil.UnmarshalEnvelope(block.GetData().GetData()[0])
+	require.NoError(t, err)
+	csp, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	require.NoError(t, err)
+	bundle, err := channelconfig.NewBundleFromEnvelope(envelope, csp)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		oqs.PermanentHybridProfileV1,
+		bundle.ChannelConfig().Capabilities().PactwayHybridCertificateProfile(),
+	)
+	require.True(t, bundle.ChannelConfig().Capabilities().PactwayHybridCertificateV1())
+
+	manifestBytes, err := os.ReadFile(filepath.Join(publicDir, "manifest.json"))
+	require.NoError(t, err)
+	var manifest demoManifest
+	require.NoError(t, json.Unmarshal(manifestBytes, &manifest))
+	require.Equal(t, oqs.PermanentHybridProfileV1, manifest.HybridProfile)
+	require.Equal(t, capabilities.PactwayHybridCertificatePactwayV1, manifest.ChannelCapability)
+	require.True(t, manifest.DevelopmentOnly)
+
+	for _, identity := range []struct {
+		org, mspID, nodeRole, nodeName string
+	}{
+		{"Org1", "Org1MSP", "peer", "peer0"},
+		{"Org2", "Org2MSP", "peer", "peer0"},
+		{ordererOrgName, ordererMSPID, "orderer", "orderer0"},
+	} {
+		orgDir := filepath.Join(publicDir, "organizations", identity.org)
+		root := readPEMCertificate(t, filepath.Join(orgDir, "msp", "cacerts", "root.pem"))
+		intermediate := readPEMCertificate(t, filepath.Join(orgDir, "msp", "intermediatecerts", "intermediate.pem"))
+		leaf := readPEMCertificate(t, filepath.Join(orgDir, "identities", identity.nodeRole+"0-cert.pem"))
+		roots := x509.NewCertPool()
+		roots.AddCert(root)
+		intermediates := x509.NewCertPool()
+		intermediates.AddCert(intermediate)
+		chains, err := leaf.Verify(x509.VerifyOptions{
+			Roots:         roots,
+			Intermediates: intermediates,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+			CurrentTime:   time.Now(),
+		})
+		require.NoError(t, err)
+		require.Len(t, chains, 1)
+		require.NoError(t, oqs.ValidateHybridCertificateChain(chains[0], profile, true))
+		for _, certificate := range chains[0] {
+			info, found, err := oqs.ParseHybridCertificate(certificate, profile)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.True(t, oqs.HasPactwayHybridExtensions(certificate.Extensions, profile))
+			require.NotEmpty(t, info.SubjectPublicKey.Pk)
+		}
+
+		localMSPDir := filepath.Join(
+			outputDir, "private", "organizations", identity.org, "nodes", identity.nodeName, "msp",
+		)
+		localConfig, err := fabricmsp.GetLocalMspConfig(localMSPDir, nil, identity.mspID)
+		require.NoError(t, err)
+		keyStore, err := sw.NewFileBasedKeyStore(nil, filepath.Join(localMSPDir, "keystore"), false)
+		require.NoError(t, err)
+		localCSP, err := sw.NewDefaultSecurityLevelWithKeystore(keyStore)
+		require.NoError(t, err)
+		localMSP, err := fabricmsp.NewBccspMspWithKeyStore(fabricmsp.MSPv1_0, keyStore, localCSP)
+		require.NoError(t, err)
+		require.NoError(t, localMSP.Setup(localConfig))
+	}
+}
+
+func TestPermanentProfileGeneratorRequiresIsolatedDevelopment(t *testing.T) {
+	t.Setenv("PACTWAY_ISOLATED_DEVELOPMENT", "")
+	err := run([]string{
+		"-output=" + filepath.Join(t.TempDir(), "must-not-be-created"),
+		"-hybrid-profile=" + oqs.PermanentHybridProfileV1,
+	})
+	require.ErrorContains(t, err, "requires PACTWAY_ISOLATED_DEVELOPMENT=true")
+}
+
+func TestGeneratorDoesNotFallBackBetweenProfiles(t *testing.T) {
+	_, err := hybridProfileChannelCapability("unsupported-profile")
+	require.ErrorContains(t, err, "unsupported hybrid certificate profile")
+}
+
 func mspRolePrincipal(t *testing.T, mspID string, role mspprotos.MSPRole_MSPRoleType) *mspprotos.MSPPrincipal {
 	t.Helper()
 	roleBytes, err := proto.Marshal(&mspprotos.MSPRole{

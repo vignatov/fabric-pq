@@ -63,6 +63,55 @@ func TestHybridRequiredMSPSigningAndVerificationWithBCCSP(t *testing.T) {
 	require.Error(t, signingIdentity.Verify([]byte("different message"), signature))
 }
 
+func TestHybridMSPRejectsCredentialsFromTheOtherProfile(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		certificate string
+		selected    string
+	}{
+		{
+			name:        "temporary credentials in permanent MSP",
+			certificate: oqs.TemporaryHybridProfileV1,
+			selected:    oqs.PermanentHybridProfileV1,
+		},
+		{
+			name:        "permanent credentials in temporary MSP",
+			certificate: oqs.PermanentHybridProfileV1,
+			selected:    oqs.TemporaryHybridProfileV1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("PACTWAY_HYBRID_PROFILE", test.certificate)
+			mspConfig, cryptoProvider := newHybridMSPTestConfig(t, true, true)
+
+			t.Setenv("PACTWAY_HYBRID_PROFILE", test.selected)
+			instance, err := newBccspMsp(MSPv1_0, cryptoProvider)
+			require.NoError(t, err)
+			require.ErrorContains(t, instance.Setup(mspConfig), "different registered profile")
+		})
+	}
+}
+
+func TestAuthenticatedChannelProfileMustMatchLocalSelection(t *testing.T) {
+	instance := &bccspmsp{}
+	t.Setenv("PACTWAY_HYBRID_PROFILE", oqs.TemporaryHybridProfileV1)
+	require.ErrorContains(
+		t,
+		instance.SetHybridProfile(oqs.PermanentHybridProfileV1),
+		"does not match authenticated channel profile",
+	)
+
+	t.Setenv("PACTWAY_HYBRID_PROFILE", oqs.PermanentHybridProfileV1)
+	require.NoError(t, instance.SetHybridProfile(oqs.PermanentHybridProfileV1))
+	require.True(t, instance.hybridRequired)
+	require.Equal(t, oqs.PermanentHybridProfileV1, instance.hybridProfile.Name())
+
+	t.Setenv("PACTWAY_HYBRID_PROFILE", "")
+	withoutLocalSelection := &bccspmsp{}
+	require.NoError(t, withoutLocalSelection.SetHybridProfile(oqs.PermanentHybridProfileV1))
+	require.Equal(t, oqs.PermanentHybridProfileV1, withoutLocalSelection.hybridProfile.Name())
+}
+
 func TestClassicalPermittedHybridSignerRejectsExpiredCertificate(t *testing.T) {
 	t.Setenv("PACTWAY_HYBRID_PROFILE", oqs.TemporaryHybridProfileV1)
 	mspConfig, cryptoProvider := newHybridMSPTestConfig(t, true, false)

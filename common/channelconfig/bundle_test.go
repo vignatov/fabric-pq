@@ -461,6 +461,41 @@ func TestHybridCertificateCapabilityCannotBeRemoved(t *testing.T) {
 	require.NoError(t, classical.ValidateNew(required))
 }
 
+func TestPermanentHybridCertificateProfileCannotBeRemovedOrDowngraded(t *testing.T) {
+	permanent := &Bundle{
+		channelConfig: &ChannelConfig{
+			protos: &ChannelProtos{
+				Capabilities: &cb.Capabilities{
+					Capabilities: map[string]*cb.Capability{
+						cc.PactwayHybridCertificatePactwayV1: {},
+					},
+				},
+			},
+		},
+	}
+	temporary := &Bundle{
+		channelConfig: &ChannelConfig{
+			protos: &ChannelProtos{
+				Capabilities: &cb.Capabilities{
+					Capabilities: map[string]*cb.Capability{
+						cc.PactwayHybridCertificateV1: {},
+					},
+				},
+			},
+		},
+	}
+	classical := &Bundle{channelConfig: &ChannelConfig{}}
+
+	require.ErrorContains(t, permanent.ValidateNew(temporary), "from \"pactway-hybrid-certificate-v1\" to \"rfc5612-test-only-v1\"")
+	require.ErrorContains(t, permanent.ValidateNew(classical), "from \"pactway-hybrid-certificate-v1\" to \"\"")
+	require.ErrorContains(
+		t,
+		classical.ValidateNew(permanent),
+		"can only be enabled in fresh genesis configuration",
+	)
+	require.NoError(t, permanent.ValidateNew(permanent))
+}
+
 func TestPrevalidation(t *testing.T) {
 	t.Run("NilConfig", func(t *testing.T) {
 		err := preValidate(nil)

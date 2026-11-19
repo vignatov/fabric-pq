@@ -165,7 +165,9 @@ race tests, and performance tests have not been run after the change.
 
 PQ2 uses a custom, explicitly versioned Pactway hybrid-certificate profile;
 this is not RFC 10073 composite and does not claim RFC compliance. The current
-development profile uses only isolated RFC 5612 test OIDs while Thinkstratum
-Ltd awaits its official IANA PEN. See
+development registry retains the isolated RFC 5612 test profile and adds the
+permanent PEN 67732 profile, which also remains isolated-development-only
+pending separate production acceptance. The PEN allocation is not security
+approval. See
 [`docs/pq2/adr-hybrid-identities.md`](../docs/pq2/adr-hybrid-identities.md)
 for the accepted design, policy, compatibility boundary and remaining gates.

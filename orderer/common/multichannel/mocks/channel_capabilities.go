@@ -84,6 +84,10 @@ func (fake *ChannelCapabilities) PactwayHybridCertificateV1() bool {
 	return false
 }
 
+func (fake *ChannelCapabilities) PactwayHybridCertificateProfile() string {
+	return ""
+}
+
 func (fake *ChannelCapabilities) ConsensusTypeBFTCallCount() int {
 	fake.consensusTypeBFTMutex.RLock()
 	defer fake.consensusTypeBFTMutex.RUnlock()

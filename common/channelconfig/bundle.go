@@ -79,9 +79,20 @@ func (b *Bundle) ConfigtxValidator() configtx.Validator {
 // ValidateNew checks if a new bundle's contained configuration is valid to be derived from the current bundle.
 // This allows checks of the nature "Make sure that the consensus type did not change".
 func (b *Bundle) ValidateNew(nb Resources) error {
-	if b.channelConfig.hasPactwayHybridCertificateV1() &&
-		!hasPactwayHybridCertificateV1(nb.ChannelConfig()) {
-		return errors.New("attempted to remove the required Pactway Hybrid Certificate v1 channel capability")
+	currentProfile := hybridProfileForChannel(b.ChannelConfig())
+	newProfile := hybridProfileForChannel(nb.ChannelConfig())
+	if currentProfile == "" && newProfile == "pactway-hybrid-certificate-v1" {
+		return errors.New("permanent Pactway hybrid profile can only be enabled in fresh genesis configuration")
+	}
+	if currentProfile != "" && newProfile != currentProfile {
+		if newProfile == "" && currentProfile == "rfc5612-test-only-v1" {
+			return errors.New("attempted to remove the required Pactway Hybrid Certificate v1 channel capability")
+		}
+		return errors.Errorf(
+			"attempted to change the required Pactway hybrid certificate profile from %q to %q",
+			currentProfile,
+			newProfile,
+		)
 	}
 
 	if oc, ok := b.OrdererConfig(); ok {

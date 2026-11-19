@@ -19,7 +19,16 @@ import (
 )
 
 func TestHybridCertificateV1GenerationAndIssuerChain(t *testing.T) {
-	profile, err := HybridCertificateProfileByName(TemporaryHybridProfileV1, profileUseTest)
+	for _, profileName := range []string{TemporaryHybridProfileV1, PermanentHybridProfileV1} {
+		t.Run(profileName, func(t *testing.T) {
+			testHybridCertificateV1GenerationAndIssuerChain(t, profileName)
+		})
+	}
+}
+
+func testHybridCertificateV1GenerationAndIssuerChain(t *testing.T, profileName string) {
+	t.Helper()
+	profile, err := HybridCertificateProfileByName(profileName, profileUseTest)
 	require.NoError(t, err)
 
 	rootClassical := feasibilityECDSAKey(7)
@@ -102,6 +111,100 @@ func TestHybridCertificateV1GenerationAndIssuerChain(t *testing.T) {
 	require.Equal(t, 1, info.Version)
 	require.True(t, info.SignatureAlgorithm.Algorithm.Equal(oidMLDSA65))
 	require.Empty(t, info.SignatureAlgorithm.Parameters.FullBytes)
+	require.NoError(t, leaf.CheckSignatureFrom(intermediate))
+	if profileName == PermanentHybridProfileV1 {
+		require.Equal(t, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1, 1}, profile.ProfileKeyOID())
+		require.Equal(t, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1, 2}, profile.PQSignatureOID())
+	}
+
+	otherProfileName := TemporaryHybridProfileV1
+	if profileName == TemporaryHybridProfileV1 {
+		otherProfileName = PermanentHybridProfileV1
+	}
+	otherProfile, err := HybridCertificateProfileByName(otherProfileName, profileUseTest)
+	require.NoError(t, err)
+	require.Error(t, ValidateHybridCertificateChain(chains[0], otherProfile, true))
+}
+
+func TestHybridCertificateRejectsOtherRegisteredProfileExtensions(t *testing.T) {
+	for profileIndex, profileName := range []string{TemporaryHybridProfileV1, PermanentHybridProfileV1} {
+		t.Run(profileName, func(t *testing.T) {
+			profile, err := HybridCertificateProfileByName(profileName, profileUseTest)
+			require.NoError(t, err)
+
+			otherProfileName := TemporaryHybridProfileV1
+			if profileName == TemporaryHybridProfileV1 {
+				otherProfileName = PermanentHybridProfileV1
+			}
+			otherProfile, err := HybridCertificateProfileByName(otherProfileName, profileUseTest)
+			require.NoError(t, err)
+
+			otherClassical := feasibilityECDSAKey(int64(30 + profileIndex))
+			otherPQ := feasibilityMLDSAKey(t, byte(0x30+profileIndex))
+			otherTemplate := feasibilityCertificateTemplate(
+				int64(30+profileIndex),
+				"other registered profile",
+				otherClassical,
+				true,
+			)
+			otherDER, err := CreateHybridCertificate(
+				rand.Reader,
+				otherProfile,
+				otherTemplate,
+				otherTemplate,
+				&otherClassical.PublicKey,
+				otherClassical,
+				otherPQ.PublicKey,
+				otherPQ,
+			)
+			require.NoError(t, err)
+			otherCertificate, err := x509.ParseCertificate(otherDER)
+			require.NoError(t, err)
+
+			require.ErrorContains(
+				t,
+				ValidateHybridCertificateChain([]*x509.Certificate{otherCertificate}, profile, false),
+				"different registered profile",
+			)
+
+			otherExtensions := make([]pkix.Extension, 0, 2)
+			for _, extension := range otherCertificate.Extensions {
+				if isWithinOIDNamespace(extension.Id, otherProfile.namespaceOID) {
+					otherExtensions = append(otherExtensions, extension)
+				}
+			}
+			require.Len(t, otherExtensions, 2)
+
+			classical := feasibilityECDSAKey(int64(40 + profileIndex))
+			pq := feasibilityMLDSAKey(t, byte(0x40+profileIndex))
+			template := feasibilityCertificateTemplate(
+				int64(40+profileIndex),
+				"mixed registered profiles",
+				classical,
+				true,
+			)
+			template.ExtraExtensions = append(template.ExtraExtensions, otherExtensions...)
+			mixedDER, err := CreateHybridCertificate(
+				rand.Reader,
+				profile,
+				template,
+				template,
+				&classical.PublicKey,
+				classical,
+				pq.PublicKey,
+				pq,
+			)
+			require.NoError(t, err)
+			mixedCertificate, err := x509.ParseCertificate(mixedDER)
+			require.NoError(t, err)
+
+			require.ErrorContains(
+				t,
+				ValidateHybridCertificateChain([]*x509.Certificate{mixedCertificate}, profile, true),
+				"different registered profile",
+			)
+		})
+	}
 }
 
 func TestHybridCertificateV1RequiresSelfIssuedTrustAnchor(t *testing.T) {
@@ -410,6 +513,16 @@ func TestTemporaryHybridProfileRequiresExplicitDevelopmentUse(t *testing.T) {
 	profile, err := HybridCertificateProfileByName(TemporaryHybridProfileV1, ProfileUseIsolatedDevelopment)
 	require.NoError(t, err)
 	require.True(t, profile.DevelopmentOnly())
+}
+
+func TestPermanentHybridProfileRemainsIsolatedDevelopmentOnly(t *testing.T) {
+	_, err := HybridCertificateProfileByName(PermanentHybridProfileV1, ProfileUseProduction)
+	require.ErrorContains(t, err, "development-only")
+
+	profile, err := HybridCertificateProfileByName(PermanentHybridProfileV1, ProfileUseIsolatedDevelopment)
+	require.NoError(t, err)
+	require.True(t, profile.DevelopmentOnly())
+	require.Equal(t, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 67732, 1}, profile.namespaceOID)
 }
 
 func TestHybridCertificateV1TBSReconstructionRejectsTrailingData(t *testing.T) {
