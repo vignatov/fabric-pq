@@ -327,6 +327,9 @@ func (s *bftDelivererTestSetup) assertEventuallyMonitorCallCount(n int) {
 			s.mutex.Lock()
 			defer s.mutex.Unlock()
 
+			if s.fakeCensorshipMon == nil {
+				return 0
+			}
 			return s.fakeCensorshipMon.MonitorCallCount()
 		}, eventuallyTO,
 	).Should(Equal(n))

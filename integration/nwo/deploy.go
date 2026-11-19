@@ -154,6 +154,21 @@ func InstallChaincode(n *Network, chaincode Chaincode, peers ...*Peer) {
 		})
 		ExpectWithOffset(1, err).NotTo(HaveOccurred())
 		EventuallyWithOffset(1, sess, n.EventuallyTimeout).Should(gexec.Exit())
+		if sess.ExitCode() != 0 {
+			installed := QueryInstalled(n, p)()
+			ExpectWithOffset(1, installed).To(
+				ContainElement(gstruct.MatchFields(
+					gstruct.IgnoreExtras,
+					gstruct.Fields{
+						"Label":     Equal(chaincode.Label),
+						"PackageId": Equal(chaincode.PackageID),
+					},
+				)),
+				"chaincode install exited with status %d: %s",
+				sess.ExitCode(),
+				string(sess.Err.Contents()),
+			)
+		}
 
 		EnsureInstalled(n, chaincode.Label, chaincode.PackageID, p)
 		CheckPackageID(n, chaincode.PackageFile, chaincode.PackageID, p)

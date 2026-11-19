@@ -81,6 +81,9 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(sess, network.EventuallyTimeout).Should(gexec.Exit(0))
+		orderer := network.Orderer("orderer")
+		classicalOrdererMSP := filepath.Join(testDir, "classical-orderer-msp")
+		Expect(copyDirectory(network.OrdererLocalMSPDir(orderer), classicalOrdererMSP)).To(Succeed())
 
 		configDir, err := filepath.Abs(filepath.Join("..", "..", "sampleconfig"))
 		Expect(err).NotTo(HaveOccurred())
@@ -102,12 +105,25 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 		}
 		network.ConcatenateTLSCACertificates()
 
-		orderer := network.Orderer("orderer")
 		org1Peer := network.Peer("Org1", "peer0")
 		org2Peer := network.Peer("Org2", "peer0")
 		ordererRunner, startedOrderer, startedPeers := network.StartSingleOrdererNetwork(orderer.Name)
 		ordererProcess, peerProcess = startedOrderer, startedPeers
 		nwo.JoinOrdererJoinPeersAppChannel(network, "testchannel", orderer, ordererRunner)
+
+		ordererProcess.Signal(syscall.SIGTERM)
+		Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive())
+		ordererProcess = nil
+		Expect(installMSPKeepingTLS(classicalOrdererMSP, network.OrdererLocalMSPDir(orderer))).To(Succeed())
+		classicalRunner := network.OrdererRunner(orderer)
+		ordererProcess = ifrit.Invoke(classicalRunner)
+		var classicalExitErr error
+		Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive(&classicalExitErr))
+		ordererProcess = nil
+		Expect(classicalExitErr).To(HaveOccurred())
+		Expect(classicalRunner.Err()).To(gbytes.Say("validating local signing identity for PQ-required channel"))
+		installOrdererHybridIdentity(network, oldOutput)
+		ordererRunner, ordererProcess = network.StartOrderer(orderer.Name)
 
 		currentBlock := nwo.CurrentConfigBlockNumber(network, org1Peer, nil, "testchannel")
 		currentConfig := nwo.GetConfig(network, org1Peer, orderer, "testchannel")

@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hyperledger/fabric-chaincode-go/v2/shim"
 	"github.com/hyperledger/fabric-lib-go/bccsp"
@@ -471,6 +472,23 @@ func processProposals(endorserClients []pb.EndorserClient, signedProposal *pb.Si
 	return responses, nil
 }
 
+func recordPQ3StageTiming(stage, txID string, started time.Time) {
+	if os.Getenv("PACTWAY_STAGE_TIMINGS") != "true" {
+		return
+	}
+
+	completed := time.Now().UTC()
+	fmt.Fprintf(
+		os.Stderr,
+		"PQ3_STAGE_TIMING stage=%s txid=%s started_at=%s completed_at=%s duration_ms=%d\n",
+		stage,
+		txID,
+		started.UTC().Format(time.RFC3339Nano),
+		completed.Format(time.RFC3339Nano),
+		completed.Sub(started).Milliseconds(),
+	)
+}
+
 // ChaincodeInvokeOrQuery invokes or queries the chaincode. If successful, the
 // INVOKE form prints the ProposalResponse to STDOUT, and the QUERY form prints
 // the query result on STDOUT. A command-line flag (-r, --raw) determines
@@ -512,6 +530,7 @@ func ChaincodeInvokeOrQuery(
 		}
 	}
 
+	proposalStarted := time.Now()
 	prop, txid, err := protoutil.CreateChaincodeProposalWithTxIDAndTransient(pcommon.HeaderType_ENDORSER_TRANSACTION, cID, invocation, creator, txID, tMap)
 	if err != nil {
 		return nil, errors.WithMessagef(err, "error creating proposal for %s", funcName)
@@ -521,11 +540,14 @@ func ChaincodeInvokeOrQuery(
 	if err != nil {
 		return nil, errors.WithMessagef(err, "error creating signed proposal for %s", funcName)
 	}
+	recordPQ3StageTiming("proposal_preparation", txid, proposalStarted)
 
+	endorsementStarted := time.Now()
 	responses, err := processProposals(endorserClients, signedProp)
 	if err != nil {
 		return nil, errors.WithMessagef(err, "error endorsing %s", funcName)
 	}
+	recordPQ3StageTiming("endorsement_collection", txid, endorsementStarted)
 
 	if len(responses) == 0 {
 		// this should only happen if some new code has introduced a bug
@@ -567,17 +589,22 @@ func ChaincodeInvokeOrQuery(
 				}
 			}
 
-			// send the envelope for ordering
+			// This measures the local broadcast call through its acknowledgment,
+			// not orderer consensus or block creation.
+			orderingStarted := time.Now()
 			if err = bc.Send(env); err != nil {
 				return proposalResp, errors.WithMessagef(err, "error sending transaction for %s", funcName)
 			}
+			recordPQ3StageTiming("ordering_submission", txid, orderingStarted)
 
 			if dg != nil && ctx != nil {
 				// wait for event that contains the txid from all peers
+				finalityStarted := time.Now()
 				err = dg.Wait(ctx)
 				if err != nil {
 					return nil, err
 				}
+				recordPQ3StageTiming("finality_wait", txid, finalityStarted)
 			}
 		}
 	}
