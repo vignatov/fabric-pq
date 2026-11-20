@@ -9,10 +9,12 @@ and [push run 44081579090](https://github.com/vignatov/fabric-pq/actions/runs/44
 both completed with all 11 jobs successful, including Basic Checks, Unit Tests
 and all nine integration groups, on Go 1.27.4 linux/amd64. This supersedes the
 earlier note below that the Deliver/Discovery follow-up awaited CI. The
-associated technical decision is accepted for development-only merge in
+associated technical decision was accepted for development-only merge in
 [PR review comment #5940337911](https://github.com/vignatov/fabric-pq/pull/4#pullrequestreview-5940337911);
 GitHub records it as `COMMENTED`, not `APPROVED`, because it was submitted by
-the PR author. The PR remains a draft and no merge has occurred.
+the PR author. The change later merged as PR #4 at
+`7cd8a0969229b800819ec4b181099cbc22b7bbc4`; this historical review status is
+not production approval.
 
 The tested implementation head is
 `f6ff21ca78bce024214f156714f057250cb56db5` on
@@ -707,12 +709,14 @@ The fixes passed focused local tests and the complete 11-job CI matrix at
 `77f0528809aa7bf927a3ab7c382bf3219946d043`; the exact commands and results are
 recorded in the verified development baseline above.
 
-The technical acceptance decision is **development-only merge for isolated
-use**, preserving the guards and limitations above. GitHub's independent
-approval requirement remains unsatisfied, the PR is still a draft, and no merge
-has occurred. This acceptance does not constitute production approval or PQ3
-authorization. The following gates remain open before production acceptance
-or external use:
+The technical acceptance decision was **development-only merge for isolated
+use**, preserving the guards and limitations above. PQ2 merged as PR #4 at
+`7cd8a0969229b800819ec4b181099cbc22b7bbc4`; PQ3 later merged as PR #5 at
+`5d13c5fa5f92a9c7e8c2fa785ae7b0a133d36a13`; and PQ2.5 later merged as PR #6
+at `15b79ff54c31d9b04750b530c87424326682fe42`. PQ3.5 permanent-profile
+integration is separately authorized as development work and is not yet a
+production approval. The following gates remain open before production
+acceptance or external use:
 
 - Separately approve the permanent ASN.1/profile, compatibility behavior, and
   security requirements before any production acceptance; the PEN allocation
@@ -730,30 +734,29 @@ or external use:
   establish production key custody, backup, rotation and disposal procedures.
 
 Production-profile PQ2 acceptance remains open. Do not publish or externally
-deploy temporary-profile artifacts, bypass the release guard, or begin PQ3.
+deploy either profile's artifacts or bypass the release guard.
 
 ## PQ3 handoff
 
-PQ3 must not start until the maintainer explicitly reviews and accepts the PQ2
-handoff and separately authorizes the next phase. PQ2's development-only
-acceptance is not that authorization. Remaining production prerequisites
-include reviewing and approving the production ASN.1/profile, compatibility
-behavior, and security requirements; independently reviewing the production
-profile; and approving an enforceable time design. The handoff must also carry
-forward the time-design and distributed-liveness gates above, classical TLS
-and CRL limitations, and production key-custody requirements. Recording these
-items does not approve their design or move them silently into an authorized
-PQ3 implementation. PQ2 does not include settlement application development
-or a claim of fully quantum-resistant networking.
+PQ3's isolated demonstration network was authorized for development and merged
+as PR #5. PQ2.5's permanent profile/OID registry merged as PR #6. PQ3.5 is the
+separately authorized integration of that profile into the existing
+demonstration; it does not migrate existing channels or networks. These
+development milestones do not approve the production ASN.1/profile,
+compatibility behavior, cryptographic review, or time design. They also retain
+the distributed-liveness gates above, classical TLS and CRL limitations, and
+production key-custody requirements. Settlement application development and
+claims of fully quantum-resistant networking remain out of scope.
 
 ## PQ2.5 permanent namespace acceptance
 
-PQ2.5 registers the permanent profile and its OIDs while retaining the
-temporary test profile. The permanent channel capability is an authenticated
-profile/version selector; local environment settings only agree with, and
-never override, that policy. Fresh genesis and fresh identities are mandatory.
-Existing PQ3 temporary-profile networks and scripts are intentionally
-unchanged.
+PQ2.5 registered the permanent profile and its OIDs while retaining the
+temporary test profile. It merged as PR #6 at
+`15b79ff54c31d9b04750b530c87424326682fe42`. The permanent channel capability
+is an authenticated profile/version selector; local environment settings only
+agree with, and never override, that policy. Fresh genesis and fresh identities
+are mandatory. PQ3.5 extends the existing PQ3 scripts for both profiles without
+changing the established certificate construction or cryptographic semantics.
 
 The release workflow still blocks as long as a development-only profile is
 present. Any future profile-aware release gate requires separate approval;
@@ -762,6 +765,10 @@ acceptance command results for the current implementation are recorded in the
 PQ2.5 review evidence below.
 
 ### PQ2.5 review evidence
+
+The results in this subsection are historical PQ2.5 evidence collected before
+PQ3.5 changed the shared PQ3 scripts. They document the tests and scope of the
+PQ2.5 review, not the current PQ3.5 acceptance status.
 
 The following focused checks passed on WSL Ubuntu 24.04 with Go 1.27.4:
 
@@ -780,7 +787,8 @@ genesis material, and a development-only public manifest.
 The unsupported-binary integration test was run with actual binaries:
 
 - Pre-PQ2.5 peer built from source commit
-  `c19e53942a1e10e3a1c8f945e6edb59d9123ebf9`, SHA-256
+  `c19e53942a1e10e3a1c8f945e6edb59d9123ebf9`. The earlier recorded build used
+  Go 1.26 and SHA-256
   `a5511e90f1559c27def4cbbadf21b1031ff57e1191b6512aec676be0d4dbc6d7`.
 - Unmodified official Fabric `v3.1.5` peer, commit `86c1172`, SHA-256
   `46a760292a0622bebd8e593b391485f1aa281cb505b2488968ecc4d9e1d5cf89`.
@@ -845,3 +853,68 @@ The full output showed no other failing packages. The two failures are
 recorded rather than changing unrelated tests or fixtures. PQ3 network scripts
 and runtime state were not modified or exercised.
 PQ3 network scripts and runtime state were not modified or exercised.
+
+## PQ3.5 dual-profile acceptance results
+
+PQ3.5 integrates the permanent certificate profile into the existing PQ3
+demonstration while retaining the temporary profile. Both profiles remain
+isolated-development-only. The implementation is on the unmerged
+`feature/pq35-permanent-profile-acceptance` branch; merge and production
+approval remain out of scope.
+
+The final local full-acceptance runs passed on WSL Ubuntu 24.04 with Go 1.27.4
+and Docker Desktop. The four compatibility binaries and their pinned
+provenance were supplied before each run:
+
+| Binary | Source/release | SHA-256 |
+| --- | --- | --- |
+| Upstream Fabric peer | v3.1.5, commit `86c1172` | `46a760292a0622bebd8e593b391485f1aa281cb505b2488968ecc4d9e1d5cf89` |
+| Upstream Fabric orderer | v3.1.5, commit `86c1172` | `276b60a703e6187dfcdde7a0d16751a1986ca8ee12e9dd8065b307438cff8f69` |
+| Pre-PQ2.5 Pactway peer | `c19e53942a1e10e3a1c8f945e6edb59d9123ebf9` | `0e06d47aff457fc2736243bcc343b2a58082954de0616f36ac3377b145361f4f` |
+| Pre-PQ2.5 Pactway orderer | `c19e53942a1e10e3a1c8f945e6edb59d9123ebf9` | `621f7f4f9cad8302ffcc720ebbfdfdbcb1d37e96fae0b197df76950b7388955b` |
+
+With the binary path, SHA-256, and revision variables documented in
+[the PQ3 runbook](../../integration/pq3/README.md), the exact profile
+invocations and results were:
+
+```bash
+PACTWAY_HYBRID_PROFILE=rfc5612-test-only-v1 \
+PACTWAY_ISOLATED_DEVELOPMENT=true \
+integration/pq3/pq3.sh acceptance
+# Passed
+
+PACTWAY_HYBRID_PROFILE=pactway-hybrid-certificate-v1 \
+PACTWAY_ISOLATED_DEVELOPMENT=true \
+integration/pq3/pq3.sh acceptance
+# Passed
+```
+
+Each acceptance run passed the focused hybrid MSP network tests, source-built
+network deployment, peer/orderer channel activation, organization-specific
+chaincode lifecycle, repeated two-organization transaction verification,
+negative endorsement, recovery, protected evidence export, and scoped runtime
+cleanup. The orderer compatibility tests assert both the HTTP join rejection
+and the server log's unsupported-capability diagnostic. The sanitized reports
+are written under
+`build/pq3/acceptance-evidence/{temporary-profile,permanent-profile}/`; the
+corresponding protected verification packages stay under the configured
+`PQ3_PROTECTED_EVIDENCE_ROOT` and are not published.
+
+Both protected packages passed `sha256sum --check SHA256SUMS`, identified the
+expected profile and channel capability in their network and transaction
+evidence, validated the profile OIDs and block signature, and verified two
+endorsements from `Org1MSP` and `Org2MSP`. Each retained the public channel
+configuration, certificates, transaction blocks, verification results, and
+sanitized logs. Neither package contained private-key files or private-key
+blocks.
+
+The network manifests identify candidate commit
+`15b79ff54c31d9b04750b530c87424326682fe42` and source-tree SHA-256
+`7fbd0a4fc8902d788dd4f10d2fe882cbeb6ec9f2e27774737107836354bc6604`, with
+`source_worktree_dirty=true`. These results therefore attest to that exact
+local worktree snapshot, not to the baseline commit alone or a hosted CI run.
+Only documentation and whitespace-only workflow formatting changed after
+these runs; no runtime or test logic changed.
+The release guard remains fail-closed while development-only profiles are
+registered. These development acceptance results do not authorize a merge,
+external deployment, or production use.

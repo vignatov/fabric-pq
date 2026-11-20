@@ -2,14 +2,15 @@
 
 ## Status
 
-Accepted by the project reviewer for a development-only PQ2 merge and isolated
-testing at commit `77f0528809aa7bf927a3ab7c382bf3219946d043`; see the
-[development acceptance report](development-and-validation.md) and PR review
-comment #5940337911. The PR author recorded the review as `COMMENTED`, not a
-GitHub `APPROVED` event, so any required independent GitHub approval remains
-outstanding. The PR remains a draft and has not been merged. This acceptance
-does not approve the production profile/OIDs, authorize PQ3, or claim external
-cryptographic certification.
+The development-only PQ2 implementation merged in PR #4 at
+`7cd8a0969229b800819ec4b181099cbc22b7bbc4`. PQ3's isolated demonstration
+network merged in PR #5 at `5d13c5fa5f92a9c7e8c2fa785ae7b0a133d36a13`, and
+PQ2.5's permanent profile/OID registry merged in PR #6 at
+`15b79ff54c31d9b04750b530c87424326682fe42`. PQ3.5 permanent-profile network
+integration is separately authorized as development work; its implementation
+and acceptance results remain subject to review. These merges do not grant
+production approval, external cryptographic certification, or permission to
+deploy either profile outside isolated development.
 
 ## Context
 
@@ -171,8 +172,10 @@ prevented from joining by the authenticated channel capability.
 
 The profile supplies post-quantum enrollment signing, not complete
 quantum-resistant network security. TLS, key exchange, revocation and
-unmodified external client transport remain classical. This ADR does not
-authorize PQ3 or production deployment of temporary identifiers.
+unmodified external client transport remain classical. This ADR records the PQ2 certificate/MSP decision; it did not itself authorize
+later milestones. PQ3 and PQ3.5 have separate development authorizations and
+merge gates. It does not authorize production deployment of either registered
+profile.
 
 ## References
 

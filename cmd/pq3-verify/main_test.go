@@ -7,12 +7,24 @@ SPDX-License-Identifier: Apache-2.0
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/pem"
+	"math/big"
 	"testing"
+	"time"
 
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset"
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset/kvrwset"
+	mspprotos "github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	peer "github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	"github.com/hyperledger/fabric/common/capabilities"
+	oqs "github.com/hyperledger/fabric/pq-crypto"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -140,6 +152,133 @@ func TestVerifyStateWriteRequiresExpectedKeyValue(t *testing.T) {
 		verifyStateWrite(results, "another-chaincode", "pq3-asset", "updated-value"),
 		"does not write",
 	)
+}
+
+func TestRequiredProfileComesFromAuthenticatedChannel(t *testing.T) {
+	tests := []struct {
+		name        string
+		local       string
+		channelCaps map[string]*cb.Capability
+		wantProfile string
+		wantErr     string
+	}{
+		{
+			name:        "temporary profile",
+			local:       oqs.TemporaryHybridProfileV1,
+			channelCaps: map[string]*cb.Capability{capabilities.PactwayHybridCertificateV1: {}},
+			wantProfile: oqs.TemporaryHybridProfileV1,
+		},
+		{
+			name:        "permanent profile",
+			local:       oqs.PermanentHybridProfileV1,
+			channelCaps: map[string]*cb.Capability{capabilities.PactwayHybridCertificatePactwayV1: {}},
+			wantProfile: oqs.PermanentHybridProfileV1,
+		},
+		{
+			name:  "local profile mismatch",
+			local: oqs.TemporaryHybridProfileV1,
+			channelCaps: map[string]*cb.Capability{
+				capabilities.PactwayHybridCertificatePactwayV1: {},
+			},
+			wantErr: "does not match authenticated channel profile",
+		},
+		{
+			name:  "both profiles in channel",
+			local: oqs.TemporaryHybridProfileV1,
+			channelCaps: map[string]*cb.Capability{
+				capabilities.PactwayHybridCertificateV1:        {},
+				capabilities.PactwayHybridCertificatePactwayV1: {},
+			},
+			wantErr: "does not require exactly one supported Pactway hybrid profile",
+		},
+		{
+			name:        "channel without profile",
+			local:       oqs.TemporaryHybridProfileV1,
+			channelCaps: map[string]*cb.Capability{},
+			wantErr:     "does not require exactly one supported Pactway hybrid profile",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("PACTWAY_HYBRID_PROFILE", test.local)
+			t.Setenv("PACTWAY_ISOLATED_DEVELOPMENT", "true")
+			profile, err := requiredProfileFromChannel(capabilities.NewChannelProvider(test.channelCaps))
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.wantProfile, profile.Name())
+		})
+	}
+}
+
+func TestVerifySerializedIdentityProfileRequiresBothSelectedExtensions(t *testing.T) {
+	profile, err := oqs.HybridCertificateProfileByName(
+		oqs.PermanentHybridProfileV1,
+		oqs.ProfileUseIsolatedDevelopment,
+	)
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name       string
+		extensions []pkix.Extension
+		wantErr    string
+	}{
+		{
+			name: "matching profile",
+			extensions: []pkix.Extension{
+				{Id: profile.ProfileKeyOID()},
+				{Id: profile.PQSignatureOID()},
+			},
+		},
+		{
+			name: "missing PQ signature OID",
+			extensions: []pkix.Extension{
+				{Id: profile.ProfileKeyOID()},
+			},
+			wantErr: "missing profile extension OID",
+		},
+		{
+			name: "temporary profile OIDs",
+			extensions: []pkix.Extension{
+				{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1, 1}},
+				{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 32473, 1, 2}},
+			},
+			wantErr: "missing profile extension OID",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			serialized := testSerializedIdentity(t, test.extensions)
+			err := verifySerializedIdentityProfile(serialized, profile)
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func testSerializedIdentity(t *testing.T, extensions []pkix.Extension) []byte {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		ExtraExtensions:       extensions,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	require.NoError(t, err)
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	identity, err := proto.Marshal(&mspprotos.SerializedIdentity{Mspid: "Org1MSP", IdBytes: certificate})
+	require.NoError(t, err)
+	return identity
 }
 
 func testEnvelope(t *testing.T, txID string) *cb.Envelope {
