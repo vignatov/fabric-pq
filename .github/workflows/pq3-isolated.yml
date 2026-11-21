@@ -112,13 +112,6 @@ jobs:
               return 1
             fi
           }
-          require_text() {
-            local path="$1" text="$2" description="$3"
-            if ! grep -Fq -- "$text" "$path"; then
-              printf 'Missing %s in %s\n' "$description" "$path" >&2
-              return 1
-            fi
-          }
           mapfile -t packages < <(find "$PQ3_PROTECTED_EVIDENCE_ROOT" -mindepth 2 -maxdepth 2 \
             -type d -name 'acceptance-*' | sort)
           if [[ "${#packages[@]}" -ne 2 ]]; then
@@ -134,8 +127,9 @@ jobs:
             for candidate in "${packages[@]}"; do
               manifest="$candidate/sanitized-evidence/network-manifest.json"
               if [[ -s "$manifest" ]] &&
-                grep -Fq "\"hybrid_profile\": \"$profile\"" "$manifest" &&
-                grep -Fq "\"channel_capability\": \"$capability\"" "$manifest"; then
+                jq -e --arg profile "$profile" --arg capability "$capability" \
+                  '.hybrid_profile == $profile and .channel_capability == $capability' \
+                  "$manifest" >/dev/null; then
                 package="$candidate"
                 break
               fi
@@ -149,22 +143,29 @@ jobs:
               printf 'Protected evidence package is inside the workspace: %s\n' "$package" >&2
               exit 1
             fi
-            require_text "$package/sanitized-evidence/public-network-manifest.json" \
-              "\"hybrid_profile\": \"$profile\"" "hybrid profile $profile"
-            require_text "$package/sanitized-evidence/public-network-manifest.json" \
-              "\"channel_capability\": \"$capability\"" "channel capability $capability"
-            require_text "$package/sanitized-evidence/transaction-verification.json" \
-              "\"hybrid_profile\": \"$profile\"" "verified profile $profile"
-            require_text "$package/sanitized-evidence/transaction-verification.json" \
-              '"validated_profile_oids": true' "validated profile OIDs"
-            require_text "$package/sanitized-evidence/transaction-verification.json" \
-              '"block_signature_valid": true' "valid block signature"
-            require_text "$package/sanitized-evidence/transaction-verification.json" \
-              '"verified_endorsements": 2' "two verified endorsements"
-            require_text "$package/sanitized-evidence/transaction-verification.json" \
-              '"Org1MSP"' "Org1MSP endorsement"
-            require_text "$package/sanitized-evidence/transaction-verification.json" \
-              '"Org2MSP"' "Org2MSP endorsement"
+            public_manifest="$package/sanitized-evidence/public-network-manifest.json"
+            require_file "$public_manifest" "sanitized public network manifest"
+            if ! jq -e --arg profile "$profile" --arg capability "$capability" \
+              '.hybrid_profile == $profile and .channel_capability == $capability' \
+              "$public_manifest" >/dev/null; then
+              printf 'Sanitized public manifest has the wrong profile or capability for %s.\n' \
+                "$profile" >&2
+              exit 1
+            fi
+            verification="$package/sanitized-evidence/transaction-verification.json"
+            require_file "$verification" "transaction verification report"
+            if ! jq -e --arg profile "$profile" '
+              .hybrid_profile == $profile
+              and .validated_profile_oids == true
+              and .block_signature_valid == true
+              and .verified_endorsements == 2
+              and (.endorsing_msps | index("Org1MSP") != null)
+              and (.endorsing_msps | index("Org2MSP") != null)
+            ' "$verification" >/dev/null; then
+              printf 'Transaction verification report failed profile or endorsement checks for %s.\n' \
+                "$profile" >&2
+              exit 1
+            fi
             require_file "$package/verification-inputs/channel-config/genesis.block" \
               "channel genesis block"
             require_file "$package/verification-inputs/certificates/organizations/Org1/msp/cacerts/root.pem" \
