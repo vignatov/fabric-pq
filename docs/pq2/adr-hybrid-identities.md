@@ -171,11 +171,16 @@ RFC-compliant. Upstream validators that ignore noncritical extensions must be
 prevented from joining by the authenticated channel capability.
 
 The profile supplies post-quantum enrollment signing, not complete
-quantum-resistant network security. TLS, key exchange, revocation and
-unmodified external client transport remain classical. This ADR records the PQ2 certificate/MSP decision; it did not itself authorize
-later milestones. PQ3 and PQ3.5 have separate development authorizations and
-merge gates. It does not authorize production deployment of either registered
-profile.
+quantum-resistant network security. The PQ3.5 network uses classical ECDSA
+TLS authentication and does not record its negotiated key-exchange group.
+Revocation and unmodified external client transport remain production
+limitations. The separate [PQ4 transport audit](../pq4/architecture.md) has
+not established an approved network-wide PQ transport policy.
+
+This ADR records the PQ2 certificate/MSP decision; it did not itself
+authorize later milestones. PQ3 and PQ3.5 have separate development
+authorizations and merge gates. It does not authorize production deployment
+of either registered profile.
 
 ## References
 
