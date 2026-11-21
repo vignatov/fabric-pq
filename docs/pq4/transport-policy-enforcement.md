@@ -100,6 +100,15 @@ config-hash pinning also requires a separate authenticated policy/checkpoint
 update whenever a channel configuration changes. Neither an in-memory
 checkpoint nor a sample channel proves the corresponding production properties.
 
+A [live baseline experiment](validation-and-evidence.md#live-baseline-configuration-and-rollback-experiment)
+also distinguishes stale updates from storage rollback: Fabric rejected an
+unauthorized config update and a stale signed replay, but permitted an
+authorized removal of a redundant, unprotected capability. Restoring the
+single orderer's earlier ledger and Raft state after shutdown caused it to
+serve the previous configuration and accept the previously stale update on
+restart. The two peers were stopped before the restore; this does not
+establish multi-orderer behavior or prove any PQ4 transport policy.
+
 The following mandatory proofs are **not yet available**:
 
 1. Missing, stale, conflicting or weakened trusted policy fails closed before

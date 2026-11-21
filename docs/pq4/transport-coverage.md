@@ -35,7 +35,9 @@ client TLS certificates. Transport and enrollment credentials are distinct.
 ## Cross-cutting gaps
 
 - [Server credentials](../../internal/pkg/comm/creds.go) explicitly set the
-  server minimum to TLS 1.2, including on credential clones.
+  server minimum to TLS 1.2, including on credential clones. A
+  [component test](validation-and-evidence.md#observed-results) confirms
+  actual TLS 1.2 negotiation after each reset.
   [Dynamic credentials](../../internal/pkg/comm/creds.go),
   [connection management](../../orderer/common/cluster/connectionsmgr.go),
   delivery and Gateway factories must preserve any future policy and reject

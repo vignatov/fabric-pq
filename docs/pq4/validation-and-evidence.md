@@ -70,6 +70,35 @@ experiment does not demonstrate a PQ4 policy, prevent an old binary from
 making a classical connection before channel identification, or show that a
 future PQ4-required channel enforces transport security.
 
+## Live baseline configuration and rollback experiment
+
+On the PQ4 feasibility worktree at `5efd19928` plus this test and
+documentation edits, the following focused test used a fresh local
+single-orderer, two-organization Fabric network with baseline ECDSA TLS
+credentials; its negotiated key-exchange groups were not observed:
+
+```text
+GOFLAGS=-buildvcs=false go test -mod=vendor -count=1 -timeout 15m -v -run TestMSP github.com/hyperledger/fabric/integration/msp -args -ginkgo.focus=PQ4.config.update.feasibility
+PASS: 1 selected spec; 14 unrelated specs filtered out
+```
+
+An ordinary user could not authorize a channel configuration change. The two
+organization admins and orderer admin then authorized removal of `V2_0`
+while `V3_0` remained enabled, and the orderer committed the updated config.
+This redundant-capability removal demonstrates generic capability
+mutability, not an actual weakening of transport security. Replaying the
+same signed update against the advanced config was rejected with the
+capability value's version-conflict diagnostic.
+
+After both peers were stopped, the test replaced the stopped orderer's
+FileLedger and Raft state with the task-owned snapshot taken before the
+update. On restart the single orderer served the earlier configuration
+again and accepted the same signed update that had been rejected as stale
+before the restore. This is an isolated local-state rollback, not a PQ4
+network or a multi-orderer consensus test; it does not demonstrate how an
+independent honest peer or protected checkpoint would respond. The test
+removes its own temporary network and snapshots afterward.
+
 ## Observed results
 
 | Check | Result and evidence boundary |
@@ -84,6 +113,7 @@ future PQ4-required channel enforces transport security.
 | Additional endpoint-key check | PASS for an isolated test-only `VerifyConnection` callback that runs after normal X.509 validation and rejects an ECDSA leaf on either side while accepting ML-DSA-65 peers. This is not a selected or deployed Fabric policy. |
 | Existing Fabric `comm` interoperability | PASS for a gRPC health request using the actual `comm` server and client constructors with ML-DSA-65 mutual credentials. The observed default connection negotiated X25519MLKEM768. This is a component test, not a complete Fabric network. |
 | Existing Fabric fallback | The same unmodified `comm` server **accepted** a TLS 1.3 client restricted to classical X25519; both endpoints reported X25519. This confirms baseline configuration is not strict PQ4 policy. |
+| Fabric server-credential minimum | A controlled TLS 1.3-minimum server config rejected a TLS 1.2 client. After `comm.NewServerTransportCredentials` consumed it, a real gRPC request negotiated TLS 1.2. Restoring the original minimum before cloning still produced cloned credentials that negotiated TLS 1.2. This fixture uses an ECDSA server leaf so TLS 1.2 authentication is possible; it is not an ML-DSA TLS 1.2 claim. |
 | Fabric MSP TLS roots | PASS. A real verifying MSP initialized with a fresh ML-DSA-65 TLS CA and rejected a leaf substituted as a CA. Its enrollment fixture remained separate and classical; this is not a hybrid-channel integration test. |
 | Raft certificate metadata | PASS. The actual Raft metadata validator accepted ML-DSA-65 client/server certificates under their CA and rejected a server certificate issued by a different CA. This does not start Raft or validate network traffic. |
 | Administration HTTPS components | PASS. `fabhttp` and the real `osnadmin` HTTP client exchanged a request with ML-DSA-65 mTLS and observed X25519MLKEM768. A second X25519-only client was also **accepted** by the same baseline admin listener. The handler is a test fixture, not a running orderer. |

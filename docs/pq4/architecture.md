@@ -53,11 +53,12 @@ accepts a classical-only X25519 client. This is not a network-wide test.
 | Component or software | Current evidence |
 | --- | --- |
 | Native Go TLS/X.509 and gRPC | Standalone feasibility passes in the recorded non-FIPS environment. |
-| Fabric `comm` constructors | ML-DSA mutual TLS component test passes, but strict group enforcement is absent. |
+| Fabric `comm` constructors | ML-DSA mutual TLS component test passes, but strict group enforcement is absent. Server-credential construction and cloning can each reset an explicit TLS 1.3 minimum and allow a TLS 1.2 handshake. |
 | MSP TLS CA and Raft metadata validation | Component tests accept ML-DSA-65 TLS material and reject selected invalid inputs; no running consensus network is demonstrated. |
 | `fabhttp` and `osnadmin` | ML-DSA mutual TLS component test passes; the unmodified admin listener also accepts classical-only key exchange. |
 | CCAAS chaincode shim | With TLS explicitly enabled in a test fixture, the real shim accepts ML-DSA mutual TLS registration over both hybrid and classical-only key exchange. The PQ3 CCAAS deployment remains plaintext. |
 | Signed bootstrap-policy prototype | An isolated test exercises an authenticated policy, assumed trusted checkpoint and strict server handshake. It does not integrate with Fabric or establish a real rollback-resistant checkpoint. |
+| Live baseline configuration rollback | A single orderer rejects a stale signed update against its current ledger but serves the older configuration after its local ledger and Raft state are restored. No PQ4 policy or multi-orderer behavior was tested. |
 | Existing PQ3.5 network | Merged-commit baseline acceptance passed with ECDSA TLS authentication; actual key-exchange groups were not recorded. |
 | Peer, orderer, Raft, admin, CCAAS and Gateway with PQ4 policy | Not tested; no PQ4 mode exists. |
 | Existing or upstream binaries against a PQ4-required channel | Not tested; no PQ4 channel requirement exists. Both baseline and pinned-upstream binaries reject a deliberately unknown test capability, which does not prove PQ4 transport enforcement. |

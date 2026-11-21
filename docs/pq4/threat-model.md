@@ -50,6 +50,12 @@ and third-party assessment remain production gates. A passing transport
 handshake does not establish transaction validity; a committed transaction
 does not establish the security of all its network paths.
 
+In a [local baseline test](validation-and-evidence.md#live-baseline-configuration-and-rollback-experiment),
+a single orderer served an older channel configuration after its ledger and
+Raft state were restored, despite rejecting a stale signed update against the
+newer state. This does not model an independently protected freshness source
+or a multi-orderer cluster.
+
 No certificate private keys, TLS secrets, session tickets or reusable
 credentials may be included in CI evidence. The demo remains isolated,
 development-only and subject to existing release guards.

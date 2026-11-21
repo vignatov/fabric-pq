@@ -10,6 +10,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/peer"
 )
@@ -27,6 +30,61 @@ func pemPair(t *testing.T, cert tls.Certificate) ([]byte, []byte) {
 	require.NoError(t, err)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+}
+
+func TestFabricCommServerCredentialsResetTLSMinimum(t *testing.T) {
+	ca := newAuthority(t)
+	serverCert := ca.classicalLeaf(t, x509.ExtKeyUsageServerAuth)
+	serverConfig, clientConfig := configs(ca, serverCert, tls.Certificate{}, false)
+	serverConfig.CurvePreferences = nil
+	clientConfig.CurvePreferences = nil
+	clientConfig.MinVersion, clientConfig.MaxVersion = tls.VersionTLS12, tls.VersionTLS12
+
+	serverResult, clientResult := exchange(t, serverConfig, clientConfig)
+	require.Error(t, serverResult.err)
+	require.Error(t, clientResult.err)
+	require.Contains(t, fmt.Sprintf("%v %v", serverResult.err, clientResult.err), "unsupported versions")
+
+	fabricConfig := comm.NewTLSConfig(serverConfig)
+	creds := comm.NewServerTransportCredentials(fabricConfig, nil)
+	checkTLS12 := func(t *testing.T, creds credentials.TransportCredentials) {
+		t.Helper()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		server := grpc.NewServer(grpc.Creds(creds))
+		healthServer := health.NewServer()
+		healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+		healthpb.RegisterHealthServer(server, healthServer)
+		serveErrors := make(chan error, 1)
+		go func() { serveErrors <- server.Serve(listener) }()
+		defer func() {
+			server.Stop()
+			require.NoError(t, <-serveErrors)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn, err := grpc.DialContext(ctx, listener.Addr().String(), grpc.WithBlock(),
+			grpc.WithTransportCredentials(credentials.NewTLS(clientConfig)))
+		require.NoError(t, err)
+		defer conn.Close()
+		var remote peer.Peer
+		response, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}, grpc.Peer(&remote))
+		require.NoError(t, err)
+		require.Equal(t, healthpb.HealthCheckResponse_SERVING, response.Status)
+		auth, ok := remote.AuthInfo.(credentials.TLSInfo)
+		require.True(t, ok)
+		require.Equal(t, uint16(tls.VersionTLS12), auth.State.Version)
+		require.NotEmpty(t, auth.State.VerifiedChains)
+	}
+	t.Run("original credentials", func(t *testing.T) { checkTLS12(t, creds) })
+
+	serverConfig.MinVersion = tls.VersionTLS13
+	serverResult, clientResult = exchange(t, serverConfig, clientConfig)
+	require.Error(t, serverResult.err)
+	require.Error(t, clientResult.err)
+	require.Contains(t, fmt.Sprintf("%v %v", serverResult.err, clientResult.err), "unsupported versions")
+	t.Run("cloned credentials", func(t *testing.T) { checkTLS12(t, creds.Clone()) })
 }
 
 func TestFabricCommMLDSACompatibility(t *testing.T) {
