@@ -367,17 +367,17 @@ func generateReplayChaincodeConfig(address string) (externalbuilder.ChaincodeSer
 
 	caCert := string(tlsCA.CertBytes())
 	return externalbuilder.ChaincodeServerUserData{
-			Address:            address,
-			DialTimeout:        externalbuilder.Duration(10 * time.Second),
-			TLSRequired:        true,
-			ClientAuthRequired: true,
-			ClientKey:          string(clientPair.Key),
-			ClientCert:         string(clientPair.Cert),
-			RootCert:           caCert,
-		}, replayChaincodeServerConfig{
-			ListenAddress: address,
-			Key:           string(serverPair.Key),
-			Cert:          string(serverPair.Cert),
-			CA:            caCert,
-		}
+		Address:            address,
+		DialTimeout:        externalbuilder.Duration(10 * time.Second),
+		TLSRequired:        true,
+		ClientAuthRequired: true,
+		ClientKey:          string(clientPair.Key),
+		ClientCert:         string(clientPair.Cert),
+		RootCert:           caCert,
+	}, replayChaincodeServerConfig{
+		ListenAddress: address,
+		Key:           string(serverPair.Key),
+		Cert:          string(serverPair.Cert),
+		CA:            caCert,
+	}
 }
