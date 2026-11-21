@@ -76,7 +76,7 @@ require_isolated_profile() {
 
 verify_generated_manifest() {
 	local manifest="$RUN_DIR/material/public/manifest.json"
-	local manifest_profile channel_capability
+	local manifest_profile channel_capability expected_channel_capability
 	[[ -s "$manifest" ]] ||
 		fail "generated public profile manifest is missing"
 	manifest_profile="$(jq -er '.hybrid_profile | strings' "$manifest")" ||
@@ -85,10 +85,19 @@ verify_generated_manifest() {
 		fail "generated manifest has no channel capability declaration"
 	[[ "$manifest_profile" == "$PROFILE" ]] ||
 		fail "generated manifest does not declare profile $PROFILE"
-	case "$channel_capability" in
-		PactwayHybridCertificateV1|PactwayHybridCertificatePactwayV1) ;;
-		*) fail "generated manifest has unsupported channel capability $channel_capability" ;;
+	case "$PROFILE" in
+		"$TEMPORARY_PROFILE")
+			expected_channel_capability="PactwayHybridCertificateV1"
+			;;
+		"$PERMANENT_PROFILE")
+			expected_channel_capability="PactwayHybridCertificatePactwayV1"
+			;;
+		*)
+			fail "generated manifest has unsupported profile $PROFILE"
+			;;
 	esac
+	[[ "$channel_capability" == "$expected_channel_capability" ]] ||
+		fail "generated manifest capability $channel_capability does not match profile $PROFILE (expected $expected_channel_capability)"
 	jq -e '.development_only == true' "$manifest" >/dev/null ||
 		fail "generated profile manifest must remain development-only"
 	mkdir -p -- "$RUN_DIR/evidence"

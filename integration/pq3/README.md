@@ -36,6 +36,8 @@ Thinkstratum PEN `67732` OIDs:
 `1.3.6.1.4.1.67732.1.2` (PQ signature). The channel capability, not a local
 environment default, determines the verifier's required profile. Both profiles
 require `PACTWAY_ISOLATED_DEVELOPMENT=true`; neither is production-approved.
+Before generating the network, the script requires the public manifest's
+capability to exactly match the selected profile.
 
 ## Lifecycle
 
