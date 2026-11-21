@@ -13,7 +13,9 @@
 
 set -euo pipefail
 
-readonly PROFILE="rfc5612-test-only-v1"
+readonly TEMPORARY_PROFILE="rfc5612-test-only-v1"
+readonly PERMANENT_PROFILE="pactway-hybrid-certificate-v1"
+readonly PROFILE="${PACTWAY_HYBRID_PROFILE:-}"
 readonly CHANNEL_ID="pactway-pq3-demo"
 readonly FABRIC_VERSION="3.1.5"
 readonly GO_VERSION="1.27.4"
@@ -43,6 +45,9 @@ ACCEPTANCE_ID=""
 ACCEPTANCE_UPSTREAM_PEER_VERSION=""
 ACCEPTANCE_UPSTREAM_PEER_SHA256=""
 ACCEPTANCE_UPSTREAM_PEER_TEST_EXECUTED=false
+ACCEPTANCE_PERMANENT_PEER_TEST_EXECUTED=false
+ACCEPTANCE_PERMANENT_ORDERER_TEST_EXECUTED=false
+ACCEPTANCE_BINARY_EVIDENCE=""
 ACCEPTANCE_LOG_COUNT=0
 ACCEPTANCE_STEPS=()
 ACCEPTANCE_LOG_RECORDS=()
@@ -59,16 +64,94 @@ record_duration() {
 }
 
 require_isolated_profile() {
-	[[ "${PACTWAY_HYBRID_PROFILE:-}" == "$PROFILE" ]] ||
-		fail "set PACTWAY_HYBRID_PROFILE=$PROFILE explicitly"
+	[[ -n "$PROFILE" && "${PACTWAY_HYBRID_PROFILE:-}" == "$PROFILE" ]] ||
+		fail "set PACTWAY_HYBRID_PROFILE to one supported profile explicitly"
+	case "$PROFILE" in
+		"$TEMPORARY_PROFILE"|"$PERMANENT_PROFILE") ;;
+		*) fail "unsupported PACTWAY_HYBRID_PROFILE: $PROFILE" ;;
+	esac
 	[[ "${PACTWAY_ISOLATED_DEVELOPMENT:-}" == "true" ]] ||
 		fail "set PACTWAY_ISOLATED_DEVELOPMENT=true explicitly"
+}
+
+verify_generated_manifest() {
+	local manifest="$RUN_DIR/material/public/manifest.json"
+	local manifest_profile channel_capability expected_channel_capability
+	[[ -s "$manifest" ]] ||
+		fail "generated public profile manifest is missing"
+	manifest_profile="$(jq -er '.hybrid_profile | strings' "$manifest")" ||
+		fail "generated manifest has no profile declaration"
+	channel_capability="$(jq -er '.channel_capability | strings' "$manifest")" ||
+		fail "generated manifest has no channel capability declaration"
+	[[ "$manifest_profile" == "$PROFILE" ]] ||
+		fail "generated manifest does not declare profile $PROFILE"
+	case "$PROFILE" in
+		"$TEMPORARY_PROFILE")
+			expected_channel_capability="PactwayHybridCertificateV1"
+			;;
+		"$PERMANENT_PROFILE")
+			expected_channel_capability="PactwayHybridCertificatePactwayV1"
+			;;
+		*)
+			fail "generated manifest has unsupported profile $PROFILE"
+			;;
+	esac
+	[[ "$channel_capability" == "$expected_channel_capability" ]] ||
+		fail "generated manifest capability $channel_capability does not match profile $PROFILE (expected $expected_channel_capability)"
+	jq -e '.development_only == true' "$manifest" >/dev/null ||
+		fail "generated profile manifest must remain development-only"
+	mkdir -p -- "$RUN_DIR/evidence"
+	cp -- "$manifest" "$RUN_DIR/evidence/public-network-manifest.json"
+}
+
+write_network_manifest() {
+	local source_commit tree_digest source_dirty channel_capability
+	source_commit="$(<"$RUN_DIR/source-commit")"
+	tree_digest="$(<"$RUN_DIR/source-tree-sha256")"
+	source_dirty="$(<"$RUN_DIR/source-dirty")"
+	channel_capability="$(jq -er '.channel_capability | strings' \
+		"$RUN_DIR/material/public/manifest.json")" ||
+		fail "unable to read authenticated capability selection from public manifest"
+	local peer_image_id orderer_image_id ccaas_image_id tools_image_id
+	peer_image_id="$(<"$RUN_DIR/peer-image-id")"
+	orderer_image_id="$(<"$RUN_DIR/orderer-image-id")"
+	ccaas_image_id="$(<"$RUN_DIR/ccaas-image-id")"
+	tools_image_id="$(<"$RUN_DIR/tools-image-id")"
+	mkdir -p -- "$RUN_DIR/evidence"
+	cat > "$RUN_DIR/evidence/network-manifest.json" <<EOF
+{
+  "source_commit": "$source_commit",
+  "source_tree_sha256": "$tree_digest",
+  "source_worktree_dirty": $source_dirty,
+  "fabric_version": "$FABRIC_VERSION",
+  "go_version": "$GO_VERSION",
+  "hybrid_profile": "$PROFILE",
+  "isolated_development": true,
+  "channel_id": "$CHANNEL_ID",
+  "channel_capability": "$channel_capability",
+  "tls_transport": "classical TLS",
+  "docker_network_internal": true,
+  "host_ports_published": false,
+  "peer_image": "$PEER_IMAGE",
+  "peer_image_id": "$peer_image_id",
+  "orderer_image": "$ORDERER_IMAGE",
+  "orderer_image_id": "$orderer_image_id",
+  "chaincode_execution_service_count": 2,
+  "chaincode_image": "$CC_IMAGE",
+  "chaincode_image_id": "$ccaas_image_id",
+  "admin_tools_image": "$TOOLS_IMAGE",
+  "admin_tools_image_id": "$tools_image_id",
+  "compose_sha256": "$(sha256sum "$SCRIPT_DIR/compose.yaml" | cut -d ' ' -f 1)",
+  "orderer_config_sha256": "$(sha256sum "$ROOT/sampleconfig/orderer.yaml" | cut -d ' ' -f 1)"
+}
+EOF
 }
 
 check_prerequisites() {
 	command -v go >/dev/null || fail "Go $GO_VERSION is required"
 	command -v make >/dev/null || fail "GNU make is required"
 	command -v docker >/dev/null || fail "Docker CLI is required"
+	command -v jq >/dev/null || fail "jq is required"
 	[[ "$(go env GOVERSION)" == "go$GO_VERSION" ]] ||
 		fail "Go $GO_VERSION is required; found $(go env GOVERSION)"
 	docker info >/dev/null 2>&1 || fail "Docker Desktop is not ready"
@@ -153,34 +236,10 @@ build_runtime_images() {
 	orderer_image_id="$(docker image inspect --format '{{.Id}}' "$ORDERER_IMAGE")"
 	ccaas_image_id="$(docker image inspect --format '{{.Id}}' "$CC_IMAGE")"
 	tools_image_id="$(docker image inspect --format '{{.Id}}' "$TOOLS_IMAGE")"
-	mkdir -p -- "$RUN_DIR/evidence"
-	cat > "$RUN_DIR/evidence/network-manifest.json" <<EOF
-{
-  "source_commit": "$source_commit",
-  "source_tree_sha256": "$tree_digest",
-  "source_worktree_dirty": $source_dirty,
-  "fabric_version": "$FABRIC_VERSION",
-  "go_version": "$GO_VERSION",
-  "hybrid_profile": "$PROFILE",
-  "isolated_development": true,
-  "channel_id": "$CHANNEL_ID",
-  "channel_capability": "PactwayHybridCertificateV1",
-  "tls_transport": "classical TLS",
-  "docker_network_internal": true,
-  "host_ports_published": false,
-  "peer_image": "$PEER_IMAGE",
-  "peer_image_id": "$peer_image_id",
-  "orderer_image": "$ORDERER_IMAGE",
-  "orderer_image_id": "$orderer_image_id",
-  "chaincode_execution_service_count": 2,
-  "chaincode_image": "$CC_IMAGE",
-  "chaincode_image_id": "$ccaas_image_id",
-  "admin_tools_image": "$TOOLS_IMAGE",
-  "admin_tools_image_id": "$tools_image_id",
-  "compose_sha256": "$(sha256sum "$SCRIPT_DIR/compose.yaml" | cut -d ' ' -f 1)",
-  "orderer_config_sha256": "$(sha256sum "$ROOT/sampleconfig/orderer.yaml" | cut -d ' ' -f 1)"
-}
-EOF
+	printf '%s\n' "$peer_image_id" > "$RUN_DIR/peer-image-id"
+	printf '%s\n' "$orderer_image_id" > "$RUN_DIR/orderer-image-id"
+	printf '%s\n' "$ccaas_image_id" > "$RUN_DIR/ccaas-image-id"
+	printf '%s\n' "$tools_image_id" > "$RUN_DIR/tools-image-id"
 }
 
 build_tools_image() {
@@ -203,6 +262,26 @@ load_active() {
 	PROJECT="pq3-$REPO_KEY-${RUN_ID#run-}"
 	grep -Fxq "project=$PROJECT" "$RUN_DIR/.pq3-run" ||
 		fail "active run marker does not match its project"
+
+	local saved_profile
+	if [[ -f "$RUN_DIR/hybrid-profile" ]]; then
+		saved_profile="$(<"$RUN_DIR/hybrid-profile")"
+	else
+		saved_profile="$(
+			sed -n 's/^[[:space:]]*"hybrid_profile":[[:space:]]*"\([^"]*\)".*/\1/p' \
+				"$RUN_DIR/evidence/network-manifest.json" 2>/dev/null | head -n 1
+		)"
+		[[ -n "$saved_profile" ]] ||
+			fail "active run has no saved profile; refusing to infer or switch profiles"
+		printf '%s\n' "$saved_profile" > "$RUN_DIR/hybrid-profile"
+	fi
+	case "$saved_profile" in
+		"$TEMPORARY_PROFILE"|"$PERMANENT_PROFILE") ;;
+		*) fail "active run has unsupported saved profile $saved_profile" ;;
+	esac
+	[[ "$PROFILE" == "$saved_profile" ]] ||
+		fail "selected profile $PROFILE does not match active run profile $saved_profile"
+	require_isolated_profile
 
 	if [[ -f "$RUN_DIR/image-tag" ]]; then
 		IMAGE_TAG="$(<"$RUN_DIR/image-tag")"
@@ -286,6 +365,7 @@ fresh() {
 	PROJECT="pq3-$REPO_KEY-${RUN_ID#run-}"
 	mkdir -m 700 -- "$RUN_DIR"
 	printf 'schema=1\nproject=%s\n' "$PROJECT" > "$RUN_DIR/.pq3-run"
+	printf '%s\n' "$PROFILE" > "$RUN_DIR/hybrid-profile"
 	printf '%s\n' "$RUN_ID" > "$ACTIVE_FILE"
 
 	build_runtime_images
@@ -300,6 +380,8 @@ fresh() {
 			-hybrid-profile="$PROFILE"; then
 		fail "identity/genesis generation failed; this run is retained as secret material and can be removed with reset"
 	fi
+	verify_generated_manifest
+	write_network_manifest
 
 	mkdir -m 700 -- "$RUN_DIR/config"
 	cp -- "$SCRIPT_DIR/compose.yaml" "$RUN_DIR/config/compose.yaml"
@@ -801,43 +883,63 @@ reset_network() {
 }
 
 verify_upstream_peer() {
-	if [[ -z "${PACTWAY_UPSTREAM_PEER:-}" ]]; then
-		printf 'PACTWAY_UPSTREAM_PEER is required for PQ3.3 acceptance.\n' >&2
-		return 1
-	fi
-	if [[ ! -f "$PACTWAY_UPSTREAM_PEER" || ! -x "$PACTWAY_UPSTREAM_PEER" ]]; then
-		printf 'PACTWAY_UPSTREAM_PEER must name an executable peer binary.\n' >&2
-		return 1
-	fi
-	local expected_sha256="${PACTWAY_UPSTREAM_PEER_SHA256:-}"
-	if [[ ! "$expected_sha256" =~ ^[[:xdigit:]]{64}$ ]]; then
-		printf 'PACTWAY_UPSTREAM_PEER_SHA256 must contain the verified binary digest.\n' >&2
-		return 1
-	fi
+	local binary_evidence=""
+	verify_compatibility_binary() {
+		local binary="$1" expected_sha256="$2" source_revision="$3" label="$4" output actual_sha256
+		[[ -n "$binary" && -f "$binary" && -x "$binary" ]] || {
+			printf '%s must name an executable binary.\n' "$label" >&2
+			return 1
+		}
+		[[ "$expected_sha256" =~ ^[[:xdigit:]]{64}$ ]] || {
+			printf '%s SHA-256 must be provided and verified.\n' "$label" >&2
+			return 1
+		}
+		[[ -n "$source_revision" ]] || {
+			printf '%s source revision must be recorded.\n' "$label" >&2
+			return 1
+		}
+		if ! output="$("$binary" version)"; then
+			printf 'Unable to query %s version.\n' "$label" >&2
+			return 1
+		fi
+		grep -Fq 'Version:' <<<"$output" || {
+			printf '%s did not report a version.\n' "$label" >&2
+			return 1
+		}
+		if [[ "$label" == "upstream Fabric peer" || "$label" == "upstream Fabric orderer" ]] &&
+			! grep -Eq "^[[:space:]]*Version: v?$FABRIC_VERSION([[:space:]]|$)" <<<"$output"; then
+			printf '%s must report Fabric version %s.\n' "$label" "$FABRIC_VERSION" >&2
+			return 1
+		fi
+		actual_sha256="$(sha256sum -- "$binary" | awk '{print $1}')"
+		[[ "$actual_sha256" == "$expected_sha256" ]] || {
+			printf '%s binary does not match its expected SHA-256.\n' "$label" >&2
+			return 1
+		}
+		printf -v binary_evidence '%s%s|%s|%s|%s' \
+			"$binary_evidence" "$([[ -n "$binary_evidence" ]] && printf ';' || true)" \
+			"$label" "$source_revision" "$(tr '\n' ' ' <<<"$output") SHA-256 $actual_sha256"
+		printf '%s: source=%s; %s; SHA-256=%s\n' "$label" "$source_revision" \
+			"$(tr '\n' ' ' <<<"$output")" "$actual_sha256"
+		if [[ "$label" == "upstream Fabric peer" ]]; then
+			ACCEPTANCE_UPSTREAM_PEER_VERSION="$FABRIC_VERSION"
+			ACCEPTANCE_UPSTREAM_PEER_SHA256="$actual_sha256"
+		fi
+	}
 
-	local version_output
-	if ! version_output="$("$PACTWAY_UPSTREAM_PEER" version)"; then
-		printf 'Unable to query the upstream peer version.\n' >&2
-		return 1
-	fi
-	if ! grep -Eq "^[[:space:]]*Version: v?$FABRIC_VERSION([[:space:]]|$)" <<<"$version_output"; then
-		printf 'The upstream peer must report Fabric version %s.\n' "$FABRIC_VERSION" >&2
-		return 1
-	fi
-
-	local actual_sha256
-	actual_sha256="$(
-		sha256sum -- "$PACTWAY_UPSTREAM_PEER" | awk '{print $1}'
-	)"
-	if [[ ! "$actual_sha256" =~ ^[[:xdigit:]]{64}$ ||
-		"$actual_sha256" != "$expected_sha256" ]]; then
-		printf 'The upstream peer binary does not match PACTWAY_UPSTREAM_PEER_SHA256.\n' >&2
-		return 1
-	fi
-	ACCEPTANCE_UPSTREAM_PEER_VERSION="$FABRIC_VERSION"
-	ACCEPTANCE_UPSTREAM_PEER_SHA256="$actual_sha256"
-	printf 'version=%s\nsha256=%s\n' \
-		"$ACCEPTANCE_UPSTREAM_PEER_VERSION" "$ACCEPTANCE_UPSTREAM_PEER_SHA256"
+	verify_compatibility_binary "${PACTWAY_UPSTREAM_PEER:-}" \
+		"${PACTWAY_UPSTREAM_PEER_SHA256:-}" "${PACTWAY_UPSTREAM_PEER_REVISION:-}" \
+		"upstream Fabric peer" || return 1
+	verify_compatibility_binary "${PACTWAY_UPSTREAM_ORDERER:-}" \
+		"${PACTWAY_UPSTREAM_ORDERER_SHA256:-}" "${PACTWAY_UPSTREAM_ORDERER_REVISION:-}" \
+		"upstream Fabric orderer" || return 1
+	verify_compatibility_binary "${PACTWAY_UNSUPPORTED_PQ2_PEER:-}" \
+		"${PACTWAY_UNSUPPORTED_PQ2_PEER_SHA256:-}" "${PACTWAY_UNSUPPORTED_PQ2_REVISION:-}" \
+		"pre-PQ2.5 Pactway peer" || return 1
+	verify_compatibility_binary "${PACTWAY_UNSUPPORTED_PQ2_ORDERER:-}" \
+		"${PACTWAY_UNSUPPORTED_PQ2_ORDERER_SHA256:-}" "${PACTWAY_UNSUPPORTED_PQ2_REVISION:-}" \
+		"pre-PQ2.5 Pactway orderer" || return 1
+	ACCEPTANCE_BINARY_EVIDENCE="$binary_evidence"
 }
 
 sanitize_log() {
@@ -905,6 +1007,18 @@ run_acceptance_step() {
 			ACCEPTANCE_UPSTREAM_PEER_TEST_EXECUTED=true
 		else
 			printf 'Required upstream compatibility test did not emit its pass marker.\n' >> "$log_file"
+			status=1
+		fi
+		if grep -Fq 'PQ25_UNSUPPORTED_BINARY_COMPATIBILITY_PASS' "$log_file"; then
+			ACCEPTANCE_PERMANENT_PEER_TEST_EXECUTED=true
+		else
+			printf 'Required permanent-profile peer compatibility test did not emit its pass marker.\n' >> "$log_file"
+			status=1
+		fi
+		if grep -Fq 'PQ35_UNSUPPORTED_ORDERER_COMPATIBILITY_PASS' "$log_file"; then
+			ACCEPTANCE_PERMANENT_ORDERER_TEST_EXECUTED=true
+		else
+			printf 'Required permanent-profile orderer compatibility test did not emit its pass marker.\n' >> "$log_file"
 			status=1
 		fi
 	fi
@@ -1144,6 +1258,9 @@ recover_evidence() {
 	local metadata="$ACCEPTANCE_PROTECTED_DIR/sanitized-evidence"
 	mkdir -p -- "$metadata"
 	cp -- "$RUN_DIR/evidence/"{network-manifest.json,transaction-ids.txt} "$metadata/"
+	if [[ -f "$RUN_DIR/evidence/public-network-manifest.json" ]]; then
+		cp -- "$RUN_DIR/evidence/public-network-manifest.json" "$metadata/"
+	fi
 	write_protected_evidence_manifest || fail "recovery package integrity check failed"
 	printf 'Recovery package verified. The private runtime was not reset.\n'
 }
@@ -1172,7 +1289,7 @@ acceptance_finalize() {
 			export_failed=true
 		fi
 		for file in network-manifest.json orderer-channels.json chaincode-definition.txt \
-			transaction-ids.txt transaction-verification.json stage-timings.jsonl \
+			public-network-manifest.json transaction-ids.txt transaction-verification.json stage-timings.jsonl \
 			timings.txt missing-endorsement.txt recovery.txt; do
 			if [[ -f "$run_dir/evidence/$file" ]]; then
 				if ! cp -- "$run_dir/evidence/$file" "$evidence_output/$file"; then
@@ -1278,6 +1395,7 @@ acceptance_finalize() {
 		printf -- '- Candidate gate commit: `%s`\n' "$source_commit"
 		printf -- '- Branch: `%s` (worktree dirty: `%s`)\n' "$source_branch" "$source_dirty"
 		printf -- '- Profile: `%s`; isolated development only; transport: classical TLS.\n' "$PROFILE"
+		printf -- '- Unsupported binary evidence: `%s`.\n' "$ACCEPTANCE_BINARY_EVIDENCE"
 		if [[ "$ACCEPTANCE_UPSTREAM_PEER_TEST_EXECUTED" == true ]]; then
 			printf -- '- Upstream compatibility: required peer test executed against Fabric `%s`; binary SHA-256 `%s`.\n' \
 				"$ACCEPTANCE_UPSTREAM_PEER_VERSION" "$ACCEPTANCE_UPSTREAM_PEER_SHA256"
@@ -1319,7 +1437,7 @@ acceptance_finalize() {
 			"$source_commit" "$([[ "$status" -eq 0 ]] && printf PASS || printf FAIL)"
 		printf '\nThe candidate commit above is the source revision used for every gate. A dirty worktree means the tested source also includes uncommitted changes and is not represented by that commit alone.\n'
 		printf '\n## Timing scope and limitations\n\nStage durations are local wall-clock observations with UTC start/end timestamps and millisecond resolution. They are not signed protocol timestamps. The broadcast-call observation does not isolate ordering consensus; finality wait ends when delivery reports the transaction at all configured peers. Counts are included in `evidence/stage-timing-summary.json`.\n'
-		printf '\n## Unresolved limitations\n\n- The demo uses the temporary `rfc5612-test-only-v1` profile and classical TLS; it makes no production, PQ transport, HA, or BFT claim.\n'
+		printf '\n## Unresolved limitations\n\n- The demo uses development-only profile `%s` and classical TLS; it makes no production, PQ transport, HA, or BFT claim.\n' "$PROFILE"
 		printf '\nFailed steps retain sanitized full logs under `diagnostics/` in this report package; all sanitized step logs remain in the protected local package.\n'
 	} > "$ACCEPTANCE_OUTPUT_DIR/report.md"
 	printf 'Sanitized PQ3 acceptance evidence: %s\n' "$ACCEPTANCE_OUTPUT_DIR"
@@ -1348,21 +1466,22 @@ acceptance() {
 	fi
 	trap 'acceptance_finalize "$?"' EXIT
 
-	if [[ "${PACTWAY_HYBRID_PROFILE:-}" != "$PROFILE" ||
+	if [[ -z "$PROFILE" || "${PACTWAY_HYBRID_PROFILE:-}" != "$PROFILE" ||
+		( "$PROFILE" != "$TEMPORARY_PROFILE" && "$PROFILE" != "$PERMANENT_PROFILE" ) ||
 		"${PACTWAY_ISOLATED_DEVELOPMENT:-}" != "true" ]]; then
 		ACCEPTANCE_STEPS+=("Development-only profile guard"$'\t'"required profile and isolation variables"$'\t'failed)
-		fail "set PACTWAY_HYBRID_PROFILE=$PROFILE and PACTWAY_ISOLATED_DEVELOPMENT=true explicitly"
+		fail "set PACTWAY_HYBRID_PROFILE to a supported profile and PACTWAY_ISOLATED_DEVELOPMENT=true explicitly"
 	fi
 	ACCEPTANCE_STEPS+=("Development-only profile guard"$'\t'"required profile and isolation variables"$'\t'passed)
 	run_acceptance_step "Verified upstream peer binary" verify_upstream_peer
-	local ginkgo_focus='Pactway hybrid transaction (expiry replay|signature rejection)|persists the rotation before signer activation|Pactway hybrid network negative acceptance|Upstream channel capability compatibility'
+	local ginkgo_focus='Pactway hybrid transaction (expiry replay|signature rejection)|persists the rotation before signer activation|Pactway hybrid network negative acceptance|Upstream channel capability compatibility|Permanent profile compatibility with unsupported binaries|Permanent profile orderer compatibility with unsupported binaries'
 	run_acceptance_step "Shell syntax" bash -n "$SCRIPT_DIR/pq3.sh"
 	run_acceptance_step "Integration prerequisites" make -C "$ROOT" integration-test-prereqs
 	run_acceptance_step "Unit and tool validation" go -C "$ROOT" test -mod=vendor \
 		./cmd/pq3-verify ./integration/pq3 ./pq-crypto ./msp ./common/channelconfig \
 		./common/configtx ./orderer/common/msgprocessor
 	run_acceptance_step "Hybrid MSP network acceptance" go -C "$ROOT" test -v \
-		-count=1 -timeout=40m -mod=vendor ./integration/msp "-ginkgo.focus=$ginkgo_focus" -ginkgo.v
+		-count=1 -timeout=40m -mod=vendor ./integration/msp "--ginkgo.focus=$ginkgo_focus" --ginkgo.v
 	run_acceptance_step "Build verifier and chaincode" go -C "$ROOT" build -mod=vendor \
 		./cmd/pq3-verify ./integration/pq3
 	run_acceptance_step "Build, generate, and start network" "$SCRIPT_DIR/pq3.sh" fresh

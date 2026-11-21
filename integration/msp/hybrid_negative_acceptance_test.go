@@ -18,7 +18,6 @@ import (
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	peerprotos "github.com/hyperledger/fabric-protos-go-apiv2/peer"
-	"github.com/hyperledger/fabric/common/capabilities"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
 	"github.com/hyperledger/fabric/internal/configtxlator/update"
@@ -36,9 +35,10 @@ var _ = Describe("Pactway hybrid network negative acceptance", func() {
 	It("rejects invalid node identities and unsafe channel updates", func() {
 		testDir, err := os.MkdirTemp("", "hybrid-negative-acceptance")
 		Expect(err).NotTo(HaveOccurred())
+		profileName, channelCapability := selectedHybridAcceptanceProfile()
 		oldProfile, oldProfileSet := os.LookupEnv("PACTWAY_HYBRID_PROFILE")
 		oldDevelopment, oldDevelopmentSet := os.LookupEnv("PACTWAY_ISOLATED_DEVELOPMENT")
-		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", oqs.TemporaryHybridProfileV1)).To(Succeed())
+		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", profileName)).To(Succeed())
 		Expect(os.Setenv("PACTWAY_ISOLATED_DEVELOPMENT", "true")).To(Succeed())
 
 		var network *nwo.Network
@@ -62,10 +62,7 @@ var _ = Describe("Pactway hybrid network negative acceptance", func() {
 		ordererOrg := network.Organization("OrdererOrg")
 		ordererOrg.MSPID = "OrdererOrgMSP"
 		ordererOrg.EnableNodeOUs = true
-		network.Profiles[0].ChannelCapabilities = []string{
-			"V3_0",
-			capabilities.PactwayHybridCertificateV1,
-		}
+		network.Profiles[0].ChannelCapabilities = []string{"V3_0", channelCapability}
 		network.GenerateConfigTree()
 		sess, err := network.Cryptogen(commands.Generate{
 			Config: network.CryptoConfigPath(),
@@ -95,6 +92,7 @@ var _ = Describe("Pactway hybrid network negative acceptance", func() {
 		ordererRunner, startedOrderer, startedPeers := network.StartSingleOrdererNetwork(orderer.Name)
 		ordererProcess, peerProcess = startedOrderer, startedPeers
 		nwo.JoinOrdererJoinPeersAppChannel(network, "testchannel", orderer, ordererRunner)
+		expectHybridChannelCapability(network, org1Peer, orderer, "testchannel", channelCapability)
 
 		validOrdererMSP := filepath.Join(testDir, "valid-orderer-msp")
 		Expect(copyDirectory(network.OrdererLocalMSPDir(orderer), validOrdererMSP)).To(Succeed())
@@ -189,10 +187,7 @@ var _ = Describe("Pactway hybrid network negative acceptance", func() {
 			channelGroup.GetValues()["Capabilities"].GetValue(),
 			channelCapabilities,
 		)).To(Succeed())
-		delete(
-			channelCapabilities.GetCapabilities(),
-			capabilities.PactwayHybridCertificateV1,
-		)
+		delete(channelCapabilities.GetCapabilities(), channelCapability)
 		channelGroup.GetValues()["Capabilities"].Value = protoutil.MarshalOrPanic(channelCapabilities)
 		capabilityEnvelope := signHybridConfigUpdate(
 			network, org1Peer, "Admin", testDir, "remove-hybrid-capability.pb",
@@ -207,9 +202,13 @@ var _ = Describe("Pactway hybrid network negative acceptance", func() {
 		capabilityEnvelopeBytes, err := os.ReadFile(capabilityFile)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(proto.Unmarshal(capabilityEnvelopeBytes, capabilityEnvelope)).To(Succeed())
+		capabilityRemovalError := "attempted to remove the required Pactway Hybrid Certificate v1 channel capability"
+		if profileName == oqs.PermanentHybridProfileV1 {
+			capabilityRemovalError = "attempted to change the required Pactway hybrid certificate profile from"
+		}
 		nwo.UpdateWithStatus(
 			network, orderer, "testchannel", capabilityEnvelope, http.StatusBadRequest,
-			"attempted to remove the required Pactway Hybrid Certificate v1 channel capability",
+			capabilityRemovalError,
 		)
 	})
 })

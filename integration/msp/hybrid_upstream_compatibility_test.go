@@ -7,6 +7,11 @@ SPDX-License-Identifier: Apache-2.0
 package msp
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,9 +22,11 @@ import (
 	"github.com/hyperledger/fabric/integration/nwo"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/gbytes"
 	"github.com/onsi/gomega/gexec"
 	"github.com/tedsuo/ifrit"
 	ginkgomon "github.com/tedsuo/ifrit/ginkgomon_v2"
+	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("Upstream channel capability compatibility", func() {
@@ -28,6 +35,12 @@ var _ = Describe("Upstream channel capability compatibility", func() {
 		if upstreamPeer == "" {
 			Skip("set PACTWAY_UPSTREAM_PEER to a verified peer binary")
 		}
+		verifyUnsupportedBinary(
+			"unmodified upstream Fabric peer",
+			upstreamPeer,
+			"PACTWAY_UPSTREAM_PEER_SHA256",
+			"PACTWAY_UPSTREAM_PEER_REVISION",
+		)
 
 		testDir, err := os.MkdirTemp("", "upstream-channel-capability")
 		Expect(err).NotTo(HaveOccurred())
@@ -100,11 +113,24 @@ var _ = Describe("Permanent profile compatibility with unsupported binaries", fu
 		for _, test := range []struct {
 			name   string
 			binary string
+			shaEnv string
+			revEnv string
 		}{
-			{name: "unsupported PQ2", binary: unsupportedPQ2Peer},
-			{name: "unmodified upstream Fabric", binary: upstreamPeer},
+			{
+				name:   "unsupported PQ2",
+				binary: unsupportedPQ2Peer,
+				shaEnv: "PACTWAY_UNSUPPORTED_PQ2_PEER_SHA256",
+				revEnv: "PACTWAY_UNSUPPORTED_PQ2_REVISION",
+			},
+			{
+				name:   "unmodified upstream Fabric",
+				binary: upstreamPeer,
+				shaEnv: "PACTWAY_UPSTREAM_PEER_SHA256",
+				revEnv: "PACTWAY_UPSTREAM_PEER_REVISION",
+			},
 		} {
 			By("checking " + test.name)
+			verifyUnsupportedBinary(test.name+" peer", test.binary, test.shaEnv, test.revEnv)
 			expectUnsupportedPeerToRejectCapability(
 				test.binary,
 				capabilities.PactwayHybridCertificatePactwayV1,
@@ -116,6 +142,130 @@ var _ = Describe("Permanent profile compatibility with unsupported binaries", fu
 		Expect(err).NotTo(HaveOccurred())
 	})
 })
+
+var _ = Describe("Permanent profile orderer compatibility with unsupported binaries", func() {
+	It("rejects permanent-profile channels and reports the capability in response and logs", func() {
+		tests := []struct {
+			name   string
+			binary string
+		}{
+			{name: "pre-PQ2.5 Pactway orderer", binary: os.Getenv("PACTWAY_UNSUPPORTED_PQ2_ORDERER")},
+			{name: "unmodified upstream Fabric orderer", binary: os.Getenv("PACTWAY_UPSTREAM_ORDERER")},
+		}
+		if tests[0].binary == "" && tests[1].binary == "" {
+			Skip("set PACTWAY_UNSUPPORTED_PQ2_ORDERER and PACTWAY_UPSTREAM_ORDERER to verified orderer binaries")
+		}
+		if tests[0].binary == "" || tests[1].binary == "" {
+			Fail("both PACTWAY_UNSUPPORTED_PQ2_ORDERER and PACTWAY_UPSTREAM_ORDERER must name verified binaries")
+		}
+
+		for _, test := range tests {
+			By("checking " + test.name)
+			shaEnv := "PACTWAY_UNSUPPORTED_PQ2_ORDERER_SHA256"
+			revEnv := "PACTWAY_UNSUPPORTED_PQ2_REVISION"
+			if strings.Contains(test.name, "upstream") {
+				shaEnv = "PACTWAY_UPSTREAM_ORDERER_SHA256"
+				revEnv = "PACTWAY_UPSTREAM_ORDERER_REVISION"
+			}
+			verifyUnsupportedBinary(test.name, test.binary, shaEnv, revEnv)
+			expectUnsupportedOrdererToRejectCapability(
+				test.binary,
+				capabilities.PactwayHybridCertificatePactwayV1,
+			)
+		}
+		_, err := GinkgoWriter.Write([]byte("PQ35_UNSUPPORTED_ORDERER_COMPATIBILITY_PASS\n"))
+		Expect(err).NotTo(HaveOccurred())
+	})
+})
+
+func verifyUnsupportedBinary(label, binary, shaEnv, revisionEnv string) {
+	Expect(binary).NotTo(BeEmpty())
+	expectedSHA := os.Getenv(shaEnv)
+	Expect(expectedSHA).To(MatchRegexp(`^[[:xdigit:]]{64}$`), shaEnv)
+	sourceRevision := os.Getenv(revisionEnv)
+	Expect(sourceRevision).NotTo(BeEmpty(), revisionEnv)
+
+	contents, err := os.ReadFile(binary)
+	Expect(err).NotTo(HaveOccurred())
+	digest := sha256.Sum256(contents)
+	actualSHA := hex.EncodeToString(digest[:])
+	Expect(actualSHA).To(Equal(expectedSHA), label+" SHA-256")
+
+	versionOutput, err := exec.Command(binary, "version").CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(versionOutput))
+	Expect(string(versionOutput)).To(ContainSubstring("Version:"))
+	_, err = fmt.Fprintf(
+		GinkgoWriter,
+		"PQ35_UNSUPPORTED_BINARY label=%q source_revision=%q version=%q sha256=%s\n",
+		label,
+		sourceRevision,
+		strings.TrimSpace(string(versionOutput)),
+		actualSHA,
+	)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func expectUnsupportedOrdererToRejectCapability(binary, requiredCapability string) {
+	testDir, err := os.MkdirTemp("", "unsupported-orderer-channel-capability")
+	Expect(err).NotTo(HaveOccurred())
+	network := nwo.New(nwo.BasicEtcdRaft(), testDir, nil, StartPort(), components)
+	network.Profiles[0].ChannelCapabilities = []string{
+		"V3_0",
+		requiredCapability,
+	}
+	network.GenerateConfigTree()
+	network.Bootstrap()
+	orderer := network.Orderers[0]
+
+	var ordererProcess ifrit.Process
+	defer func() {
+		if ordererProcess != nil {
+			ordererProcess.Signal(syscall.SIGTERM)
+			Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive())
+		}
+		network.Cleanup()
+		Expect(os.RemoveAll(testDir)).To(Succeed())
+	}()
+
+	ordererCommand := exec.Command(binary, "start")
+	ordererCommand.Env = append(os.Environ(),
+		"FABRIC_CFG_PATH="+network.OrdererDir(orderer),
+		"FABRIC_LOGGING_SPEC=debug",
+		"ORDERER_GENERAL_BOOTSTRAPMETHOD=none",
+		"ORDERER_CHANNELPARTICIPATION_ENABLED=true",
+	)
+	ordererRunner := ginkgomon.New(ginkgomon.Config{
+		Name:              orderer.ID(),
+		Command:           ordererCommand,
+		StartCheck:        `Beginning to serve requests`,
+		StartCheckTimeout: 15 * time.Second,
+	})
+	ordererProcess = ifrit.Invoke(ordererRunner)
+	Eventually(ordererProcess.Ready(), network.EventuallyTimeout).Should(BeClosed())
+
+	protocol := "http"
+	if network.TLSEnabled {
+		protocol = "https"
+	}
+	channelID := network.Channels[0].Name
+	joinURL := fmt.Sprintf(
+		"%s://127.0.0.1:%d/participation/v1/channels",
+		protocol,
+		network.OrdererPort(orderer, nwo.AdminPort),
+	)
+	blockBytes, err := proto.Marshal(network.LoadAppChannelGenesisBlock(channelID))
+	Expect(err).NotTo(HaveOccurred())
+	request := nwo.GenerateJoinRequest(joinURL, channelID, blockBytes)
+	authClient, _ := nwo.OrdererOperationalClients(network, orderer)
+	response, err := authClient.Do(request)
+	Expect(err).NotTo(HaveOccurred())
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(response.StatusCode).NotTo(Equal(http.StatusCreated))
+	Expect(string(body)).To(ContainSubstring(requiredCapability))
+	Eventually(ordererRunner.Err(), network.EventuallyTimeout).Should(gbytes.Say(requiredCapability))
+}
 
 func expectUnsupportedPeerToRejectCapability(
 	binary string,
