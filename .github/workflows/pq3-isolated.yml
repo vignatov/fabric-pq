@@ -105,43 +105,90 @@ jobs:
           PQ3_PROTECTED_EVIDENCE_ROOT: ${{ runner.temp }}/pq3-protected-evidence
         run: |
           set -euo pipefail
+          require_file() {
+            local path="$1" description="$2"
+            if [[ ! -s "$path" ]]; then
+              printf 'Missing %s: %s\n' "$description" "$path" >&2
+              return 1
+            fi
+          }
+          require_text() {
+            local path="$1" text="$2" description="$3"
+            if ! grep -Fq -- "$text" "$path"; then
+              printf 'Missing %s in %s\n' "$description" "$path" >&2
+              return 1
+            fi
+          }
           mapfile -t packages < <(find "$PQ3_PROTECTED_EVIDENCE_ROOT" -mindepth 2 -maxdepth 2 \
             -type d -name 'acceptance-*' | sort)
-          [[ "${#packages[@]}" -eq 2 ]]
+          if [[ "${#packages[@]}" -ne 2 ]]; then
+            printf 'Expected two protected evidence packages, found %s.\n' "${#packages[@]}" >&2
+            exit 1
+          fi
           for pair in \
             "rfc5612-test-only-v1 PactwayHybridCertificateV1 temporary-profile" \
             "pactway-hybrid-certificate-v1 PactwayHybridCertificatePactwayV1 permanent-profile"; do
             read -r profile capability report_dir <<<"$pair"
+            printf 'Verifying protected evidence for profile %s.\n' "$profile"
             package=""
             for candidate in "${packages[@]}"; do
-              if grep -Fq "\"hybrid_profile\": \"$profile\"" "$candidate/sanitized-evidence/network-manifest.json" &&
-                grep -Fq "\"channel_capability\": \"$capability\"" "$candidate/sanitized-evidence/network-manifest.json"; then
+              manifest="$candidate/sanitized-evidence/network-manifest.json"
+              if [[ -s "$manifest" ]] &&
+                grep -Fq "\"hybrid_profile\": \"$profile\"" "$manifest" &&
+                grep -Fq "\"channel_capability\": \"$capability\"" "$manifest"; then
                 package="$candidate"
                 break
               fi
             done
-            [[ -n "$package" ]]
-            [[ "$package" != "$GITHUB_WORKSPACE/"* ]]
-            grep -Fq "\"hybrid_profile\": \"$profile\"" "$package/sanitized-evidence/public-network-manifest.json"
-            grep -Fq "\"channel_capability\": \"$capability\"" "$package/sanitized-evidence/public-network-manifest.json"
-            grep -Fq "\"hybrid_profile\": \"$profile\"" "$package/sanitized-evidence/transaction-verification.json"
-            grep -Fq '"validated_profile_oids": true' "$package/sanitized-evidence/transaction-verification.json"
-            grep -Fq '"block_signature_valid": true' "$package/sanitized-evidence/transaction-verification.json"
-            grep -Fq '"verified_endorsements": 2' "$package/sanitized-evidence/transaction-verification.json"
-            grep -Fq '"Org1MSP"' "$package/sanitized-evidence/transaction-verification.json"
-            grep -Fq '"Org2MSP"' "$package/sanitized-evidence/transaction-verification.json"
-            test -s "$package/verification-inputs/channel-config/genesis.block"
-            test -s "$package/verification-inputs/certificates/organizations/Org1/msp/cacerts/root.pem"
-            test -s "$package/verification-inputs/certificates/organizations/Org2/msp/cacerts/root.pem"
-            test -s "$package/verification-inputs/certificates/organizations/OrdererOrg/msp/cacerts/root.pem"
-            test -s "$package/verification-inputs/certificates/tls/OrdererOrg-orderer0-server.crt"
-            test -s "$package/verification-inputs/transactions/block-$(head -n1 "$package/sanitized-evidence/transaction-ids.txt" | cut -d' ' -f1).hex"
-            test -s "$package/verification-inputs/verification-results/transaction-$(head -n1 "$package/sanitized-evidence/transaction-ids.txt" | cut -d' ' -f1).json"
-            test -s "$package/logs/index.txt"
+            if [[ -z "$package" ]]; then
+              printf 'No protected package matched profile %s and capability %s.\n' \
+                "$profile" "$capability" >&2
+              exit 1
+            fi
+            if [[ "$package" == "$GITHUB_WORKSPACE/"* ]]; then
+              printf 'Protected evidence package is inside the workspace: %s\n' "$package" >&2
+              exit 1
+            fi
+            require_text "$package/sanitized-evidence/public-network-manifest.json" \
+              "\"hybrid_profile\": \"$profile\"" "hybrid profile $profile"
+            require_text "$package/sanitized-evidence/public-network-manifest.json" \
+              "\"channel_capability\": \"$capability\"" "channel capability $capability"
+            require_text "$package/sanitized-evidence/transaction-verification.json" \
+              "\"hybrid_profile\": \"$profile\"" "verified profile $profile"
+            require_text "$package/sanitized-evidence/transaction-verification.json" \
+              '"validated_profile_oids": true' "validated profile OIDs"
+            require_text "$package/sanitized-evidence/transaction-verification.json" \
+              '"block_signature_valid": true' "valid block signature"
+            require_text "$package/sanitized-evidence/transaction-verification.json" \
+              '"verified_endorsements": 2' "two verified endorsements"
+            require_text "$package/sanitized-evidence/transaction-verification.json" \
+              '"Org1MSP"' "Org1MSP endorsement"
+            require_text "$package/sanitized-evidence/transaction-verification.json" \
+              '"Org2MSP"' "Org2MSP endorsement"
+            require_file "$package/verification-inputs/channel-config/genesis.block" \
+              "channel genesis block"
+            require_file "$package/verification-inputs/certificates/organizations/Org1/msp/cacerts/root.pem" \
+              "Org1 root certificate"
+            require_file "$package/verification-inputs/certificates/organizations/Org2/msp/cacerts/root.pem" \
+              "Org2 root certificate"
+            require_file "$package/verification-inputs/certificates/organizations/OrdererOrg/msp/cacerts/root.pem" \
+              "OrdererOrg root certificate"
+            require_file "$package/verification-inputs/certificates/tls/OrdererOrg-orderer0-server.crt" \
+              "orderer TLS server certificate"
+            transaction_id="$(head -n1 "$package/sanitized-evidence/transaction-ids.txt" | cut -d' ' -f1)"
+            require_file "$package/verification-inputs/transactions/block-$transaction_id.hex" \
+              "committed block input for $transaction_id"
+            require_file "$package/verification-inputs/verification-results/transaction-$transaction_id.json" \
+              "transaction verification result for $transaction_id"
+            require_file "$package/logs/index.txt" "sanitized log index"
             for prefix in block- org1-transaction- org2-transaction-; do
               count="$(find "$package/verification-inputs/transactions" -maxdepth 1 \
                 -type f -name "$prefix*.hex" | wc -l)"
-              [[ "$count" -ge 2 ]]
+              if [[ "$count" -lt 2 ]]; then
+                printf 'Expected at least two %s transaction inputs; found %s.\n' \
+                  "$prefix" "$count" >&2
+                exit 1
+              fi
             done
             (cd "$package" && sha256sum --check SHA256SUMS)
             if find "$package" -type f \( -iname '*.key' -o -iname '*key.pem' -o -iname '*priv_sk*' \) -print -quit | grep -q .; then
@@ -152,7 +199,12 @@ jobs:
               echo "Protected evidence package contains a private key block." >&2
               exit 1
             fi
-            test -s "build/pq3/acceptance-evidence/$report_dir/acceptance-"*/report.md
+            report="build/pq3/acceptance-evidence/$report_dir"
+            report_matches=("$report"/acceptance-*/report.md)
+            if [[ ! -s "${report_matches[0]:-}" ]]; then
+              printf 'Missing sanitized acceptance report for %s.\n' "$profile" >&2
+              exit 1
+            fi
           done
 
       - name: Add acceptance report to job summary
