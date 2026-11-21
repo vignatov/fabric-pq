@@ -873,6 +873,12 @@ provenance were supplied before each run:
 | Pre-PQ2.5 Pactway peer | `c19e53942a1e10e3a1c8f945e6edb59d9123ebf9` | `0e06d47aff457fc2736243bcc343b2a58082954de0616f36ac3377b145361f4f` |
 | Pre-PQ2.5 Pactway orderer | `c19e53942a1e10e3a1c8f945e6edb59d9123ebf9` | `621f7f4f9cad8302ffcc720ebbfdfdbcb1d37e96fae0b197df76950b7388955b` |
 
+The historical binary hashes above identify the locally tested WSL builds.
+The CI job pins the same source revision, then computes and records the hashes
+of its runner-built executables instead of assuming Go outputs are byte-for-
+byte identical across hosts. The official upstream release archive and
+executables remain checksum-pinned.
+
 With the binary path, SHA-256, and revision variables documented in
 [the PQ3 runbook](../../integration/pq3/README.md), the exact profile
 invocations and results were:

@@ -63,8 +63,9 @@ For local runs, set the executable paths in `PACTWAY_UPSTREAM_PEER`,
 `PACTWAY_UNSUPPORTED_PQ2_REVISION`. The pinned provenance and hashes are
 recorded in the [PQ3.5 acceptance evidence](../../docs/pq2/development-and-validation.md#pq35-dual-profile-acceptance-results).
 The script verifies the versions, revisions, and hashes before running the
-compatibility tests. CI downloads the official release binaries and builds the
-historical binaries from source.
+compatibility tests. CI downloads the official release binaries with pinned
+hashes, builds the historical binaries from the pinned source revision, and
+records each generated binary's hash for the acceptance run.
 Peer joins must reject the permanent channel with the expected capability
 error. Orderer tests inspect both the HTTP channel join response and the server
 log; startup failures and skipped tests are not accepted as compatibility

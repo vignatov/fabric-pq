@@ -76,8 +76,7 @@ jobs:
           orderer_sha256="$(sha256sum "$binary_dir/orderer" | awk '{print $1}')"
           echo "Pre-PQ2.5 peer SHA-256: $peer_sha256"
           echo "Pre-PQ2.5 orderer SHA-256: $orderer_sha256"
-          [[ "$peer_sha256" == 0e06d47aff457fc2736243bcc343b2a58082954de0616f36ac3377b145361f4f ]]
-          [[ "$orderer_sha256" == 621f7f4f9cad8302ffcc720ebbfdfdbcb1d37e96fae0b197df76950b7388955b ]]
+          # Pin source provenance; record hashes from this runner's build.
           echo "PACTWAY_UNSUPPORTED_PQ2_PEER=$binary_dir/peer" >> "$GITHUB_ENV"
           echo "PACTWAY_UNSUPPORTED_PQ2_ORDERER=$binary_dir/orderer" >> "$GITHUB_ENV"
           echo "PACTWAY_UNSUPPORTED_PQ2_REVISION=$revision" >> "$GITHUB_ENV"
