@@ -184,13 +184,16 @@ start an orderer with unsupported-profile, wrong-role, wrong-organization, and
 missing-PQ-key identities; it submits an unauthorized application config update
 and an authorized attempt to remove the required channel capability, asserting
 the corresponding rejections.
-It checks that verified upstream and pre-PQ2.5 peers and orderers reject the
-permanent-profile channel capability. The workflow also checks channel activation,
-organization-specific chaincode lifecycle, two-organization endorsement,
-transaction-bound cryptographic and commit evidence, negative endorsement, and
-state-preserving recovery. Starting three containers alone is not PQ3
-completion. The upstream check demonstrates rejection of this unsupported
-capability, not interoperability.
+The focused MSP checks run under each selected acceptance profile: generated
+certificates and channel configuration use that profile, and the tests assert
+the committed channel capability matches it.
+The workflow also checks that verified upstream and pre-PQ2.5 peers and
+orderers reject the permanent-profile channel capability, along with channel
+activation, organization-specific chaincode lifecycle, two-organization
+endorsement, transaction-bound cryptographic and commit evidence, negative
+endorsement, and state-preserving recovery. Starting three containers alone
+is not PQ3 completion. The upstream check demonstrates rejection of this
+unsupported capability, not interoperability.
 
 `deploy` installs a distinct external CCAAS package on each organization's peer,
 approves the corresponding package IDs, commits sequence 1 with

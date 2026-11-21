@@ -115,11 +115,11 @@ func main() {
 	if block.GetHeader().GetNumber() == 0 {
 		fail(errors.New("transaction block must not be the config block"))
 	}
-	if err := verifyBlockSignerProfiles(block, bundle.MSPManager(), profile); err != nil {
-		fail(fmt.Errorf("validate orderer signer profile: %w", err))
-	}
 	if err := cluster.VerifyBlockSignature(block, verifier); err != nil {
 		fail(fmt.Errorf("verify transaction block signature: %w", err))
+	}
+	if err := verifyBlockSignerProfiles(block, profile); err != nil {
+		fail(fmt.Errorf("validate orderer signer profile: %w", err))
 	}
 
 	targetEnvelope, targetIndex, err := findCommittedTransaction(block, *txID)
@@ -316,7 +316,7 @@ func requiredProfileFromChannel(channelCapabilities channelconfig.ChannelCapabil
 	return profile, nil
 }
 
-func verifyBlockSignerProfiles(block *cb.Block, manager msp.MSPManager, profile oqs.HybridCertificateProfile) error {
+func verifyBlockSignerProfiles(block *cb.Block, profile oqs.HybridCertificateProfile) error {
 	signatureIndex := int(cb.BlockMetadataIndex_SIGNATURES)
 	if block.GetMetadata() == nil || len(block.GetMetadata().GetMetadata()) <= signatureIndex {
 		return errors.New("block has no signature metadata")
@@ -332,13 +332,6 @@ func verifyBlockSignerProfiles(block *cb.Block, manager msp.MSPManager, profile 
 		signatureHeader, err := protoutil.UnmarshalSignatureHeader(signature.GetSignatureHeader())
 		if err != nil {
 			return fmt.Errorf("parse block signer %d header: %w", index, err)
-		}
-		identity, err := manager.DeserializeIdentity(signatureHeader.GetCreator())
-		if err != nil {
-			return fmt.Errorf("deserialize block signer %d: %w", index, err)
-		}
-		if err := identity.Validate(); err != nil {
-			return fmt.Errorf("validate block signer %d identity: %w", index, err)
 		}
 		if err := verifySerializedIdentityProfile(signatureHeader.GetCreator(), profile); err != nil {
 			return fmt.Errorf("verify block signer %d certificate profile: %w", index, err)

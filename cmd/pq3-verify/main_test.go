@@ -261,14 +261,47 @@ func TestVerifySerializedIdentityProfileRequiresBothSelectedExtensions(t *testin
 	}
 }
 
+func TestVerifyBlockSignerProfilesDoesNotRejectExpiredCertificate(t *testing.T) {
+	profile, err := oqs.HybridCertificateProfileByName(
+		oqs.PermanentHybridProfileV1,
+		oqs.ProfileUseIsolatedDevelopment,
+	)
+	require.NoError(t, err)
+	expiredAt := time.Now().Add(-time.Hour)
+	creator := testSerializedIdentityWithValidity(t, []pkix.Extension{
+		{Id: profile.ProfileKeyOID()},
+		{Id: profile.PQSignatureOID()},
+	}, expiredAt.Add(-time.Hour), expiredAt)
+	signatureHeader := protoutil.MarshalOrPanic(&cb.SignatureHeader{Creator: creator})
+	signatureMetadata := protoutil.MarshalOrPanic(&cb.Metadata{
+		Signatures: []*cb.MetadataSignature{{SignatureHeader: signatureHeader}},
+	})
+	signatureIndex := int(cb.BlockMetadataIndex_SIGNATURES)
+	metadata := make([][]byte, signatureIndex+1)
+	metadata[signatureIndex] = signatureMetadata
+	block := &cb.Block{Metadata: &cb.BlockMetadata{Metadata: metadata}}
+
+	require.NoError(t, verifyBlockSignerProfiles(block, profile))
+}
+
 func testSerializedIdentity(t *testing.T, extensions []pkix.Extension) []byte {
+	now := time.Now()
+	return testSerializedIdentityWithValidity(t, extensions, now.Add(-time.Hour), now.Add(time.Hour))
+}
+
+func testSerializedIdentityWithValidity(
+	t *testing.T,
+	extensions []pkix.Extension,
+	notBefore time.Time,
+	notAfter time.Time,
+) []byte {
 	t.Helper()
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		ExtraExtensions:       extensions,

@@ -18,10 +18,8 @@ import (
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	mspprotos "github.com/hyperledger/fabric-protos-go-apiv2/msp"
-	"github.com/hyperledger/fabric/common/capabilities"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
-	oqs "github.com/hyperledger/fabric/pq-crypto"
 	"github.com/hyperledger/fabric/protoutil"
 	dcli "github.com/moby/moby/client"
 	. "github.com/onsi/ginkgo/v2"
@@ -38,9 +36,10 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 		testDir, err := os.MkdirTemp("", "hybrid-root-rotation")
 		Expect(err).NotTo(HaveOccurred())
 
+		profileName, channelCapability := selectedHybridAcceptanceProfile()
 		oldProfile, oldProfileSet := os.LookupEnv("PACTWAY_HYBRID_PROFILE")
 		oldDevelopment, oldDevelopmentSet := os.LookupEnv("PACTWAY_ISOLATED_DEVELOPMENT")
-		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", oqs.TemporaryHybridProfileV1)).To(Succeed())
+		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", profileName)).To(Succeed())
 		Expect(os.Setenv("PACTWAY_ISOLATED_DEVELOPMENT", "true")).To(Succeed())
 
 		var ordererProcess, peerProcess ifrit.Process
@@ -70,7 +69,7 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 		ordererOrg.EnableNodeOUs = true
 		network.Profiles[0].ChannelCapabilities = []string{
 			"V3_0",
-			capabilities.PactwayHybridCertificateV1,
+			channelCapability,
 		}
 
 		network.GenerateConfigTree()
@@ -110,6 +109,7 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 		ordererRunner, startedOrderer, startedPeers := network.StartSingleOrdererNetwork(orderer.Name)
 		ordererProcess, peerProcess = startedOrderer, startedPeers
 		nwo.JoinOrdererJoinPeersAppChannel(network, "testchannel", orderer, ordererRunner)
+		expectHybridChannelCapability(network, org1Peer, orderer, "testchannel", channelCapability)
 
 		ordererProcess.Signal(syscall.SIGTERM)
 		Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive())
@@ -196,9 +196,10 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 	It("rotates a three-orderer cluster with overlapping roots and rejects a stale signer", func() {
 		testDir, err := os.MkdirTemp("", "hybrid-multi-orderer-rotation")
 		Expect(err).NotTo(HaveOccurred())
+		profileName, channelCapability := selectedHybridAcceptanceProfile()
 		oldProfile, oldProfileSet := os.LookupEnv("PACTWAY_HYBRID_PROFILE")
 		oldDevelopment, oldDevelopmentSet := os.LookupEnv("PACTWAY_ISOLATED_DEVELOPMENT")
-		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", oqs.TemporaryHybridProfileV1)).To(Succeed())
+		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", profileName)).To(Succeed())
 		Expect(os.Setenv("PACTWAY_ISOLATED_DEVELOPMENT", "true")).To(Succeed())
 
 		var network *nwo.Network
@@ -229,7 +230,7 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 		ordererOrg := network.Organization("OrdererOrg")
 		ordererOrg.MSPID = "OrdererOrgMSP"
 		ordererOrg.EnableNodeOUs = true
-		network.Profiles[0].ChannelCapabilities = []string{"V3_0", capabilities.PactwayHybridCertificateV1}
+		network.Profiles[0].ChannelCapabilities = []string{"V3_0", channelCapability}
 		network.GenerateConfigTree()
 		network.CreateDockerNetwork()
 		sess, err := network.Cryptogen(commands.Generate{Config: network.CryptoConfigPath(), Output: network.CryptoPath()})
@@ -298,6 +299,7 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 		orderer := network.Orderers[0]
 		peer := network.Peer("Org1", "peer0")
 		network.JoinChannel("testchannel", orderer, network.PeersWithChannel("testchannel")...)
+		expectHybridChannelCapability(network, peer, orderer, "testchannel", channelCapability)
 
 		updateRoots := func(removeOld bool) {
 			current := nwo.GetConfig(network, peer, orderer, "testchannel")
@@ -367,12 +369,13 @@ var _ = Describe("Pactway hybrid orderer root rotation", func() {
 })
 
 func generateHybridNetwork(outputDir, configDir string) {
+	profileName, _ := selectedHybridAcceptanceProfile()
 	command := exec.Command(
 		pqGenerator,
 		"-output="+outputDir,
 		"-configtx-dir="+configDir,
 		"-fabric-profile=SampleAppChannelEtcdRaft",
-		"-hybrid-profile="+oqs.TemporaryHybridProfileV1,
+		"-hybrid-profile="+profileName,
 	)
 	sess, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
 	Expect(err).NotTo(HaveOccurred())

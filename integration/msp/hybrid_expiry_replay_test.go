@@ -27,7 +27,6 @@ import (
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/bccsp/signer"
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
-	"github.com/hyperledger/fabric/common/capabilities"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/core/container/externalbuilder"
 	"github.com/hyperledger/fabric/integration/nwo"
@@ -46,9 +45,10 @@ var _ = Describe("Pactway hybrid transaction expiry replay", func() {
 	DescribeTable("replays a valid transaction after a signer certificate expires", func(role string) {
 		testDir, err := os.MkdirTemp("", "hybrid-expiry-replay")
 		Expect(err).NotTo(HaveOccurred())
+		profileName, channelCapability := selectedHybridAcceptanceProfile()
 		oldProfile, oldProfileSet := os.LookupEnv("PACTWAY_HYBRID_PROFILE")
 		oldDevelopment, oldDevelopmentSet := os.LookupEnv("PACTWAY_ISOLATED_DEVELOPMENT")
-		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", oqs.TemporaryHybridProfileV1)).To(Succeed())
+		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", profileName)).To(Succeed())
 		Expect(os.Setenv("PACTWAY_ISOLATED_DEVELOPMENT", "true")).To(Succeed())
 
 		var network *nwo.Network
@@ -77,7 +77,7 @@ var _ = Describe("Pactway hybrid transaction expiry replay", func() {
 		ordererOrg := network.Organization("OrdererOrg")
 		ordererOrg.MSPID = "OrdererOrgMSP"
 		ordererOrg.EnableNodeOUs = true
-		network.Profiles[0].ChannelCapabilities = []string{"V3_0", capabilities.PactwayHybridCertificateV1}
+		network.Profiles[0].ChannelCapabilities = []string{"V3_0", channelCapability}
 		network.GenerateConfigTree()
 		sess, err := network.Cryptogen(commands.Generate{Config: network.CryptoConfigPath(), Output: network.CryptoPath()})
 		Expect(err).NotTo(HaveOccurred())
@@ -104,6 +104,7 @@ var _ = Describe("Pactway hybrid transaction expiry replay", func() {
 		runner, startedOrderer, startedPeers := network.StartSingleOrdererNetwork(orderer.Name)
 		ordererProcess, peerProcess = startedOrderer, startedPeers
 		nwo.JoinOrdererJoinPeersAppChannel(network, "testchannel", orderer, runner)
+		expectHybridChannelCapability(network, org1Peer, orderer, "testchannel", channelCapability)
 		nwo.EnableCapabilities(network, "testchannel", "Application", "V2_0", orderer, org1Peer, org2Peer)
 
 		chaincodeServerAddress := fmt.Sprintf("127.0.0.1:%d", network.ReservePort())
@@ -366,17 +367,17 @@ func generateReplayChaincodeConfig(address string) (externalbuilder.ChaincodeSer
 
 	caCert := string(tlsCA.CertBytes())
 	return externalbuilder.ChaincodeServerUserData{
-		Address:            address,
-		DialTimeout:        externalbuilder.Duration(10 * time.Second),
-		TLSRequired:        true,
-		ClientAuthRequired: true,
-		ClientKey:          string(clientPair.Key),
-		ClientCert:         string(clientPair.Cert),
-		RootCert:           caCert,
-	}, replayChaincodeServerConfig{
-		ListenAddress: address,
-		Key:           string(serverPair.Key),
-		Cert:          string(serverPair.Cert),
-		CA:            caCert,
-	}
+			Address:            address,
+			DialTimeout:        externalbuilder.Duration(10 * time.Second),
+			TLSRequired:        true,
+			ClientAuthRequired: true,
+			ClientKey:          string(clientPair.Key),
+			ClientCert:         string(clientPair.Cert),
+			RootCert:           caCert,
+		}, replayChaincodeServerConfig{
+			ListenAddress: address,
+			Key:           string(serverPair.Key),
+			Cert:          string(serverPair.Cert),
+			CA:            caCert,
+		}
 }
