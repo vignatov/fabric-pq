@@ -33,7 +33,7 @@ services:
       ORDERER_ADMIN_TLS_ROOTCAS: "[/etc/hyperledger/fabric/msp/tlscacerts/tls-ca.pem]"
       ORDERER_ADMIN_TLS_CLIENTROOTCAS: "[/etc/hyperledger/fabric/msp/tlscacerts/tls-ca.pem]"
       ORDERER_ADMIN_TLS_CLIENTAUTHREQUIRED: "true"
-      PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
+      PACTWAY_HYBRID_PROFILE: ${PACTWAY_HYBRID_PROFILE:?}
       PACTWAY_ISOLATED_DEVELOPMENT: "true"
     volumes:
       - ${PQ3_MATERIAL_DIR}/private/organizations/OrdererOrg/nodes/orderer0/msp:/etc/hyperledger/fabric/msp:ro
@@ -71,7 +71,7 @@ services:
       CORE_PEER_TLS_CERT_FILE: /etc/hyperledger/fabric/tls/server.crt
       CORE_PEER_TLS_KEY_FILE: /etc/hyperledger/fabric/tls/server.key
       CORE_PEER_TLS_ROOTCERT_FILE: /etc/hyperledger/fabric/msp/tlscacerts/tls-ca.pem
-      PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
+      PACTWAY_HYBRID_PROFILE: ${PACTWAY_HYBRID_PROFILE:?}
       PACTWAY_ISOLATED_DEVELOPMENT: "true"
     volumes:
       - ${PQ3_MATERIAL_DIR}/private/organizations/Org1/nodes/peer0/msp:/etc/hyperledger/fabric/msp:ro
@@ -108,7 +108,7 @@ services:
       CORE_PEER_TLS_CERT_FILE: /etc/hyperledger/fabric/tls/server.crt
       CORE_PEER_TLS_KEY_FILE: /etc/hyperledger/fabric/tls/server.key
       CORE_PEER_TLS_ROOTCERT_FILE: /etc/hyperledger/fabric/msp/tlscacerts/tls-ca.pem
-      PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
+      PACTWAY_HYBRID_PROFILE: ${PACTWAY_HYBRID_PROFILE:?}
       PACTWAY_ISOLATED_DEVELOPMENT: "true"
     volumes:
       - ${PQ3_MATERIAL_DIR}/private/organizations/Org2/nodes/peer0/msp:/etc/hyperledger/fabric/msp:ro
@@ -170,7 +170,7 @@ services:
       CORE_PEER_TLS_ENABLED: "true"
       CORE_PEER_TLS_ROOTCERT_FILE: /run/public/organizations/Org1/msp/tlscacerts/tls-ca.pem
       CORE_PEER_MSPCONFIGPATH: /run/msp/client
-      PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
+      PACTWAY_HYBRID_PROFILE: ${PACTWAY_HYBRID_PROFILE:?}
       PACTWAY_ISOLATED_DEVELOPMENT: "true"
     volumes:
       - ${PQ3_MATERIAL_DIR}/private/organizations/Org1/users/Client/msp:/run/msp/client:ro
@@ -190,7 +190,7 @@ services:
       CORE_PEER_TLS_ENABLED: "true"
       CORE_PEER_TLS_ROOTCERT_FILE: /run/public/organizations/Org2/msp/tlscacerts/tls-ca.pem
       CORE_PEER_MSPCONFIGPATH: /run/msp/admin
-      PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
+      PACTWAY_HYBRID_PROFILE: ${PACTWAY_HYBRID_PROFILE:?}
       PACTWAY_ISOLATED_DEVELOPMENT: "true"
     volumes:
       - ${PQ3_MATERIAL_DIR}/private/organizations/Org2/users/Client/msp:/run/msp/client:ro
@@ -204,7 +204,7 @@ services:
     pull_policy: never
     profiles: ["cli"]
     environment:
-      PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
+      PACTWAY_HYBRID_PROFILE: ${PACTWAY_HYBRID_PROFILE:?}
       PACTWAY_ISOLATED_DEVELOPMENT: "true"
     volumes:
       - ${PQ3_MATERIAL_DIR}/private/organizations/OrdererOrg/nodes/orderer0/tls:/run/orderer-tls:ro

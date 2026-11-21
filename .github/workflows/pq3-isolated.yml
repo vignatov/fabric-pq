@@ -18,12 +18,13 @@ jobs:
   pq3-isolated:
     name: PQ3 isolated acceptance
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -31,7 +32,7 @@ jobs:
           go-version: 1.27.4
           cache: true
 
-      - name: Install verified upstream peer for compatibility check
+      - name: Install verified upstream peer and orderer
         run: |
           set -euo pipefail
           version=3.1.5
@@ -44,57 +45,174 @@ jobs:
           mkdir -p "$install_dir"
           tar -xzf "$archive" -C "$install_dir"
           "$install_dir/bin/peer" version
-          binary_sha256="$(sha256sum "$install_dir/bin/peer" | awk '{print $1}')"
+          "$install_dir/bin/orderer" version
+          peer_sha256="$(sha256sum "$install_dir/bin/peer" | awk '{print $1}')"
+          orderer_sha256="$(sha256sum "$install_dir/bin/orderer" | awk '{print $1}')"
+          [[ "$peer_sha256" == 46a760292a0622bebd8e593b391485f1aa281cb505b2488968ecc4d9e1d5cf89 ]]
+          [[ "$orderer_sha256" == 276b60a703e6187dfcdde7a0d16751a1986ca8ee12e9dd8065b307438cff8f69 ]]
           echo "PACTWAY_UPSTREAM_PEER=$install_dir/bin/peer" >> "$GITHUB_ENV"
-          echo "PACTWAY_UPSTREAM_PEER_SHA256=$binary_sha256" >> "$GITHUB_ENV"
+          echo "PACTWAY_UPSTREAM_PEER_SHA256=$peer_sha256" >> "$GITHUB_ENV"
+          echo "PACTWAY_UPSTREAM_PEER_REVISION=86c1172" >> "$GITHUB_ENV"
+          echo "PACTWAY_UPSTREAM_ORDERER=$install_dir/bin/orderer" >> "$GITHUB_ENV"
+          echo "PACTWAY_UPSTREAM_ORDERER_SHA256=$orderer_sha256" >> "$GITHUB_ENV"
+          echo "PACTWAY_UPSTREAM_ORDERER_REVISION=86c1172" >> "$GITHUB_ENV"
 
-      - name: Run complete PQ3 acceptance
+      - name: Build pre-PQ2.5 compatibility binaries
+        run: |
+          set -euo pipefail
+          revision=c19e53942a1e10e3a1c8f945e6edb59d9123ebf9
+          source_dir="$RUNNER_TEMP/pre-pq2.5-source"
+          binary_dir="$RUNNER_TEMP/pre-pq2.5-bin"
+          mkdir -p "$source_dir" "$binary_dir"
+          git archive "$revision" | tar -x -C "$source_dir"
+          (
+            cd "$source_dir"
+            go build -mod=mod -trimpath -buildvcs=false -o "$binary_dir/peer" ./cmd/peer
+            go build -mod=mod -trimpath -buildvcs=false -o "$binary_dir/orderer" ./cmd/orderer
+          )
+          "$binary_dir/peer" version
+          "$binary_dir/orderer" version
+          peer_sha256="$(sha256sum "$binary_dir/peer" | awk '{print $1}')"
+          orderer_sha256="$(sha256sum "$binary_dir/orderer" | awk '{print $1}')"
+          echo "Pre-PQ2.5 peer SHA-256: $peer_sha256"
+          echo "Pre-PQ2.5 orderer SHA-256: $orderer_sha256"
+          # Pin source provenance; record hashes from this runner's build.
+          echo "PACTWAY_UNSUPPORTED_PQ2_PEER=$binary_dir/peer" >> "$GITHUB_ENV"
+          echo "PACTWAY_UNSUPPORTED_PQ2_ORDERER=$binary_dir/orderer" >> "$GITHUB_ENV"
+          echo "PACTWAY_UNSUPPORTED_PQ2_REVISION=$revision" >> "$GITHUB_ENV"
+          echo "PACTWAY_UNSUPPORTED_PQ2_PEER_SHA256=$peer_sha256" >> "$GITHUB_ENV"
+          echo "PACTWAY_UNSUPPORTED_PQ2_ORDERER_SHA256=$orderer_sha256" >> "$GITHUB_ENV"
+
+      - name: Run temporary-profile PQ3 acceptance
         run: integration/pq3/pq3.sh acceptance
         env:
           PACTWAY_HYBRID_PROFILE: rfc5612-test-only-v1
           PACTWAY_ISOLATED_DEVELOPMENT: "true"
           PQ3_PROTECTED_EVIDENCE_ROOT: ${{ runner.temp }}/pq3-protected-evidence
+          PQ3_EVIDENCE_OUTPUT: build/pq3/acceptance-evidence/temporary-profile
 
-      - name: Verify protected local evidence package
+      - name: Run permanent-profile PQ3 acceptance
+        run: integration/pq3/pq3.sh acceptance
+        env:
+          PACTWAY_HYBRID_PROFILE: pactway-hybrid-certificate-v1
+          PACTWAY_ISOLATED_DEVELOPMENT: "true"
+          PQ3_PROTECTED_EVIDENCE_ROOT: ${{ runner.temp }}/pq3-protected-evidence
+          PQ3_EVIDENCE_OUTPUT: build/pq3/acceptance-evidence/permanent-profile
+
+      - name: Verify both protected local evidence packages
         if: success()
         env:
           PQ3_PROTECTED_EVIDENCE_ROOT: ${{ runner.temp }}/pq3-protected-evidence
         run: |
           set -euo pipefail
-          package="$(find "$PQ3_PROTECTED_EVIDENCE_ROOT" -mindepth 2 -maxdepth 2 \
-            -type d -name 'acceptance-*' -print -quit)"
-          [[ -n "$package" ]]
-          [[ "$package" != "$GITHUB_WORKSPACE/"* ]]
-          test -s "$package/verification-inputs/channel-config/genesis.block"
-          test -s "$package/verification-inputs/certificates/organizations/Org1/msp/cacerts/root.pem"
-          test -s "$package/verification-inputs/certificates/organizations/Org2/msp/cacerts/root.pem"
-          test -s "$package/verification-inputs/certificates/organizations/OrdererOrg/msp/cacerts/root.pem"
-          test -s "$package/verification-inputs/certificates/tls/OrdererOrg-orderer0-server.crt"
-          test -s "$package/verification-inputs/transactions/block-$(head -n1 "$package/sanitized-evidence/transaction-ids.txt" | cut -d' ' -f1).hex"
-          test -s "$package/verification-inputs/verification-results/transaction-$(head -n1 "$package/sanitized-evidence/transaction-ids.txt" | cut -d' ' -f1).json"
-          test -s "$package/logs/index.txt"
-          for prefix in block- org1-transaction- org2-transaction-; do
-            count="$(find "$package/verification-inputs/transactions" -maxdepth 1 \
-              -type f -name "$prefix*.hex" | wc -l)"
-            [[ "$count" -ge 2 ]]
+          require_file() {
+            local path="$1" description="$2"
+            if [[ ! -s "$path" ]]; then
+              printf 'Missing %s: %s\n' "$description" "$path" >&2
+              return 1
+            fi
+          }
+          mapfile -t packages < <(find "$PQ3_PROTECTED_EVIDENCE_ROOT" -mindepth 2 -maxdepth 2 \
+            -type d -name 'acceptance-*' | sort)
+          if [[ "${#packages[@]}" -ne 2 ]]; then
+            printf 'Expected two protected evidence packages, found %s.\n' "${#packages[@]}" >&2
+            exit 1
+          fi
+          for pair in \
+            "rfc5612-test-only-v1 PactwayHybridCertificateV1 temporary-profile" \
+            "pactway-hybrid-certificate-v1 PactwayHybridCertificatePactwayV1 permanent-profile"; do
+            read -r profile capability report_dir <<<"$pair"
+            printf 'Verifying protected evidence for profile %s.\n' "$profile"
+            package=""
+            for candidate in "${packages[@]}"; do
+              manifest="$candidate/sanitized-evidence/network-manifest.json"
+              if [[ -s "$manifest" ]] &&
+                jq -e --arg profile "$profile" --arg capability "$capability" \
+                  '.hybrid_profile == $profile and .channel_capability == $capability' \
+                  "$manifest" >/dev/null; then
+                package="$candidate"
+                break
+              fi
+            done
+            if [[ -z "$package" ]]; then
+              printf 'No protected package matched profile %s and capability %s.\n' \
+                "$profile" "$capability" >&2
+              exit 1
+            fi
+            if [[ "$package" == "$GITHUB_WORKSPACE/"* ]]; then
+              printf 'Protected evidence package is inside the workspace: %s\n' "$package" >&2
+              exit 1
+            fi
+            public_manifest="$package/sanitized-evidence/public-network-manifest.json"
+            require_file "$public_manifest" "sanitized public network manifest"
+            if ! jq -e --arg profile "$profile" --arg capability "$capability" \
+              '.hybrid_profile == $profile and .channel_capability == $capability' \
+              "$public_manifest" >/dev/null; then
+              printf 'Sanitized public manifest has the wrong profile or capability for %s.\n' \
+                "$profile" >&2
+              exit 1
+            fi
+            verification="$package/sanitized-evidence/transaction-verification.json"
+            require_file "$verification" "transaction verification report"
+            if ! jq -e --arg profile "$profile" '
+              .hybrid_profile == $profile
+              and .validated_profile_oids == true
+              and .block_signature_valid == true
+              and .verified_endorsements == 2
+              and (.endorsing_msps | index("Org1MSP") != null)
+              and (.endorsing_msps | index("Org2MSP") != null)
+            ' "$verification" >/dev/null; then
+              printf 'Transaction verification report failed profile or endorsement checks for %s.\n' \
+                "$profile" >&2
+              exit 1
+            fi
+            require_file "$package/verification-inputs/channel-config/genesis.block" \
+              "channel genesis block"
+            require_file "$package/verification-inputs/certificates/organizations/Org1/msp/cacerts/root.pem" \
+              "Org1 root certificate"
+            require_file "$package/verification-inputs/certificates/organizations/Org2/msp/cacerts/root.pem" \
+              "Org2 root certificate"
+            require_file "$package/verification-inputs/certificates/organizations/OrdererOrg/msp/cacerts/root.pem" \
+              "OrdererOrg root certificate"
+            require_file "$package/verification-inputs/certificates/tls/OrdererOrg-orderer0-server.crt" \
+              "orderer TLS server certificate"
+            transaction_id="$(head -n1 "$package/sanitized-evidence/transaction-ids.txt" | cut -d' ' -f1)"
+            require_file "$package/verification-inputs/transactions/block-$transaction_id.hex" \
+              "committed block input for $transaction_id"
+            require_file "$package/verification-inputs/verification-results/transaction-$transaction_id.json" \
+              "transaction verification result for $transaction_id"
+            require_file "$package/logs/index.txt" "sanitized log index"
+            for prefix in block- org1-transaction- org2-transaction-; do
+              count="$(find "$package/verification-inputs/transactions" -maxdepth 1 \
+                -type f -name "$prefix*.hex" | wc -l)"
+              if [[ "$count" -lt 2 ]]; then
+                printf 'Expected at least two %s transaction inputs; found %s.\n' \
+                  "$prefix" "$count" >&2
+                exit 1
+              fi
+            done
+            (cd "$package" && sha256sum --check SHA256SUMS)
+            if find "$package" -type f \( -iname '*.key' -o -iname '*key.pem' -o -iname '*priv_sk*' \) -print -quit | grep -q .; then
+              echo "Protected evidence package contains a private-key file." >&2
+              exit 1
+            fi
+            if grep -RIlE -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' "$package" | grep -q .; then
+              echo "Protected evidence package contains a private key block." >&2
+              exit 1
+            fi
+            report="build/pq3/acceptance-evidence/$report_dir"
+            report_matches=("$report"/acceptance-*/report.md)
+            if [[ ! -s "${report_matches[0]:-}" ]]; then
+              printf 'Missing sanitized acceptance report for %s.\n' "$profile" >&2
+              exit 1
+            fi
           done
-          (cd "$package" && sha256sum --check SHA256SUMS)
-          if find "$package" -type f \( -iname '*.key' -o -iname '*key.pem' -o -iname '*priv_sk*' \) -print -quit | grep -q .; then
-            echo "Protected evidence package contains a private-key file." >&2
-            exit 1
-          fi
-          if grep -RIlE -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' "$package" | grep -q .; then
-            echo "Protected evidence package contains a private key block." >&2
-            exit 1
-          fi
 
       - name: Add acceptance report to job summary
         if: always()
         run: |
-          report="$(find build/pq3/acceptance-evidence -name report.md -type f -print -quit 2>/dev/null || true)"
-          if [[ -n "$report" ]]; then
-            cat "$report" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          find build/pq3/acceptance-evidence -name report.md -type f -print0 2>/dev/null |
+            sort -z | xargs -0 -r cat >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload sanitized PQ3 evidence
         if: always()

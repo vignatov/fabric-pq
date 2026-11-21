@@ -29,7 +29,6 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	mspprotos "github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	peer "github.com/hyperledger/fabric-protos-go-apiv2/peer"
-	"github.com/hyperledger/fabric/common/capabilities"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
 	oqs "github.com/hyperledger/fabric/pq-crypto"
@@ -45,9 +44,10 @@ var _ = Describe("Pactway hybrid transaction signature rejection", func() {
 	It("rejects a client proposal with an invalid PQ signature", func() {
 		testDir, err := os.MkdirTemp("", "hybrid-invalid-signature")
 		Expect(err).NotTo(HaveOccurred())
+		profileName, channelCapability := selectedHybridAcceptanceProfile()
 		oldProfile, oldProfileSet := os.LookupEnv("PACTWAY_HYBRID_PROFILE")
 		oldDevelopment, oldDevelopmentSet := os.LookupEnv("PACTWAY_ISOLATED_DEVELOPMENT")
-		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", oqs.TemporaryHybridProfileV1)).To(Succeed())
+		Expect(os.Setenv("PACTWAY_HYBRID_PROFILE", profileName)).To(Succeed())
 		Expect(os.Setenv("PACTWAY_ISOLATED_DEVELOPMENT", "true")).To(Succeed())
 
 		var network *nwo.Network
@@ -71,7 +71,7 @@ var _ = Describe("Pactway hybrid transaction signature rejection", func() {
 		ordererOrg := network.Organization("OrdererOrg")
 		ordererOrg.MSPID = "OrdererOrgMSP"
 		ordererOrg.EnableNodeOUs = true
-		network.Profiles[0].ChannelCapabilities = []string{"V3_0", capabilities.PactwayHybridCertificateV1}
+		network.Profiles[0].ChannelCapabilities = []string{"V3_0", channelCapability}
 		network.GenerateConfigTree()
 		sess, err := network.Cryptogen(commands.Generate{
 			Config: network.CryptoConfigPath(),
@@ -101,6 +101,7 @@ var _ = Describe("Pactway hybrid transaction signature rejection", func() {
 		runner, startedOrderer, startedPeers := network.StartSingleOrdererNetwork(orderer.Name)
 		ordererProcess, peerProcess = startedOrderer, startedPeers
 		nwo.JoinOrdererJoinPeersAppChannel(network, "testchannel", orderer, runner)
+		expectHybridChannelCapability(network, org1Peer, orderer, "testchannel", channelCapability)
 		nwo.EnableCapabilities(network, "testchannel", "Application", "V2_0", orderer, org1Peer, org2Peer)
 
 		userMSPDir := network.PeerUserMSPDir(org1Peer, "User1")

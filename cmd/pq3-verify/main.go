@@ -8,8 +8,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,6 +52,8 @@ type result struct {
 	VerifiedEndorsements       int      `json:"verified_endorsements"`
 	VerifiedChaincode          string   `json:"verified_chaincode"`
 	EndorsingMSPs              []string `json:"endorsing_msps"`
+	HybridProfile              string   `json:"hybrid_profile"`
+	ValidatedProfileOIDs       bool     `json:"validated_profile_oids"`
 }
 
 func main() {
@@ -74,9 +79,6 @@ func main() {
 			*stateValue, *org1State, *org2State))
 	}
 
-	if _, err := oqs.HybridCertificateProfileFromEnvironment(); err != nil {
-		fail(err)
-	}
 	if err := factory.InitFactories(nil); err != nil {
 		fail(fmt.Errorf("initialize BCCSP: %w", err))
 	}
@@ -101,8 +103,9 @@ func main() {
 	if err != nil {
 		fail(fmt.Errorf("read channel ID: %w", err))
 	}
-	if !bundle.ChannelConfig().Capabilities().PactwayHybridCertificateV1() {
-		fail(errors.New("channel config does not require Pactway hybrid certificates"))
+	profile, err := requiredProfileFromChannel(bundle.ChannelConfig().Capabilities())
+	if err != nil {
+		fail(err)
 	}
 
 	verifier := cluster.BlockVerifierBuilder(factory.GetDefault())(configBlock)
@@ -114,6 +117,9 @@ func main() {
 	}
 	if err := cluster.VerifyBlockSignature(block, verifier); err != nil {
 		fail(fmt.Errorf("verify transaction block signature: %w", err))
+	}
+	if err := verifyBlockSignerProfiles(block, profile); err != nil {
+		fail(fmt.Errorf("validate orderer signer profile: %w", err))
 	}
 
 	targetEnvelope, targetIndex, err := findCommittedTransaction(block, *txID)
@@ -140,6 +146,8 @@ func main() {
 		StateValue:                 *stateValue,
 		Org1State:                  *org1State,
 		Org2State:                  *org2State,
+		HybridProfile:              profile.Name(),
+		ValidatedProfileOIDs:       true,
 	}
 	for txIndex, rawEnvelope := range block.GetData().GetData() {
 		if txIndex != targetIndex {
@@ -183,6 +191,9 @@ func main() {
 		}
 		if err := creator.Validate(); err != nil {
 			fail(fmt.Errorf("validate transaction creator %d: %w", txIndex, err))
+		}
+		if err := verifySerializedIdentityProfile(signatureHeader.GetCreator(), profile); err != nil {
+			fail(fmt.Errorf("verify transaction creator profile %d: %w", txIndex, err))
 		}
 		if err := creator.Verify(envelope.GetPayload(), envelope.GetSignature()); err != nil {
 			fail(fmt.Errorf("verify client signature on transaction %d: %w", txIndex, err))
@@ -229,6 +240,9 @@ func main() {
 				}
 				if err := identity.Validate(); err != nil {
 					fail(fmt.Errorf("validate endorsement %d in transaction %d: %w", endorsementIndex, txIndex, err))
+				}
+				if err := verifySerializedIdentityProfile(endorsement.GetEndorser(), profile); err != nil {
+					fail(fmt.Errorf("verify endorsement profile %d in transaction %d: %w", endorsementIndex, txIndex, err))
 				}
 				roleBytes, err := proto.Marshal(&mspprotos.MSPRole{
 					MspIdentifier: identity.GetMSPIdentifier(),
@@ -277,6 +291,82 @@ func main() {
 	if err := json.NewEncoder(os.Stdout).Encode(verified); err != nil {
 		fail(fmt.Errorf("encode evidence result: %w", err))
 	}
+}
+
+func requiredProfileFromChannel(channelCapabilities channelconfig.ChannelCapabilities) (oqs.HybridCertificateProfile, error) {
+	profileName := channelCapabilities.PactwayHybridCertificateProfile()
+	if profileName == "" {
+		return oqs.HybridCertificateProfile{}, errors.New("channel config does not require exactly one supported Pactway hybrid profile")
+	}
+	profile, err := oqs.HybridCertificateProfileByName(profileName, oqs.ProfileUseIsolatedDevelopment)
+	if err != nil {
+		return oqs.HybridCertificateProfile{}, fmt.Errorf("channel requires unsupported hybrid certificate profile %q: %w", profileName, err)
+	}
+	localProfile, err := oqs.HybridCertificateProfileFromEnvironment()
+	if err != nil {
+		return oqs.HybridCertificateProfile{}, err
+	}
+	if localProfile.Name() != profile.Name() {
+		return oqs.HybridCertificateProfile{}, fmt.Errorf(
+			"local profile %q does not match authenticated channel profile %q",
+			localProfile.Name(),
+			profile.Name(),
+		)
+	}
+	return profile, nil
+}
+
+func verifyBlockSignerProfiles(block *cb.Block, profile oqs.HybridCertificateProfile) error {
+	signatureIndex := int(cb.BlockMetadataIndex_SIGNATURES)
+	if block.GetMetadata() == nil || len(block.GetMetadata().GetMetadata()) <= signatureIndex {
+		return errors.New("block has no signature metadata")
+	}
+	metadata := &cb.Metadata{}
+	if err := proto.Unmarshal(block.GetMetadata().GetMetadata()[signatureIndex], metadata); err != nil {
+		return fmt.Errorf("parse block signature metadata: %w", err)
+	}
+	if len(metadata.GetSignatures()) == 0 {
+		return errors.New("block has no orderer signatures")
+	}
+	for index, signature := range metadata.GetSignatures() {
+		signatureHeader, err := protoutil.UnmarshalSignatureHeader(signature.GetSignatureHeader())
+		if err != nil {
+			return fmt.Errorf("parse block signer %d header: %w", index, err)
+		}
+		if err := verifySerializedIdentityProfile(signatureHeader.GetCreator(), profile); err != nil {
+			return fmt.Errorf("verify block signer %d certificate profile: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func verifySerializedIdentityProfile(serialized []byte, profile oqs.HybridCertificateProfile) error {
+	identity := &mspprotos.SerializedIdentity{}
+	if err := proto.Unmarshal(serialized, identity); err != nil {
+		return fmt.Errorf("parse serialized identity: %w", err)
+	}
+	block, _ := pem.Decode(identity.GetIdBytes())
+	if block == nil {
+		return errors.New("identity certificate is not PEM encoded")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse identity certificate: %w", err)
+	}
+	requiredOIDs := []asn1.ObjectIdentifier{profile.ProfileKeyOID(), profile.PQSignatureOID()}
+	for _, requiredOID := range requiredOIDs {
+		found := false
+		for _, extension := range certificate.Extensions {
+			if extension.Id.Equal(requiredOID) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("identity certificate is missing profile extension OID %s", requiredOID.String())
+		}
+	}
+	return nil
 }
 
 func readBlock(path string) *cb.Block {
