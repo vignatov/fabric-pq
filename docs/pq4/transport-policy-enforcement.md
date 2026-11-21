@@ -17,6 +17,20 @@ capability as a transport capability. If a distinct transport capability is
 chosen, its precise semantics, fresh-genesis behavior and removal protection
 must be implemented and tested; a capability by itself does not control TLS.
 
+For a node serving mixed channels, the conservative shared-listener candidate
+requires the strictest applicable policy for every connection on that
+listener. This would also reject classical clients of weaker channels on the
+same listener; it must not change behavior on nodes where PQ4 is not selected.
+Separate strict and classical listeners could retain mixed connectivity, but
+would additionally require non-bypassable binding of every request and
+stream to its listener's permitted channels. This is not a single generic
+pre-handshake check: for example, the
+[endorser](../../core/endorser/endorser.go) extracts the channel from a
+proposal, [delivery](../../common/deliver/deliver.go) reads it from an
+envelope, and [gossip](../../gossip/comm/comm_impl.go) has a bidirectional
+stream with its own message handling. Neither candidate has been proved in a
+Fabric network or selected by the architecture review.
+
 ## Trust boundaries and required design decisions
 
 - Define who provisions and authenticates a bootstrap policy, its trust
@@ -65,6 +79,26 @@ genesis containing a deliberately unknown test capability with an explicit
 unsupported-capability diagnostic. That is evidence about unknown-capability
 handling only: no PQ4 capability exists, and the test does not establish
 pre-handshake protection or prevent classical connections.
+
+An isolated [test-only policy prototype](../../integration/pq4/feasibility/policy_prototype_test.go)
+also verifies an ML-DSA-65-signed policy and a separately supplied trusted
+checkpoint before producing a server TLS configuration. It binds a sample
+channel-config protobuf hash to the policy; Fabric's `channelconfig.NewBundle`
+parses that sample. The prototype rejects missing, tampered, stale,
+conflicting and weakened inputs. Its strict listener configuration rejects
+TLS 1.2, X25519-only key exchange and an ECDSA client certificate.
+This tests the strongest-policy-before-handshake idea without selecting it
+as the architecture. If both the older policy and its checkpoint are
+restored, the prototype accepts them: the checkpoint must actually be
+protected against rollback.
+
+The prototype has no real durable or external checkpoint, provisioning or
+rotation mechanism, Fabric channel-update authentication, RPC/channel
+authorization, independent client-side policy, peer/orderer listener
+integration, CCAAS or admin enforcement, or transaction binding. Its exact
+config-hash pinning also requires a separate authenticated policy/checkpoint
+update whenever a channel configuration changes. Neither an in-memory
+checkpoint nor a sample channel proves the corresponding production properties.
 
 The following mandatory proofs are **not yet available**:
 
