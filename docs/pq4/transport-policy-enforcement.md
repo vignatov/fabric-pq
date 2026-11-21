@@ -17,6 +17,19 @@ capability as a transport capability. If a distinct transport capability is
 chosen, its precise semantics, fresh-genesis behavior and removal protection
 must be implemented and tested; a capability by itself does not control TLS.
 
+For further feasibility work, the pragmatic candidate is the layered policy
+with a separately protected freshness authority or checkpoint. Its trust
+domain must remain outside each restored node snapshot; simply placing another
+file or process on the same restored host is not sufficient. Bootstrap would
+authenticate that source using an independently provisioned trust anchor and
+fail closed when it is unavailable or conflicts with the signed node policy.
+The source itself must have rollback-resistant state and authenticated updates;
+restoring it together with the nodes is outside this candidate's assumed
+boundary. Its provisioning, independent protection, secure bootstrap
+transport, update and recovery procedures have not been implemented or
+verified. This is a review candidate, not an architecture approval or a reason
+to start PQ4.1.
+
 For a node serving mixed channels, the conservative shared-listener candidate
 requires the strictest applicable policy for every connection on that
 listener. This would also reject classical clients of weaker channels on the
