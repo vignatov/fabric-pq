@@ -29,6 +29,8 @@ GOFLAGS=-buildvcs=false go test -mod=vendor -trimpath -run TestFabricMSPMLDSATru
 PASS
 GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestFabricCCAASShimMLDSACompatibility github.com/hyperledger/fabric/integration/pq4/feasibility
 PASS
+GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestFabricCCAASPlaintextMetadata github.com/hyperledger/fabric/integration/pq4/feasibility
+PASS
 ```
 
 The tests were run on a PQ4 feasibility worktree based on the commit above.
@@ -154,6 +156,7 @@ PQ4 transport policy.
 | Administration HTTPS components | PASS. `fabhttp` and the real `osnadmin` HTTP client exchanged a request with ML-DSA-65 mTLS and observed X25519MLKEM768. A second X25519-only client was also **accepted** by the same baseline admin listener. The handler is a test fixture, not a running orderer. |
 | TLS-enabled CCAAS shim | PASS. A real chaincode shim configured to require a client certificate accepted an ML-DSA mutual TLS registration stream with X25519MLKEM768 and also **accepted** an X25519-only client. The client observes its verified server chain and negotiated group after standard verification; this fixture does not exercise either PQ3 peer-to-CCAAS link. |
 | Fabric CCAAS client components | PASS. The actual external-builder connection-info constructor and `extcc.ExternalChaincodeRuntime` received the expected chaincode registration and ID from the TLS-enabled shim using fresh ML-DSA client and server credentials. The normal client verifier reported a verified ML-DSA server chain. The test supplies connection metadata and client key in memory only; it does not package or distribute the key, observe this connection's negotiated group, or run a Fabric peer. |
+| Fabric CCAAS plaintext metadata | A real external-builder `Instance` read test release-directory metadata and the real external-chaincode runtime registered with a test gRPC service over plaintext. The service observed no client authentication both with `client_auth_required` false and with it true while `tls_required` was false. No Fabric peer, installed package, metadata tampering or server-side shim was exercised. |
 | Signed-policy prototype | PASS for an isolated signed bootstrap policy with an assumed trusted checkpoint and a sample channel-config hash; Fabric's `channelconfig.NewBundle` parses the sample, but no channel-update authentication is exercised. It rejects missing, modified, untrusted, stale, equivocated, conflicting and weakened inputs, then enforces a strict server handshake. Restoring both an older policy and its checkpoint is accepted, demonstrating the checkpoint's necessary trust assumption. This does not exercise Fabric policy integration or real rollback-resistant storage. |
 
 The Go toolchain's `crypto/tls` selects only the ML-DSA-65 signature scheme

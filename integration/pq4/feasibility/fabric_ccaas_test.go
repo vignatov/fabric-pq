@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -66,6 +68,82 @@ func (handler registrationHandler) HandleChaincodeStream(stream ccintf.Chaincode
 		return errors.New("unexpected registered chaincode ID")
 	}
 	return nil
+}
+
+type plaintextRegistrationServer struct {
+	peerproto.UnimplementedChaincodeServer
+	authInfo chan credentials.AuthInfo
+}
+
+func (server *plaintextRegistrationServer) Connect(stream peerproto.Chaincode_ConnectServer) error {
+	remote, ok := peer.FromContext(stream.Context())
+	if !ok {
+		return errors.New("missing external chaincode client peer")
+	}
+	server.authInfo <- remote.AuthInfo
+	payload, err := proto.Marshal(&peerproto.ChaincodeID{Name: "pq4-feasibility"})
+	if err != nil {
+		return err
+	}
+	return stream.Send(&peerproto.ChaincodeMessage{Type: peerproto.ChaincodeMessage_REGISTER, Payload: payload})
+}
+
+func TestFabricCCAASPlaintextMetadata(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	fixture := &plaintextRegistrationServer{authInfo: make(chan credentials.AuthInfo, 1)}
+	peerproto.RegisterChaincodeServer(server, fixture)
+	serveErrors := make(chan error, 1)
+	go func() { serveErrors <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		require.NoError(t, <-serveErrors)
+	}()
+
+	for _, test := range []struct {
+		name               string
+		clientAuthRequired bool
+	}{
+		{"plaintext metadata", false},
+		{"plaintext metadata with client auth requested", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			releaseDir := t.TempDir()
+			instance := &externalbuilder.Instance{ReleaseDir: releaseDir}
+			require.NoError(t, os.MkdirAll(instance.ChaincodeServerReleaseDir(), 0o700))
+			metadata, err := json.Marshal(externalbuilder.ChaincodeServerUserData{
+				Address:            listener.Addr().String(),
+				TLSRequired:        false,
+				ClientAuthRequired: test.clientAuthRequired,
+			})
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(instance.ChaincodeServerReleaseDir(), "connection.json"), metadata, 0o600))
+			info, err := instance.ChaincodeServerInfo()
+			require.NoError(t, err)
+			require.NotNil(t, info)
+			require.False(t, info.ClientConfig.SecOpts.UseTLS)
+			info.ClientConfig.DialTimeout = 5 * time.Second
+			result := make(chan error, 1)
+			go func() {
+				result <- (&extcc.ExternalChaincodeRuntime{}).Stream(
+					"pq4-feasibility", info, registrationHandler{chaincodeID: "pq4-feasibility"},
+				)
+			}()
+			select {
+			case err := <-result:
+				require.NoError(t, err)
+			case <-time.After(15 * time.Second):
+				t.Fatal("external chaincode registration timed out")
+			}
+			select {
+			case auth := <-fixture.authInfo:
+				require.Nil(t, auth, "plaintext gRPC connection unexpectedly had authentication information")
+			default:
+				t.Fatal("chaincode server did not observe the peer")
+			}
+		})
+	}
 }
 
 func TestFabricCCAASShimMLDSACompatibility(t *testing.T) {

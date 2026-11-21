@@ -74,6 +74,15 @@ current Fabric comm, admin and shim servers accept classical-only key
 exchange. The test-only additional certificate check does not authenticate
 a network policy or enforce it in Fabric.
 
+Another component test supplies release-directory `connection.json` to the
+actual external-builder reader and external-chaincode runtime. Both
+`tls_required: false` alone and that setting combined with
+`client_auth_required: true` result in a plaintext registration stream to a
+test gRPC server, with no server-observed client authentication. The test
+does not run a Fabric peer or prove that an attacker can alter an installed
+package. It does show that a future strict policy cannot treat the metadata's
+client-auth flag as evidence that TLS was enabled.
+
 Baseline and pinned-upstream peer and orderer processes also rejected a
 genesis containing a deliberately unknown test capability with an explicit
 unsupported-capability diagnostic. That is evidence about unknown-capability
