@@ -101,6 +101,39 @@ network or a multi-orderer consensus test; it does not demonstrate how an
 independent honest peer or protected checkpoint would respond. The test
 removes its own temporary network and snapshots afterward.
 
+## Baseline Raft quorum rollback experiment
+
+A separate test used three baseline orderers, two peer organizations and
+ECDSA TLS. It stopped a non-leader orderer and copied its FileLedger and Raft
+state, then restarted it and committed the same redundant capability removal.
+After confirming all three orderers served the updated config, it stopped that
+orderer again, restored its earlier state and restarted it while the other
+two orderers remained running. On the worktree based on `5e738e9bf`, the
+following command was run three times:
+
+```text
+GOFLAGS=-buildvcs=false go test -mod=vendor -count=1 -timeout 15m -v -run TestMSP github.com/hyperledger/fabric/integration/msp -args -ginkgo.focus=characterizes.a.restored.orderer -ginkgo.v
+PASS in 3 separate runs: 1 selected spec each; the restored orderer exited with a Raft commit-index panic each time
+GOFLAGS=-buildvcs=false go vet -mod=vendor github.com/hyperledger/fabric/integration/msp
+PASS
+GOFLAGS=-buildvcs=false go test -mod=vendor -count=1 -timeout 15m -v -run TestMSP github.com/hyperledger/fabric/integration/msp -args -ginkgo.focus=PQ4.config.update.feasibility
+PASS: 2 selected specs; 14 unrelated specs filtered out
+```
+
+In all three runs the restored orderer panicked with `tocommit(5) is out of
+range [lastIndex(4)]` rather than catching up. The surviving orderers still
+served the advanced configuration. A prior test run expecting catch-up failed
+on the same panic; the revised test reports and verifies this outcome rather
+than treating it as successful recovery. The test removes its own temporary
+network and snapshots.
+
+The test distinguishes the observed commit-index panic from a successful
+catch-up followed by stale-update rejection; other exits or a timeout fail
+the test. This is not evidence that the restored orderer rejects old policy
+during startup or before TLS handshakes. It does not cover a rolled-back
+quorum, Byzantine orderers, a freshness authority for peers or CCAAS, or a
+PQ4 transport policy.
+
 ## Observed results
 
 | Check | Result and evidence boundary |

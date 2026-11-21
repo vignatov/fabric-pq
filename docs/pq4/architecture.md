@@ -54,11 +54,11 @@ accepts a classical-only X25519 client. This is not a network-wide test.
 | --- | --- |
 | Native Go TLS/X.509 and gRPC | Standalone feasibility passes in the recorded non-FIPS environment. |
 | Fabric `comm` constructors | ML-DSA mutual TLS component test passes, but strict group enforcement is absent. Server-credential construction and cloning can each reset an explicit TLS 1.3 minimum and allow a TLS 1.2 handshake. |
-| MSP TLS CA and Raft metadata validation | Component tests accept ML-DSA-65 TLS material and reject selected invalid inputs; no running consensus network is demonstrated. |
+| MSP TLS CA and Raft metadata validation | Component tests accept ML-DSA-65 TLS material and reject selected invalid inputs; no ML-DSA consensus network is demonstrated. |
 | `fabhttp` and `osnadmin` | ML-DSA mutual TLS component test passes; the unmodified admin listener also accepts classical-only key exchange. |
 | CCAAS client and chaincode shim | With TLS enabled in a test fixture, real external-builder, peer runtime and shim components register using ML-DSA mutual TLS credentials. Independently, the shim accepts both hybrid and classical-only key exchange. The PQ3 CCAAS deployment remains plaintext. |
 | Signed bootstrap-policy prototype | An isolated test exercises an authenticated policy, assumed trusted checkpoint and strict server handshake. It does not integrate with Fabric or establish a real rollback-resistant checkpoint. |
-| Live baseline configuration rollback | A single orderer rejects a stale signed update against its current ledger but serves the older configuration after its local ledger and Raft state are restored. No PQ4 policy or multi-orderer behavior was tested. |
+| Live baseline configuration rollback | A single orderer serves an older configuration after restoring its state. In a separate three-orderer experiment, a restored orderer panicked on a Raft log-index inconsistency in three runs. Neither experiment establishes a PQ4 policy or pre-handshake freshness. |
 | Existing PQ3.5 network | Merged-commit baseline acceptance passed with ECDSA TLS authentication; actual key-exchange groups were not recorded. |
 | Peer, orderer, Raft, admin, CCAAS and Gateway with PQ4 policy | Not tested; no PQ4 mode exists. |
 | Existing or upstream binaries against a PQ4-required channel | Not tested; no PQ4 channel requirement exists. Both baseline and pinned-upstream binaries reject a deliberately unknown test capability, which does not prove PQ4 transport enforcement. |

@@ -107,7 +107,16 @@ authorized removal of a redundant, unprotected capability. Restoring the
 single orderer's earlier ledger and Raft state after shutdown caused it to
 serve the previous configuration and accept the previously stale update on
 restart. The two peers were stopped before the restore; this does not
-establish multi-orderer behavior or prove any PQ4 transport policy.
+prove any PQ4 transport policy.
+
+A separate baseline three-orderer Raft experiment kept an unrolled-back
+quorum running, advanced all orderers' configuration, and restored one
+orderer's earlier ledger and Raft state. In three runs the restored orderer
+panicked because its Raft commit index exceeded its restored log index.
+The experiment is not a PQ4 policy and does not establish that the orderer
+refuses old policy before catching up, that a node validates freshness before
+accepting TLS connections, or that a restored quorum or a separate
+CCAAS/admin endpoint is protected.
 
 The following mandatory proofs are **not yet available**:
 

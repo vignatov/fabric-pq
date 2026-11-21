@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
+	"time"
 
 	commonproto "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/integration/nwo"
@@ -143,5 +145,174 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		Eventually(func() bool {
 			return proto.Equal(nwo.GetConfig(network, org1, orderer, "testchannel"), committed)
 		}, network.EventuallyTimeout).Should(BeTrue())
+	})
+
+	It("characterizes a restored orderer while the other Raft orderers remain running", func() {
+		testDir, err := os.MkdirTemp("", "pq4-quorum-rollback")
+		Expect(err).NotTo(HaveOccurred())
+		var network *nwo.Network
+		var peerProcess ifrit.Process
+		ordererProcesses := make([]ifrit.Process, 3)
+		DeferCleanup(func() {
+			if peerProcess != nil {
+				peerProcess.Signal(syscall.SIGTERM)
+				Eventually(peerProcess.Wait(), network.EventuallyTimeout).Should(Receive())
+			}
+			for _, process := range ordererProcesses {
+				if process != nil {
+					process.Signal(syscall.SIGTERM)
+					Eventually(process.Wait(), network.EventuallyTimeout).Should(Receive())
+				}
+			}
+			if network != nil {
+				network.Cleanup()
+			}
+			Expect(os.RemoveAll(testDir)).To(Succeed())
+		})
+
+		config := nwo.MultiNodeEtcdRaft()
+		config.Profiles[0].ChannelCapabilities = []string{"V3_0", "V2_0"}
+		network = nwo.New(config, testDir, nil, StartPort(), components)
+		network.GenerateConfigTree()
+		network.Bootstrap()
+		orderers := []*nwo.Orderer{network.Orderer("orderer1"), network.Orderer("orderer2"), network.Orderer("orderer3")}
+		runners := make([]*ginkgomon.Runner, len(orderers))
+		for i, orderer := range orderers {
+			runners[i] = network.OrdererRunner(orderer)
+			ordererProcesses[i] = ifrit.Invoke(runners[i])
+		}
+		for _, process := range ordererProcesses {
+			Eventually(process.Ready(), network.EventuallyTimeout).Should(BeClosed())
+		}
+		nwo.JoinOrderersAppChannelCluster(network, "testchannel", orderers...)
+		leaderPattern := regexp.MustCompile(`Raft leader changed: 0 -> ([123]) channel=testchannel node=1`)
+		Eventually(func() bool {
+			return leaderPattern.Match(runners[0].Err().Contents())
+		}, network.EventuallyTimeout).Should(BeTrue())
+		leader := int(leaderPattern.FindSubmatch(runners[0].Err().Contents())[1][0] - '1')
+		lagging := 0
+		if leader == lagging {
+			lagging = 1
+		}
+		peerProcess = ifrit.Invoke(network.PeerGroupRunner())
+		Eventually(peerProcess.Ready(), network.EventuallyTimeout).Should(BeClosed())
+		network.JoinChannel("testchannel", orderers[leader], network.PeersWithChannel("testchannel")...)
+		org1 := network.Peer("Org1", "peer0")
+		org2 := network.Peer("Org2", "peer0")
+		current := nwo.GetConfig(network, org1, orderers[leader], "testchannel")
+		Expect(proto.Equal(nwo.GetConfig(network, org1, orderers[lagging], "testchannel"), current)).To(BeTrue())
+
+		ordererProcesses[lagging].Signal(syscall.SIGTERM)
+		Eventually(ordererProcesses[lagging].Wait(), network.EventuallyTimeout).Should(Receive())
+		ordererProcesses[lagging] = nil
+		ordererDir := network.OrdererDir(orderers[lagging])
+		for _, name := range []string{"system", "etcdraft"} {
+			Expect(copyDirectory(filepath.Join(ordererDir, name), filepath.Join(testDir, "snapshot", name))).To(Succeed())
+		}
+		startLagging := func() {
+			runners[lagging] = network.OrdererRunner(orderers[lagging])
+			ordererProcesses[lagging] = ifrit.Invoke(runners[lagging])
+			Eventually(ordererProcesses[lagging].Ready(), network.EventuallyTimeout).Should(BeClosed())
+			Eventually(runners[lagging].Err(), network.EventuallyTimeout).Should(
+				gbytes.Say("Raft leader changed: .* -> [123] channel=testchannel"),
+			)
+		}
+		startLagging()
+
+		updated := proto.Clone(current).(*commonproto.Config)
+		value := updated.GetChannelGroup().GetValues()["Capabilities"]
+		capabilities := &commonproto.Capabilities{}
+		Expect(proto.Unmarshal(value.GetValue(), capabilities)).To(Succeed())
+		Expect(capabilities.Capabilities).To(HaveKey("V2_0"))
+		Expect(capabilities.Capabilities).To(HaveKey("V3_0"))
+		delete(capabilities.Capabilities, "V2_0")
+		value.Value = protoutil.MarshalOrPanic(capabilities)
+		const updateFile = "quorum-authorized.pb"
+		authorized := signHybridConfigUpdate(network, org1, "Admin", testDir, updateFile, "testchannel", current, updated, org2)
+		session, err := network.OrdererAdminSession(orderers[leader], org1, commands.SignConfigTx{File: filepath.Join(testDir, updateFile)})
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(session, network.EventuallyTimeout).Should(gexec.Exit(0))
+		envelopeBytes, err := os.ReadFile(filepath.Join(testDir, updateFile))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(proto.Unmarshal(envelopeBytes, authorized)).To(Succeed())
+		nwo.Update(network, orderers[leader], "testchannel", authorized)
+		var committed *commonproto.Config
+		Eventually(func() uint64 {
+			committed = nwo.GetConfig(network, org1, orderers[leader], "testchannel")
+			return committed.GetSequence()
+		}, network.EventuallyTimeout).Should(Equal(current.GetSequence() + 1))
+		committedCapabilities := &commonproto.Capabilities{}
+		committedValue := committed.GetChannelGroup().GetValues()["Capabilities"]
+		Expect(proto.Unmarshal(committedValue.GetValue(), committedCapabilities)).To(Succeed())
+		Expect(committedCapabilities.Capabilities).NotTo(HaveKey("V2_0"))
+		Expect(committedCapabilities.Capabilities).To(HaveKey("V3_0"))
+		Expect(committedValue.Version).To(Equal(value.Version + 1))
+		otherSurvivor := 3 - leader - lagging
+		Eventually(func() bool {
+			return proto.Equal(nwo.GetConfig(network, org1, orderers[otherSurvivor], "testchannel"), committed)
+		}, network.EventuallyTimeout).Should(BeTrue())
+		Eventually(func() bool {
+			return proto.Equal(nwo.GetConfig(network, org1, orderers[lagging], "testchannel"), committed)
+		}, network.EventuallyTimeout).Should(BeTrue())
+
+		ordererProcesses[lagging].Signal(syscall.SIGTERM)
+		Eventually(ordererProcesses[lagging].Wait(), network.EventuallyTimeout).Should(Receive())
+		ordererProcesses[lagging] = nil
+		for _, name := range []string{"system", "etcdraft"} {
+			Expect(os.Rename(filepath.Join(ordererDir, name), filepath.Join(testDir, "prior-"+name))).To(Succeed())
+			Expect(copyDirectory(filepath.Join(testDir, "snapshot", name), filepath.Join(ordererDir, name))).To(Succeed())
+		}
+		runners[lagging] = network.OrdererRunner(orderers[lagging])
+		ordererProcesses[lagging] = ifrit.Invoke(runners[lagging])
+		var processErr error
+		var outcome string
+		Eventually(func() string {
+			select {
+			case processErr = <-ordererProcesses[lagging].Wait():
+				outcome = "exited"
+				return outcome
+			default:
+			}
+			block, err := nwo.Fetch(network, orderers[lagging], "testchannel", "config")
+			if err != nil {
+				return ""
+			}
+			Expect(block.GetData().GetData()).NotTo(BeEmpty())
+			envelope, err := protoutil.GetEnvelopeFromBlock(block.GetData().GetData()[0])
+			Expect(err).NotTo(HaveOccurred())
+			payload, err := protoutil.UnmarshalPayload(envelope.GetPayload())
+			Expect(err).NotTo(HaveOccurred())
+			configEnvelope := &commonproto.ConfigEnvelope{}
+			Expect(proto.Unmarshal(payload.GetData(), configEnvelope)).To(Succeed())
+			if proto.Equal(configEnvelope.GetConfig(), committed) {
+				outcome = "caught-up"
+				return outcome
+			}
+			return ""
+		}, network.EventuallyTimeout, time.Second).Should(Or(Equal("exited"), Equal("caught-up")))
+		if outcome == "caught-up" {
+			select {
+			case processErr = <-ordererProcesses[lagging].Wait():
+				outcome = "exited"
+			default:
+			}
+		}
+		if outcome == "exited" {
+			Expect(processErr).To(HaveOccurred())
+			Eventually(runners[lagging].Err(), network.EventuallyTimeout).Should(
+				gbytes.Say(`panic: tocommit\([0-9]+\) is out of range \[lastIndex\([0-9]+\)\]`),
+			)
+			ordererProcesses[lagging] = nil
+			fmt.Fprintln(GinkgoWriter, "Restored orderer exited with a Raft commit-index panic.")
+		} else {
+			replayError := fmt.Sprintf(
+				"attempt to set key [Value]  /Channel/Capabilities to version %d, but key is at version %d",
+				committedValue.Version, committedValue.Version,
+			)
+			nwo.UpdateWithStatus(network, orderers[lagging], "testchannel", authorized, http.StatusBadRequest, replayError)
+			fmt.Fprintln(GinkgoWriter, "Restored orderer caught up and rejected the stale update.")
+		}
+		Expect(proto.Equal(nwo.GetConfig(network, org1, orderers[leader], "testchannel"), committed)).To(BeTrue())
+		Expect(proto.Equal(nwo.GetConfig(network, org1, orderers[otherSurvivor], "testchannel"), committed)).To(BeTrue())
 	})
 })
