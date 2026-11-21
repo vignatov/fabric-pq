@@ -16,7 +16,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	commonproto "github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -255,6 +260,116 @@ func TestAuthenticatedPolicyPrototype(t *testing.T) {
 		classicalServer.Certificates = []tls.Certificate{ca.classicalLeaf(t, x509.ExtKeyUsageServerAuth)}
 		_, config, err = bootstrapPrototypePolicy(payload, signature, public, &checkpoint, "network-a", "peer-a", classicalServer)
 		require.ErrorContains(t, err, "server identity is not ML-DSA-65")
+		require.Nil(t, config)
+	})
+
+	t.Run("separately stored policy witness", func(t *testing.T) {
+		authorityDir := t.TempDir()
+		nodeDir := t.TempDir()
+		authorityPath := filepath.Join(authorityDir, "policy.json")
+		nodePolicyPath := filepath.Join(nodeDir, "policy.json")
+		nodeSignaturePath := filepath.Join(nodeDir, "policy.sig")
+		require.NoError(t, os.WriteFile(authorityPath, payload, 0o600))
+		require.NoError(t, os.WriteFile(nodePolicyPath, payload, 0o600))
+		require.NoError(t, os.WriteFile(nodeSignaturePath, signature, 0o600))
+
+		witnessCert := ca.leaf(t, x509.ExtKeyUsageServerAuth, false)
+		nodeCert := ca.leaf(t, x509.ExtKeyUsageClientAuth, false)
+		witnessTLS, nodeTLS := configs(ca, witnessCert, nodeCert, true)
+		serverStates := make(chan tls.ConnectionState, 1)
+		fileServer := http.FileServer(http.Dir(authorityDir))
+		witness := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			serverStates <- *r.TLS
+			fileServer.ServeHTTP(w, r)
+		}))
+		witness.TLS = witnessTLS
+		witness.StartTLS()
+		t.Cleanup(witness.Close)
+		transport := &http.Transport{TLSClientConfig: nodeTLS, DisableKeepAlives: true}
+		t.Cleanup(transport.CloseIdleConnections)
+		httpClient := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+		fetchCheckpoint := func() (prototypeCheckpoint, error) {
+			response, err := httpClient.Get(witness.URL + "/policy.json")
+			if err != nil {
+				return prototypeCheckpoint{}, err
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				return prototypeCheckpoint{}, fmt.Errorf("witness returned HTTP %d", response.StatusCode)
+			}
+			remotePayload, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+			if err != nil {
+				return prototypeCheckpoint{}, err
+			}
+			if len(remotePayload) > 1<<20 {
+				return prototypeCheckpoint{}, errors.New("witness policy exceeds size limit")
+			}
+			var remotePolicy prototypePolicy
+			if err := json.Unmarshal(remotePayload, &remotePolicy); err != nil {
+				return prototypeCheckpoint{}, fmt.Errorf("decode witness policy: %w", err)
+			}
+			assertStrictState(t, *response.TLS, true)
+			assertStrictState(t, <-serverStates, true)
+			return prototypeCheckpoint{version: remotePolicy.Version, digest: sha256.Sum256(remotePayload)}, nil
+		}
+		bootstrapFromDisk := func(cp *prototypeCheckpoint) (*tls.Config, error) {
+			localPayload, err := os.ReadFile(nodePolicyPath)
+			if err != nil {
+				return nil, err
+			}
+			localSignature, err := os.ReadFile(nodeSignaturePath)
+			if err != nil {
+				return nil, err
+			}
+			_, config, err := bootstrapPrototypePolicy(localPayload, localSignature, public, cp, "network-a", "peer-a", serverBase)
+			return config, err
+		}
+
+		fresh, err := fetchCheckpoint()
+		require.NoError(t, err)
+		config, err := bootstrapFromDisk(&fresh)
+		require.NoError(t, err)
+		require.NotNil(t, config)
+
+		untrustedTLS := nodeTLS.Clone()
+		untrustedTLS.RootCAs = newAuthority(t).pool
+		untrustedTransport := &http.Transport{TLSClientConfig: untrustedTLS, DisableKeepAlives: true}
+		defer untrustedTransport.CloseIdleConnections()
+		untrustedClient := &http.Client{Transport: untrustedTransport, Timeout: 5 * time.Second}
+		_, err = untrustedClient.Get(witness.URL + "/policy.json")
+		require.ErrorContains(t, err, "certificate signed by unknown authority")
+
+		missingClientTLS := nodeTLS.Clone()
+		missingClientTLS.Certificates = nil
+		missingClientTransport := &http.Transport{TLSClientConfig: missingClientTLS, DisableKeepAlives: true}
+		defer missingClientTransport.CloseIdleConnections()
+		missingClient := &http.Client{Transport: missingClientTransport, Timeout: 5 * time.Second}
+		_, err = missingClient.Get(witness.URL + "/policy.json")
+		require.ErrorContains(t, err, "certificate required")
+
+		stale := original
+		stale.Version--
+		stalePayload, staleSignature, _ := signPrototypePolicy(t, signer, stale)
+		require.NoError(t, os.WriteFile(nodePolicyPath, stalePayload, 0o600))
+		require.NoError(t, os.WriteFile(nodeSignaturePath, staleSignature, 0o600))
+		fresh, err = fetchCheckpoint()
+		require.NoError(t, err)
+		config, err = bootstrapFromDisk(&fresh)
+		require.ErrorContains(t, err, "version conflicts")
+		require.Nil(t, config)
+
+		require.NoError(t, os.WriteFile(authorityPath, stalePayload, 0o600))
+		restored, err := fetchCheckpoint()
+		require.NoError(t, err)
+		config, err = bootstrapFromDisk(&restored)
+		require.NoError(t, err)
+		require.NotNil(t, config)
+
+		witness.Close()
+		_, err = fetchCheckpoint()
+		require.Error(t, err)
+		config, err = bootstrapFromDisk(nil)
+		require.ErrorContains(t, err, "missing policy")
 		require.Nil(t, config)
 	})
 }

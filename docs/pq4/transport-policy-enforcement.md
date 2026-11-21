@@ -122,6 +122,17 @@ config-hash pinning also requires a separate authenticated policy/checkpoint
 update whenever a channel configuration changes. Neither an in-memory
 checkpoint nor a sample channel proves the corresponding production properties.
 
+The prototype also retrieves a policy from a separate test directory over a
+local HTTPS server and uses its version and digest as the assumed checkpoint.
+With a current witness, restoring an older signed node policy is rejected;
+with the witness restored too, that older policy is accepted. The test verifies
+TLS 1.3, the hybrid group, ML-DSA mutual credentials, rejection of an untrusted
+server and a missing client certificate. After the server is stopped, the
+test explicitly supplies no checkpoint and bootstrap fails. The directories
+and server share the test process and host: this does not demonstrate
+independent protection, durable monotonic storage, trusted authority updates,
+automatic fail-closed behavior, or any production bootstrap integration.
+
 A [live baseline experiment](validation-and-evidence.md#live-baseline-configuration-and-rollback-experiment)
 also distinguishes stale updates from storage rollback: Fabric rejected an
 unauthorized config update and a stale signed replay, but permitted an

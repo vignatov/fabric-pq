@@ -31,6 +31,8 @@ GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestFabricCCAASS
 PASS
 GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestFabricCCAASPlaintextMetadata github.com/hyperledger/fabric/integration/pq4/feasibility
 PASS
+GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestAuthenticatedPolicyPrototype github.com/hyperledger/fabric/integration/pq4/feasibility
+PASS
 ```
 
 The tests were run on a PQ4 feasibility worktree based on the commit above.
@@ -158,6 +160,7 @@ PQ4 transport policy.
 | Fabric CCAAS client components | PASS. The actual external-builder connection-info constructor and `extcc.ExternalChaincodeRuntime` received the expected chaincode registration and ID from the TLS-enabled shim using fresh ML-DSA client and server credentials. The normal client verifier reported a verified ML-DSA server chain. The test supplies connection metadata and client key in memory only; it does not package or distribute the key, observe this connection's negotiated group, or run a Fabric peer. |
 | Fabric CCAAS plaintext metadata | A real external-builder `Instance` read test release-directory metadata and the real external-chaincode runtime registered with a test gRPC service over plaintext. The service observed no client authentication both with `client_auth_required` false and with it true while `tls_required` was false. No Fabric peer, installed package, metadata tampering or server-side shim was exercised. |
 | Signed-policy prototype | PASS for an isolated signed bootstrap policy with an assumed trusted checkpoint and a sample channel-config hash; Fabric's `channelconfig.NewBundle` parses the sample, but no channel-update authentication is exercised. It rejects missing, modified, untrusted, stale, equivocated, conflicting and weakened inputs, then enforces a strict server handshake. Restoring both an older policy and its checkpoint is accepted, demonstrating the checkpoint's necessary trust assumption. This does not exercise Fabric policy integration or real rollback-resistant storage. |
+| HTTPS policy witness prototype | PASS for a test-only local HTTPS file server with a separately stored current policy, TLS 1.3, X25519MLKEM768 and ML-DSA mutual credentials. A restored older node policy was rejected while the witness remained current, but was accepted when the witness was restored too. An untrusted server, missing client certificate and unavailable witness fail; the test explicitly supplies a missing checkpoint after the fetch fails, and bootstrap rejects it. The witness and node state share a host and process, and no authority update, independent storage protection, automatic fail-closed behavior or Fabric listener is exercised. |
 
 The Go toolchain's `crypto/tls` selects only the ML-DSA-65 signature scheme
 for an ML-DSA-65 key in TLS 1.3. The controlled whitelist test validates
