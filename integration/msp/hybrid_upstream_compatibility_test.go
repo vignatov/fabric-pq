@@ -208,7 +208,20 @@ func verifyUnsupportedBinary(label, binary, shaEnv, revisionEnv string) {
 func expectUnsupportedOrdererToRejectCapability(binary, requiredCapability string) {
 	testDir, err := os.MkdirTemp("", "unsupported-orderer-channel-capability")
 	Expect(err).NotTo(HaveOccurred())
-	network := nwo.New(nwo.BasicEtcdRaft(), testDir, nil, StartPort(), components)
+	var network *nwo.Network
+	var ordererProcess ifrit.Process
+	defer func() {
+		if ordererProcess != nil {
+			ordererProcess.Signal(syscall.SIGTERM)
+			Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive())
+		}
+		if network != nil {
+			network.Cleanup()
+		}
+		Expect(os.RemoveAll(testDir)).To(Succeed())
+	}()
+
+	network = nwo.New(nwo.BasicEtcdRaft(), testDir, nil, StartPort(), components)
 	network.Profiles[0].ChannelCapabilities = []string{
 		"V3_0",
 		requiredCapability,
@@ -216,16 +229,6 @@ func expectUnsupportedOrdererToRejectCapability(binary, requiredCapability strin
 	network.GenerateConfigTree()
 	network.Bootstrap()
 	orderer := network.Orderers[0]
-
-	var ordererProcess ifrit.Process
-	defer func() {
-		if ordererProcess != nil {
-			ordererProcess.Signal(syscall.SIGTERM)
-			Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive())
-		}
-		network.Cleanup()
-		Expect(os.RemoveAll(testDir)).To(Succeed())
-	}()
 
 	ordererCommand := exec.Command(binary, "start")
 	ordererCommand.Env = append(os.Environ(),
@@ -263,7 +266,7 @@ func expectUnsupportedOrdererToRejectCapability(binary, requiredCapability strin
 	body, err := io.ReadAll(response.Body)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(response.StatusCode).NotTo(Equal(http.StatusCreated))
-	Expect(string(body)).To(ContainSubstring(requiredCapability))
+	Expect(string(body)).To(ContainSubstring(fmt.Sprintf("Channel capability %s is required but not supported", requiredCapability)))
 	Eventually(ordererRunner.Err(), network.EventuallyTimeout).Should(gbytes.Say(requiredCapability))
 }
 
@@ -306,7 +309,7 @@ func expectUnsupportedPeerToRejectCapability(
 	Eventually(session, network.EventuallyTimeout).Should(gexec.Exit())
 	Expect(session.ExitCode()).NotTo(Equal(0))
 	output := strings.TrimSpace(string(session.Out.Contents()) + string(session.Err.Contents()))
-	Expect(output).To(ContainSubstring(requiredCapability))
+	Expect(output).To(ContainSubstring(fmt.Sprintf("Channel capability %s is required but not supported", requiredCapability)))
 	(*peerProcess).Signal(syscall.SIGTERM)
 	Eventually((*peerProcess).Wait(), network.EventuallyTimeout).Should(Receive())
 	*peerProcess = nil

@@ -54,9 +54,12 @@ accepts a classical-only X25519 client. This is not a network-wide test.
 | --- | --- |
 | Native Go TLS/X.509 and gRPC | Standalone feasibility passes in the recorded non-FIPS environment. |
 | Fabric `comm` constructors | ML-DSA mutual TLS component test passes, but strict group enforcement is absent. |
+| MSP TLS CA and Raft metadata validation | Component tests accept ML-DSA-65 TLS material and reject selected invalid inputs; no running consensus network is demonstrated. |
+| `fabhttp` and `osnadmin` | ML-DSA mutual TLS component test passes; the unmodified admin listener also accepts classical-only key exchange. |
+| CCAAS chaincode shim | With TLS explicitly enabled in a test fixture, the real shim accepts ML-DSA mutual TLS registration over both hybrid and classical-only key exchange. The PQ3 CCAAS deployment remains plaintext. |
 | Existing PQ3.5 network | Merged-commit baseline acceptance passed with ECDSA TLS authentication; actual key-exchange groups were not recorded. |
 | Peer, orderer, Raft, admin, CCAAS and Gateway with PQ4 policy | Not tested; no PQ4 mode exists. |
-| Existing or upstream binaries against a PQ4-required channel | Not tested; no PQ4 channel requirement exists. PQ3.5 enrollment-capability rejection is not evidence of PQ4 transport enforcement. |
+| Existing or upstream binaries against a PQ4-required channel | Not tested; no PQ4 channel requirement exists. Both baseline and pinned-upstream binaries reject a deliberately unknown test capability, which does not prove PQ4 transport enforcement. |
 
 Use FIPS 203, FIPS 204, RFC 8446,
 [RFC 10024](https://www.rfc-editor.org/rfc/rfc10024.html) and

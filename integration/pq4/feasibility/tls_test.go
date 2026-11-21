@@ -6,6 +6,7 @@ package feasibility
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/mldsa"
@@ -36,6 +37,22 @@ type authority struct {
 	cert *x509.Certificate
 	key  *mldsa.PrivateKey
 	pool *x509.CertPool
+}
+
+type corruptHandshakeSigner struct {
+	crypto.Signer
+}
+
+func (s corruptHandshakeSigner) Sign(random io.Reader, message []byte, opts crypto.SignerOpts) ([]byte, error) {
+	signature, err := s.Signer.Sign(random, message, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(signature) == 0 {
+		return nil, errors.New("empty signature")
+	}
+	signature[0] ^= 1
+	return signature, nil
 }
 
 func assertMLDSA65Identifiers(t *testing.T, cert *x509.Certificate) {
@@ -342,6 +359,38 @@ func TestNativeTLSRejections(t *testing.T) {
 		)
 		require.ErrorContains(t, err, "private key does not match public key")
 	})
+}
+
+func TestNativeRejectsInvalidCertificateVerify(t *testing.T) {
+	ca := newAuthority(t)
+	server := ca.leaf(t, x509.ExtKeyUsageServerAuth, false)
+	client := ca.leaf(t, x509.ExtKeyUsageClientAuth, false)
+
+	for _, test := range []struct {
+		name        string
+		corruptPeer string
+		wantCause   string
+	}{
+		{"server signature", "server", "invalid signature by the server certificate"},
+		{"client signature", "client", "invalid signature by the client certificate"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			serverConfig, clientConfig := configs(ca, server, client, true)
+			var cert *tls.Certificate
+			if test.corruptPeer == "server" {
+				cert = &serverConfig.Certificates[0]
+			} else {
+				cert = &clientConfig.Certificates[0]
+			}
+			signer, ok := cert.PrivateKey.(crypto.Signer)
+			require.True(t, ok)
+			cert.PrivateKey = corruptHandshakeSigner{Signer: signer}
+			serverResult, clientResult := exchange(t, serverConfig, clientConfig)
+			require.Error(t, serverResult.err)
+			require.Error(t, clientResult.err)
+			require.Contains(t, fmt.Sprintf("%v %v", serverResult.err, clientResult.err), test.wantCause)
+		})
+	}
 }
 
 func TestNativeAdditionalPeerAlgorithmCheck(t *testing.T) {

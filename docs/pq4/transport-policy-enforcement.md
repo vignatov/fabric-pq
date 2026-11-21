@@ -40,14 +40,31 @@ must be implemented and tested; a capability by itself does not control TLS.
   define the behavior of upstream and older Pactway binaries using real
   peer and orderer binaries.
 
+An authentic signature alone does not establish policy freshness: an older,
+validly signed policy remains valid. If an attacker can restore every piece
+of node state to an earlier snapshot, the restarted node cannot distinguish
+that snapshot from its original execution without a trusted freshness source
+outside the restored state. The review must identify such a source or
+explicitly exclude that attacker. Likewise, software enforcement cannot
+protect a node whose attacker can replace its binary or control its process;
+these boundaries must not be hidden behind a signed-policy claim.
+
 ## Feasibility evidence and gaps
 
-The [standalone and comm tests](validation-and-evidence.md) demonstrate
-native hybrid/ML-DSA handshakes and cause-specific TLS rejections in
-controlled configurations. They also show that the current Fabric comm
-server accepts classical-only key exchange. The test-only additional
-certificate check does not authenticate a network policy or enforce it in
-Fabric.
+The [component tests](validation-and-evidence.md) demonstrate native
+hybrid/ML-DSA handshakes and cause-specific TLS rejections in controlled
+configurations, plus ML-DSA compatibility with Fabric comm, MSP TLS roots,
+Raft certificate metadata, administration HTTP components and the
+TLS-enabled CCAAS shim. They also show that the current Fabric comm, admin
+and shim servers accept classical-only key exchange. The test-only
+additional certificate check does not authenticate a network policy or
+enforce it in Fabric.
+
+Baseline and pinned-upstream peer and orderer processes also rejected a
+genesis containing a deliberately unknown test capability with an explicit
+unsupported-capability diagnostic. That is evidence about unknown-capability
+handling only: no PQ4 capability exists, and the test does not establish
+pre-handshake protection or prevent classical connections.
 
 The following mandatory proofs are **not yet available**:
 
@@ -62,9 +79,10 @@ The following mandatory proofs are **not yet available**:
    required communication paths have independently reviewable handshake and
    authentication evidence.
 
-No positive or negative policy-integration test, unsupported-binary test, or
-network-wide PQ4 transaction has been run. A design assertion or the
-standalone TLS success does not satisfy those tests. The additional Go
+No positive or negative PQ4 policy-integration test, PQ4-required
+unsupported-binary test, or network-wide PQ4 transaction has been run. A
+design assertion or the standalone TLS success does not satisfy those tests.
+The additional Go
 `VerifyConnection` feasibility experiment rejects classical leaf keys only
 after normal chain validation; it does not address authenticated policy,
 root/chain profile requirements or the selection of an implementation.
