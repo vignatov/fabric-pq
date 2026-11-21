@@ -7,6 +7,7 @@ package feasibility
 import (
 	"bytes"
 	"context"
+	"crypto/mldsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -21,9 +22,13 @@ import (
 
 	"github.com/hyperledger/fabric-chaincode-go/v2/shim"
 	peerproto "github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	"github.com/hyperledger/fabric/core/chaincode/extcc"
+	"github.com/hyperledger/fabric/core/container/ccintf"
+	"github.com/hyperledger/fabric/core/container/externalbuilder"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/proto"
 )
 
 type feasibilityChaincode struct{}
@@ -41,6 +46,26 @@ type chaincodeServerInput struct {
 	Key     []byte
 	Cert    []byte
 	CA      []byte
+}
+
+type registrationHandler struct{ chaincodeID string }
+
+func (handler registrationHandler) HandleChaincodeStream(stream ccintf.ChaincodeStream) error {
+	message, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if message.Type != peerproto.ChaincodeMessage_REGISTER {
+		return errors.New("expected chaincode registration")
+	}
+	id := &peerproto.ChaincodeID{}
+	if err := proto.Unmarshal(message.Payload, id); err != nil {
+		return err
+	}
+	if id.Name != handler.chaincodeID {
+		return errors.New("unexpected registered chaincode ID")
+	}
+	return nil
 }
 
 func TestFabricCCAASShimMLDSACompatibility(t *testing.T) {
@@ -113,6 +138,57 @@ func TestFabricCCAASShimMLDSACompatibility(t *testing.T) {
 			require.False(t, state.DidResume)
 		})
 	}
+
+	t.Run("Fabric external chaincode client", func(t *testing.T) {
+		clientPEM, clientKey := pemPair(t, clientCert)
+		userData := &externalbuilder.ChaincodeServerUserData{
+			Address:            address,
+			Domain:             "pq4.example",
+			TLSRequired:        true,
+			ClientAuthRequired: true,
+			ClientKey:          string(clientKey),
+			ClientCert:         string(clientPEM),
+			RootCert:           string(caPEM),
+		}
+		info, err := userData.ChaincodeServerInfo("")
+		require.NoError(t, err)
+		require.NotNil(t, info)
+		info.ClientConfig.DialTimeout = 5 * time.Second
+		verified := make(chan *x509.Certificate, 1)
+		info.ClientConfig.SecOpts.VerifyCertificate = func(_ [][]byte, chains [][]*x509.Certificate) error {
+			if len(chains) == 0 || len(chains[0]) == 0 {
+				return errors.New("missing verified CCAAS server chain")
+			}
+			select {
+			case verified <- chains[0][0]:
+				return nil
+			default:
+				return errors.New("unexpected repeated CCAAS TLS handshake")
+			}
+		}
+		result := make(chan error, 1)
+		go func() {
+			result <- (&extcc.ExternalChaincodeRuntime{}).Stream(
+				"pq4-feasibility", info, registrationHandler{chaincodeID: "pq4-feasibility"},
+			)
+		}()
+		select {
+		case err := <-result:
+			require.NoError(t, err)
+		case <-time.After(15 * time.Second):
+			t.Fatal("external chaincode registration timed out")
+		}
+		var serverIdentity *x509.Certificate
+		select {
+		case serverIdentity = <-verified:
+		default:
+			t.Fatal("external client did not report a verified server chain")
+		}
+		key, ok := serverIdentity.PublicKey.(*mldsa.PublicKey)
+		require.True(t, ok)
+		require.Equal(t, mldsa.MLDSA65(), key.Parameters())
+		require.Equal(t, x509.MLDSA65, serverIdentity.SignatureAlgorithm)
+	})
 }
 
 func runChaincodeServerHelper(t *testing.T) {

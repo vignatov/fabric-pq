@@ -68,11 +68,11 @@ these boundaries must not be hidden behind a signed-policy claim.
 The [component tests](validation-and-evidence.md) demonstrate native
 hybrid/ML-DSA handshakes and cause-specific TLS rejections in controlled
 configurations, plus ML-DSA compatibility with Fabric comm, MSP TLS roots,
-Raft certificate metadata, administration HTTP components and the
-TLS-enabled CCAAS shim. They also show that the current Fabric comm, admin
-and shim servers accept classical-only key exchange. The test-only
-additional certificate check does not authenticate a network policy or
-enforce it in Fabric.
+Raft certificate metadata, administration HTTP components, and the Fabric
+CCAAS client components with a TLS-enabled shim. They also show that the
+current Fabric comm, admin and shim servers accept classical-only key
+exchange. The test-only additional certificate check does not authenticate
+a network policy or enforce it in Fabric.
 
 Baseline and pinned-upstream peer and orderer processes also rejected a
 genesis containing a deliberately unknown test capability with an explicit
