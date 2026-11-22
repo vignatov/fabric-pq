@@ -16,6 +16,15 @@ separately documented production requirement for a stronger threat model.
 The independent witness remains research evidence and is not a mandatory
 runtime dependency for the isolated demonstration.
 
+For the focused PQ4.0B component, the policy verifier receives its signing
+key, node/network identity and checkpoint from its caller. The component
+does not yet provision or protect those values on disk, recover checkpoint
+updates, or prevent a node from starting without selecting the policy.
+Those are unproved integration requirements, not properties of the verifier.
+General listeners may retain server-only TLS; CCAAS and administration
+require mTLS. No TLS client-authentication claim applies to a server-only
+connection.
+
 ## Assets and scope
 
 Protect confidentiality and integrity of session traffic and authenticate

@@ -62,6 +62,33 @@ jobs:
         name: Run PQ4.0 Feasibility Tests
       - run: go vet -mod=vendor ./integration/pq4/feasibility
         name: Vet PQ4.0 Feasibility Tests
+  pq40b-component:
+    name: PQ4.0B Component Checks (gate incomplete)
+    runs-on: ${{ github.repository == 'hyperledger/fabric' && 'fabric-ubuntu-24.04' || 'ubuntu-24.04' }}
+    env:
+      GOFIPS140: "off"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        name: Checkout Fabric Code
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        name: Install Go
+        with:
+          go-version-file: go.mod
+      - run: |
+          git rev-parse HEAD
+          go version
+          printf 'GOFIPS140=%s\n' "$GOFIPS140"
+        name: Record Test Provenance
+      - run: go test -mod=vendor -race -count=1 ./internal/pkg/pqtransport ./internal/pkg/comm
+        name: Test Policy and Comm Components
+      - run: go test -mod=vendor -race -count=1 -run 'TestAuthenticatedPolicyFabricComm|TestStrictCommListenerRestart|TestStrictCommClientVerifiesServer|TestStrictCommRejectsInvalidServerConfiguration' ./integration/pq4/feasibility
+        name: Test Strict Comm Listener
+      - run: go test -mod=vendor -count=1 -run '^TestGoodWriteConfig$' ./orderer/common/multichannel
+        name: Test Orderer Config Activation Ordering
+      - run: go vet -mod=vendor ./internal/pkg/pqtransport ./internal/pkg/comm ./integration/pq4/feasibility
+        name: Vet Focused Components
   unit-tests:
     name: Unit Tests
     needs: basic-checks

@@ -40,7 +40,9 @@ func NewServerTransportCredentials(
 	// NOTE: unlike the default grpc/credentials implementation, we do not
 	// clone the tls.Config which allows us to update it dynamically
 	serverConfig.config.NextProtos = alpnProtoStr
-	serverConfig.config.MinVersion = tls.VersionTLS12
+	if !serverConfig.strict {
+		serverConfig.config.MinVersion = tls.VersionTLS12
+	}
 
 	if logger == nil {
 		logger = tlsClientLogger
@@ -61,6 +63,7 @@ type serverCreds struct {
 type TLSConfig struct {
 	config *tls.Config
 	lock   sync.RWMutex
+	strict bool
 }
 
 func NewTLSConfig(config *tls.Config) *TLSConfig {
@@ -116,9 +119,13 @@ func (sc *serverCreds) ServerHandshake(rawConn net.Conn) (net.Conn, credentials.
 
 // Info provides the ProtocolInfo of this TransportCredentials.
 func (sc *serverCreds) Info() credentials.ProtocolInfo {
+	version := "1.2"
+	if sc.serverConfig.strict {
+		version = "1.3"
+	}
 	return credentials.ProtocolInfo{
 		SecurityProtocol: "tls",
-		SecurityVersion:  "1.2",
+		SecurityVersion:  version,
 	}
 }
 
@@ -126,6 +133,7 @@ func (sc *serverCreds) Info() credentials.ProtocolInfo {
 func (sc *serverCreds) Clone() credentials.TransportCredentials {
 	config := sc.serverConfig.Config()
 	serverConfig := NewTLSConfig(&config)
+	serverConfig.strict = sc.serverConfig.strict
 	return NewServerTransportCredentials(serverConfig, sc.logger)
 }
 

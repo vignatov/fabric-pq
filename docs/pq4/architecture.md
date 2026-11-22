@@ -17,7 +17,30 @@ The proposed development-only `pactway-pq-tls-v1` would separately require
 TLS 1.3, X25519MLKEM768 key establishment and ML-DSA-65 endpoint
 authentication. Hybrid KEM and endpoint authentication are distinct
 properties; ML-DSA-only authentication is not dual classical/PQ
-authentication. This profile does not yet exist.
+authentication. A focused `comm` component prototype now exercises this
+profile; it is not integrated into peer or orderer startup.
+
+## PQ4.0B selected transport contract
+
+The selected channel-level capability is `PactwayPQTransportV1`, distinct
+from the enrollment capability. It requires the `pactway-pq-tls-v1` transport
+floor and may only be selected in a fresh channel genesis. A protected channel
+must not remove the capability; non-weakening configuration updates remain
+possible through separately authorized local checkpoint advancement. The
+capability does not authenticate a connection before its channel is known.
+
+In strict mode every protected server authenticates using ML-DSA-65. TLS 1.3
+and X25519MLKEM768 are required on all protected connections. Existing
+listener-specific client-certificate requirements are retained: general
+peer and orderer listeners may use server-authenticated TLS, while CCAAS and
+orderer administration require mutual TLS with ML-DSA-65 client identities.
+Where a client certificate is authenticated, classical-only client identity
+is rejected. Normal X.509 path, hostname, validity and usage checks remain
+mandatory. Baseline mode and Fabric MSP authentication are unchanged.
+
+These are selected semantics, not an implementation or evidence that the gate
+has passed. The focused proof must still establish the lifecycle and transport
+properties in [transport-policy enforcement](transport-policy-enforcement.md).
 
 The scope includes both clients/peers, peer-to-orderer broadcast and block
 delivery, gossip, multi-orderer Raft, the orderer admin API, participating

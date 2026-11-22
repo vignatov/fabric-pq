@@ -9,6 +9,11 @@ checks. The earlier local results in
 [PQ3.5 validation](../pq2/development-and-validation.md#pq35-dual-profile-acceptance-results)
 are associated with a dirty pre-merge tree, not the merged commit.
 
+The later [PQ4.0B gate report](pq4.0b-gate-report.md) records a strict
+`comm` component test and its remaining integration and lifecycle gaps. It
+does not replace the baseline evidence below or establish a network-wide
+transport policy.
+
 ## Local test environment and exact command
 
 The feasibility tests ran with Go 1.27.4, `linux/amd64`, WSL Ubuntu 24.04,
