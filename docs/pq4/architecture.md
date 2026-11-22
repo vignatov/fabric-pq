@@ -17,7 +17,38 @@ The proposed development-only `pactway-pq-tls-v1` would separately require
 TLS 1.3, X25519MLKEM768 key establishment and ML-DSA-65 endpoint
 authentication. Hybrid KEM and endpoint authentication are distinct
 properties; ML-DSA-only authentication is not dual classical/PQ
-authentication. This profile does not yet exist.
+authentication. A focused `comm` component prototype now exercises this
+profile by requiring an ML-DSA-65 endpoint leaf key while retaining ordinary
+X.509 path and hostname verification. CA and intermediate signature
+algorithms are not constrained by this profile proof and may be classical;
+quantum-resistant PKI issuance and trust paths are not claimed. The prototype
+is not integrated into peer or orderer startup.
+
+## PQ4.0B selected transport contract
+
+The selected channel-level capability is `PactwayPQTransportV1`, distinct
+from the enrollment capability. It requires the `pactway-pq-tls-v1` transport
+floor and may only be selected in a fresh channel genesis. A protected channel
+must not remove the capability; non-weakening configuration updates remain
+possible through separately authorized local checkpoint advancement. The
+capability does not authenticate a connection before its channel is known.
+
+In strict mode every protected server authenticates using ML-DSA-65. TLS 1.3
+and X25519MLKEM768 are required on all protected connections. Existing
+listener-specific client-certificate requirements are retained: general
+peer and orderer listeners may use server-authenticated TLS, while CCAAS and
+orderer administration require mutual TLS with ML-DSA-65 client endpoint
+identities. Where a client certificate is authenticated, a classical-only
+endpoint leaf is rejected. Normal X.509 path, hostname, validity and usage
+checks remain mandatory, but CA and intermediate signature algorithms are
+not restricted. Baseline mode and Fabric MSP authentication are unchanged.
+
+These are selected semantics, not an implementation or evidence that the gate
+has passed. The focused proof must still establish the lifecycle and transport
+properties in [transport-policy enforcement](transport-policy-enforcement.md).
+The observed update/append ordering and candidate recovery protocol are
+recorded for review in the [configuration activation ADR](adr-config-activation.md);
+no lifecycle design is approved yet.
 
 The scope includes both clients/peers, peer-to-orderer broadcast and block
 delivery, gossip, multi-orderer Raft, the orderer admin API, participating
@@ -54,7 +85,7 @@ accepts a classical-only X25519 client. This is not a network-wide test.
 | Component or software | Current evidence |
 | --- | --- |
 | Native Go TLS/X.509 and gRPC | Standalone feasibility passes in the recorded non-FIPS environment. |
-| Fabric `comm` constructors | ML-DSA mutual TLS component test passes, but strict group enforcement is absent. Server-credential construction and cloning can each reset an explicit TLS 1.3 minimum and allow a TLS 1.2 handshake. |
+| Fabric `comm` constructors | Opt-in strict component tests enforce TLS 1.3, X25519MLKEM768 and ML-DSA endpoint leaf keys; original, cloned and direct-factory server credentials preserve the TLS 1.3 minimum. The unselected baseline remains classical-compatible. Node startup does not select or load the policy. |
 | MSP TLS CA and Raft metadata validation | Component tests accept ML-DSA-65 TLS material and reject selected invalid inputs; no ML-DSA consensus network is demonstrated. |
 | `fabhttp` and `osnadmin` | ML-DSA mutual TLS component test passes; the unmodified admin listener also accepts classical-only key exchange. |
 | CCAAS client and chaincode shim | With TLS enabled in a test fixture, real external-builder, peer runtime and shim components register using ML-DSA mutual TLS credentials. Independently, the shim accepts both hybrid and classical-only key exchange. The real metadata reader and runtime also accept plaintext even when metadata requests client authentication if TLS is disabled. The PQ3 CCAAS deployment remains plaintext. |

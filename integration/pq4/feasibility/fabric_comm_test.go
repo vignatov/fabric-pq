@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/peer"
 )
@@ -32,7 +31,7 @@ func pemPair(t *testing.T, cert tls.Certificate) ([]byte, []byte) {
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 }
 
-func TestFabricCommServerCredentialsResetTLSMinimum(t *testing.T) {
+func TestFabricCommServerCredentialsPreserveTLSMinimum(t *testing.T) {
 	ca := newAuthority(t)
 	serverCert := ca.classicalLeaf(t, x509.ExtKeyUsageServerAuth)
 	serverConfig, clientConfig := configs(ca, serverCert, tls.Certificate{}, false)
@@ -51,31 +50,30 @@ func TestFabricCommServerCredentialsResetTLSMinimum(t *testing.T) {
 		t.Helper()
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
-		server := grpc.NewServer(grpc.Creds(creds))
-		healthServer := health.NewServer()
-		healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
-		healthpb.RegisterHealthServer(server, healthServer)
-		serveErrors := make(chan error, 1)
-		go func() { serveErrors <- server.Serve(listener) }()
-		defer func() {
-			server.Stop()
-			require.NoError(t, <-serveErrors)
+		defer listener.Close()
+		serverErrors := make(chan error, 1)
+		go func() {
+			rawConn, err := listener.Accept()
+			if err != nil {
+				serverErrors <- err
+				return
+			}
+			conn, _, err := creds.ServerHandshake(rawConn)
+			if conn != nil {
+				_ = conn.Close()
+			} else {
+				_ = rawConn.Close()
+			}
+			serverErrors <- err
 		}()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		conn, err := grpc.DialContext(ctx, listener.Addr().String(), grpc.WithBlock(),
-			grpc.WithTransportCredentials(credentials.NewTLS(clientConfig)))
-		require.NoError(t, err)
-		defer conn.Close()
-		var remote peer.Peer
-		response, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}, grpc.Peer(&remote))
-		require.NoError(t, err)
-		require.Equal(t, healthpb.HealthCheckResponse_SERVING, response.GetStatus())
-		auth, ok := remote.AuthInfo.(credentials.TLSInfo)
-		require.True(t, ok)
-		require.Equal(t, uint16(tls.VersionTLS12), auth.State.Version)
-		require.NotEmpty(t, auth.State.VerifiedChains)
+		conn, clientErr := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", listener.Addr().String(), clientConfig)
+		if conn != nil {
+			_ = conn.Close()
+		}
+		serverErr := <-serverErrors
+		require.Error(t, clientErr)
+		require.ErrorContains(t, serverErr, "unsupported versions")
+		require.Equal(t, "1.3", creds.Info().SecurityVersion)
 	}
 	t.Run("original credentials", func(t *testing.T) { checkTLS12(t, creds) })
 

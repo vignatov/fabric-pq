@@ -2,7 +2,7 @@
 
 Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. The development trust
 boundary and shared-listener rule are selected, but the layered design and
-its evidence still require architecture review. No PQ4 endpoints exist.
+its evidence still require architecture review. No PQ4 node endpoints exist.
 
 The revised PQ4.0 baseline uses trusted operator-protected local state. It
 requires the strict profile for every connection on a shared listener that
@@ -10,6 +10,57 @@ serves at least one PQ4-required channel. The independent witness is research
 evidence, not a mandatory runtime dependency. Complete host-state rollback
 remains outside the development threat model and must not be claimed as
 detected.
+
+## PQ4.0B selected local authorization
+
+`PactwayPQTransportV1` is the selected channel-level transport capability,
+separate from the existing hybrid enrollment capability. It specifies
+`pactway-pq-tls-v1`, is permitted only at fresh genesis, and cannot be removed
+from a protected channel. Its presence does not replace the authenticated
+local bootstrap policy or protect pre-channel handshakes.
+The profile's endpoint-authentication check requires an ML-DSA-65 leaf key;
+the X.509 path and hostname are still verified normally. It does not require
+ML-DSA CA/intermediate keys or certificate signatures, so a trust path may
+include classical cryptography and is not claimed to be quantum resistant.
+
+The operator provisions a dedicated policy-signing trust anchor, separate from
+TLS and enrollment keys, and protected local policy and checkpoint state. The
+signed policy binds network and node identity, the mandatory transport floor
+and a monotonically increasing checkpoint version and digest. A new channel
+configuration requires both normal Fabric authorization and a separate signed
+local transition identifying the network, node, channel, previous checkpoint
+version and digest, new configuration sequence and digest, new checkpoint
+version, and mandatory transport floor.
+
+The intended procedure durably prepares that authorization before activation,
+validates the Fabric-authorized configuration against it, then atomically
+commits the local policy and checkpoint after successful validation. Restart
+must reconcile prepared and committed state without accepting an unauthorized
+configuration, and any mismatch must fail closed for the channel. Merely
+observing a new configuration never authorizes or advances a checkpoint.
+Replayed, skipped, conflicting, unauthorized and weakened transitions must
+fail. No external freshness service is required under this development model.
+
+Fabric lifecycle ordering remains a proof obligation: peer configuration
+application occurs during block validation, and the orderer updates its bundle
+before its config block is durably written. Both paths can expose a new bundle
+before the corresponding post-commit hook. A safe activation and recovery
+barrier must be demonstrated without ledger divergence or silently serving an
+unauthorized channel. If that requires a fundamental expansion of the focused
+prototype, stop for architecture review rather than declaring the gate passed.
+The [configuration activation ADR](adr-config-activation.md) identifies
+candidate interception and recovery points for review; it is not an approved
+implementation design.
+
+The focused `comm` component now authenticates a caller-supplied policy and
+checkpoint, and preserves the strict TLS minimum across credential creation,
+cloning and direct factory use. A
+separate operator-transition verifier checks signed candidate values but does
+not perform Fabric authorization, persist a preparation or commit a
+checkpoint. Neither component is wired into node startup or channel
+processing. They cannot by themselves prevent a node from starting in
+baseline mode or resolve the lifecycle ordering above. See the
+[PQ4.0B gate report](pq4.0b-gate-report.md) for the evidence and review stop.
 
 ## Candidates
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-lib-go/common/metrics"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -189,6 +190,8 @@ func (cc ClientConfig) Clone() ClientConfig {
 // SecureOptions defines the TLS security parameters for a GRPCServer or
 // GRPCClient instance.
 type SecureOptions struct {
+	// TransportPolicy selects authenticated strict PQ transport when non-nil.
+	TransportPolicy *pqtransport.Policy
 	// VerifyCertificate, if not nil, is called after normal
 	// certificate verification by either a TLS client or server.
 	// If it returns a non-nil error, the handshake is aborted and that error results.
@@ -220,6 +223,9 @@ type SecureOptions struct {
 func (so SecureOptions) TLSConfig() (*tls.Config, error) {
 	// if TLS is not enabled, return
 	if !so.UseTLS {
+		if so.TransportPolicy != nil {
+			return nil, errors.New("authenticated PQ transport policy requires TLS")
+		}
 		return nil, nil
 	}
 
@@ -251,6 +257,9 @@ func (so SecureOptions) TLSConfig() (*tls.Config, error) {
 		}
 	}
 
+	if so.TransportPolicy != nil {
+		return pqtransport.ClientTLSConfig(tlsConfig, so.TransportPolicy)
+	}
 	return tlsConfig, nil
 }
 

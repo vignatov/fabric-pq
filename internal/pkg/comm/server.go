@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -50,7 +51,14 @@ func NewGRPCServer(address string, serverConfig ServerConfig) (*GRPCServer, erro
 	if err != nil {
 		return nil, err
 	}
-	return NewGRPCServerFromListener(lis, serverConfig)
+	server, err := NewGRPCServerFromListener(lis, serverConfig)
+	if err != nil {
+		if closeErr := lis.Close(); closeErr != nil {
+			return nil, errors.Wrapf(err, "failed to close listener: %v", closeErr)
+		}
+		return nil, err
+	}
+	return server, nil
 }
 
 // NewGRPCServerFromListener creates a new implementation of a GRPCServer given
@@ -66,6 +74,14 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 	var serverOpts []grpc.ServerOption
 
 	secureConfig := serverConfig.SecOpts
+	if secureConfig.TransportPolicy != nil {
+		if err := secureConfig.TransportPolicy.Check(); err != nil {
+			return nil, err
+		}
+		if !secureConfig.UseTLS {
+			return nil, errors.New("authenticated PQ transport policy requires TLS")
+		}
+	}
 	if secureConfig.UseTLS {
 		// both key and cert are required
 		if secureConfig.Key != nil && secureConfig.Certificate != nil {
@@ -73,6 +89,11 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 			cert, err := tls.X509KeyPair(secureConfig.Certificate, secureConfig.Key)
 			if err != nil {
 				return nil, err
+			}
+			if secureConfig.TransportPolicy != nil {
+				if err := pqtransport.CheckCertificate(&cert); err != nil {
+					return nil, errors.WithMessage(err, "invalid strict server certificate")
+				}
 			}
 
 			grpcServer.serverCertificate.Store(cert)
@@ -114,6 +135,14 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 						}
 					}
 				}
+			}
+
+			if secureConfig.TransportPolicy != nil {
+				strict, err := pqtransport.ServerTLSConfig(grpcServer.tls.config, secureConfig.TransportPolicy)
+				if err != nil {
+					return nil, err
+				}
+				grpcServer.tls.config = strict
 			}
 
 			// create credentials and add to server options

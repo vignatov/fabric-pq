@@ -16,6 +16,15 @@ separately documented production requirement for a stronger threat model.
 The independent witness remains research evidence and is not a mandatory
 runtime dependency for the isolated demonstration.
 
+For the focused PQ4.0B component, the policy verifier receives its signing
+key, node/network identity and checkpoint from its caller. The component
+does not yet provision or protect those values on disk, recover checkpoint
+updates, or prevent a node from starting without selecting the policy.
+Those are unproved integration requirements, not properties of the verifier.
+General listeners may retain server-only TLS; CCAAS and administration
+require mTLS. No TLS client-authentication claim applies to a server-only
+connection.
+
 ## Assets and scope
 
 Protect confidentiality and integrity of session traffic and authenticate
@@ -37,6 +46,11 @@ ML-DSA authentication address different portions of that threat.
   validity and applicable usage before additional algorithm checks.
   Required mTLS paths must verify both endpoints. TLS credentials must be
   freshly generated and separate from enrollment keys.
+- The focused transport profile constrains the TLS endpoint leaf key and
+  CertificateVerify authentication to ML-DSA-65. It does not constrain the
+  CA/intermediate public keys or certificate-signature algorithms; a normally
+  verified trust path may contain classical signatures. This is not a
+  quantum-resistant PKI claim.
 - TLS starts before channel identification; bootstrap policy and its
   authenticated trust anchor must exist before network connections. Channel
   configuration alone cannot prevent a pre-channel fallback.

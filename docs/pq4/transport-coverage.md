@@ -6,6 +6,13 @@ ECDSA TLS certificates, and no PQ4 transport policy exists. Go's defaults
 may negotiate hybrid key exchange on some links; no baseline network
 handshake evidence establishes which group was used.
 
+A subsequent focused component adds an opt-in strict policy to `comm`, tested
+with real `comm` listeners and client configuration. No peer or orderer
+startup path selects it, and independently constructed gossip, Gateway,
+CCAAS and administration transports remain uncovered. The table below
+describes the existing network, not an integrated PQ4 deployment. See the
+[PQ4.0B gate report](pq4.0b-gate-report.md).
+
 The revised PQ4.0 design requires strict policy at bootstrap and on every
 protected listener and endpoint. Any listener serving a PQ4-required channel
 must enforce the strict listener profile for all connections. In strict
