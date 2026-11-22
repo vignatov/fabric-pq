@@ -95,7 +95,7 @@ func VerifyOperatorTransition(
 		}
 	}
 	if oldBinding.Sequence == math.MaxUint64 || authorization.NewConfigSequence != oldBinding.Sequence+1 ||
-		config.Sequence != authorization.NewConfigSequence || newBinding.Sequence != authorization.NewConfigSequence {
+		config.GetSequence() != authorization.NewConfigSequence || newBinding.Sequence != authorization.NewConfigSequence {
 		return nil, errors.New("transition channel configuration sequence is not the next sequence")
 	}
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(config)

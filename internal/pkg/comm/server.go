@@ -143,7 +143,6 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 					return nil, err
 				}
 				grpcServer.tls.config = strict
-				grpcServer.tls.strict = true
 			}
 
 			// create credentials and add to server options

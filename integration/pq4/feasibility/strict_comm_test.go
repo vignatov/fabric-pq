@@ -219,7 +219,7 @@ func TestStrictCommListenerRestart(t *testing.T) {
 	baseClient.NextProtos = []string{"h2"}
 	address := "127.0.0.1:0"
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		server, err := comm.NewGRPCServer(address, config)
 		require.NoError(t, err)
 		address = server.Address()

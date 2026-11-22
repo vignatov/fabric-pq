@@ -18,6 +18,10 @@ separate from the existing hybrid enrollment capability. It specifies
 `pactway-pq-tls-v1`, is permitted only at fresh genesis, and cannot be removed
 from a protected channel. Its presence does not replace the authenticated
 local bootstrap policy or protect pre-channel handshakes.
+The profile's endpoint-authentication check requires an ML-DSA-65 leaf key;
+the X.509 path and hostname are still verified normally. It does not require
+ML-DSA CA/intermediate keys or certificate signatures, so a trust path may
+include classical cryptography and is not claimed to be quantum resistant.
 
 The operator provisions a dedicated policy-signing trust anchor, separate from
 TLS and enrollment keys, and protected local policy and checkpoint state. The
@@ -44,9 +48,13 @@ before the corresponding post-commit hook. A safe activation and recovery
 barrier must be demonstrated without ledger divergence or silently serving an
 unauthorized channel. If that requires a fundamental expansion of the focused
 prototype, stop for architecture review rather than declaring the gate passed.
+The [configuration activation ADR](adr-config-activation.md) identifies
+candidate interception and recovery points for review; it is not an approved
+implementation design.
 
 The focused `comm` component now authenticates a caller-supplied policy and
-checkpoint, and preserves strict TLS across server credential clones. A
+checkpoint, and preserves the strict TLS minimum across credential creation,
+cloning and direct factory use. A
 separate operator-transition verifier checks signed candidate values but does
 not perform Fabric authorization, persist a preparation or commit a
 checkpoint. Neither component is wired into node startup or channel

@@ -46,6 +46,11 @@ ML-DSA authentication address different portions of that threat.
   validity and applicable usage before additional algorithm checks.
   Required mTLS paths must verify both endpoints. TLS credentials must be
   freshly generated and separate from enrollment keys.
+- The focused transport profile constrains the TLS endpoint leaf key and
+  CertificateVerify authentication to ML-DSA-65. It does not constrain the
+  CA/intermediate public keys or certificate-signature algorithms; a normally
+  verified trust path may contain classical signatures. This is not a
+  quantum-resistant PKI claim.
 - TLS starts before channel identification; bootstrap policy and its
   authenticated trust anchor must exist before network connections. Channel
   configuration alone cannot prevent a pre-channel fallback.

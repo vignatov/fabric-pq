@@ -33,8 +33,9 @@ server-authenticated listener and an mTLS listener, the client observed
 TLS 1.3, X25519MLKEM768 and a normally verified ML-DSA-65 server leaf.
 The mTLS listener also observed a verified ML-DSA-65 client leaf. The
 server-only listener did not authenticate a TLS client. Test certificates
-were issued by an ephemeral ML-DSA-65 CA. No TLS secrets or private keys
-were recorded.
+were issued by an ephemeral ML-DSA-65 CA. The tests constrain the endpoint
+leaf key, not CA or intermediate key/signature algorithms; this is not proof
+of a quantum-resistant PKI path. No TLS secrets or private keys were recorded.
 
 Both listener variants rejected TLS 1.2 with an unsupported-version
 diagnostic and X25519-only key exchange with a no-common-key-exchange
@@ -68,7 +69,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | Required mTLS and classical/missing client rejection | PASS | Component mTLS listener only; endpoint-specific proofs remain below. |
 | Signed bootstrap before actual node readiness and protected checkpoint | INCOMPLETE | Verifier tests only; no protected state loader or peer/orderer startup integration. |
 | Identity binding and stale/conflicting bootstrap rejection | INCOMPLETE | Caller-supplied checkpoint and identity reject these inputs in component tests; not proven against node startup and protected storage. |
-| No downgrade through clones, credentials and restarts | INCOMPLETE | Component clones, listener recreation and server-certificate replacement tested; real node restart and all credential factories untested. |
+| No downgrade through clones, credentials and restarts | INCOMPLETE | Component clones, listener recreation, server-certificate replacement and direct server credential factory tested; real node restart and all credential factories untested. |
 | Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
 | Authorized non-weakening Fabric and operator transition, durable recovery | INCOMPLETE | Operator-only synthetic-config verification; no Fabric authorization, protected journal or prepare/commit/restart proof. |
@@ -123,7 +124,9 @@ and recovery for crashes before and after each ledger/checkpoint write.
 On an unauthorized committed configuration it must persistently fail closed
 across restart, rather than resume serving the earlier channel state. This is
 an architecture-review request, not a finding that a safe design is
-mathematically impossible.
+mathematically impossible. The candidate lifecycle protocol and required
+falsification tests are captured in the [configuration activation
+ADR](adr-config-activation.md), whose status is proposed and unapproved.
 
 The independently constructed gossip credentials and Gateway connection
 factory also do not carry the new policy; Gateway can select plaintext when
@@ -150,6 +153,10 @@ GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=1 github.
 PASS
 GOFIPS140=off GOFLAGS=-buildvcs=false go vet -mod=vendor github.com/hyperledger/fabric/internal/pkg/pqtransport github.com/hyperledger/fabric/internal/pkg/comm github.com/hyperledger/fabric/integration/pq4/feasibility
 PASS
+make linter
+PASS (0 issues in ./... and ccaas_builder)
+GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=1 -run "^TestFabricCommServerCredentialsPreserveTLSMinimum$|^TestStrictServerCredentialsClone$|^TestAuthenticatedPolicyFabricComm$|^TestStrictCommListenerRestart$" github.com/hyperledger/fabric/integration/pq4/feasibility github.com/hyperledger/fabric/internal/pkg/comm
+PASS
 GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=10 -run "^TestStrictCommListenerRestart$" github.com/hyperledger/fabric/integration/pq4/feasibility
 PASS
 GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -count=1 -run ^TestGoodWriteConfig$ github.com/hyperledger/fabric/orderer/common/multichannel
@@ -161,3 +168,11 @@ unused variable during test edits. Both were corrected and the relevant
 race-enabled tests above passed afterward. Full Verify Build, network
 acceptance, unsupported binary tests, PQ3.5 acceptance and the Raft rollback
 test were not run.
+
+The first PR `Basic Checks` run failed on two lint rules for one integer loop
+and one direct protobuf field access. These were changed to integer range and
+the generated `GetSequence()` accessor. A follow-up local `make linter` run
+reported zero issues in both the root module and `ccaas_builder`. The old
+TLS-minimum feasibility test also encoded the prior constructor downgrade;
+it now verifies that original and cloned credential factories preserve an
+explicit TLS 1.3 minimum and report the matching `Info()` version.

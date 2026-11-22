@@ -66,6 +66,8 @@ func TestStrictServerCredentialsClone(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	original := NewServerTransportCredentials(server.tls, nil)
+	directFactoryConfig := server.tls.Config()
+	directFactory := NewServerTransportCredentials(NewTLSConfig(&directFactoryConfig), nil)
 
 	for _, test := range []struct {
 		name  string
@@ -73,6 +75,7 @@ func TestStrictServerCredentialsClone(t *testing.T) {
 	}{
 		{"original", original},
 		{"clone", original.Clone()},
+		{"direct factory", directFactory},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, "1.3", test.creds.Info().SecurityVersion)
