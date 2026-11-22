@@ -44,6 +44,24 @@ jobs:
 
       - run: make basic-checks
         name: Run Basic Checks
+  pq4-feasibility:
+    name: PQ4.0 Feasibility
+    runs-on: ${{ github.repository == 'hyperledger/fabric' && 'fabric-ubuntu-24.04' || 'ubuntu-24.04' }}
+    env:
+      GOFIPS140: "off"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        name: Checkout Fabric Code
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        name: Install Go
+        with:
+          go-version-file: go.mod
+      - run: go test -mod=vendor -race -count=1 ./integration/pq4/feasibility
+        name: Run PQ4.0 Feasibility Tests
+      - run: go vet -mod=vendor ./integration/pq4/feasibility
+        name: Vet PQ4.0 Feasibility Tests
   unit-tests:
     name: Unit Tests
     needs: basic-checks
