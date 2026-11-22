@@ -1,90 +1,177 @@
 # ADR: PQ transport policy and Fabric configuration activation
 
-**Status: proposed for architecture review; no activation design approved.**
-**Scope:** peer/orderer channel configuration updates and local PQ transport
-checkpoints. This ADR does not authorize implementation of
-`PactwayPQTransportV1`.
+**Status: proposed for architecture review. PQ4.0B enforcement remains INCOMPLETE.**
 
-## Context
+## Decision and alternatives
 
-PQ4 requires a channel's authenticated transport requirement and the node's
-protected local policy checkpoint to advance consistently. Fabric currently
-publishes configuration resources before durable ledger append:
+Use staged serving resources and a channel admission fence. A private commit path
+may use the candidate only for Fabric validation and native commit bookkeeping.
+External requests and background consumers enter through the active generation.
+The implementation in this PR is a Linux proof invoked by tests.
 
-- The peer's `Channel.Apply` validates a config envelope, creates and validates
-  a bundle, then calls `BundleSource.Update`. Config transaction validation
-  calls `Apply` before the block is committed. `LedgerCommitter.CommitLegacy`
-  invokes its post-commit callback only after the ledger commit succeeds.
-- The orderer's `BlockWriter.WriteConfigBlock` validates and builds the
-  candidate bundle, updates `support`, then calls `WriteBlockSync`. During
-  block writing, metadata derives its last-config sequence from the active
-  support bundle. Moving `support.Update` after append without changing that
-  metadata path can write stale config-sequence metadata.
+| Approach | Fabric constraints |
+| --- | --- |
+| Stage every update until after commit | The peer's config-only transaction can validate against the prior bundle and leave callbacks pending. On the orderer, moving `support.Update` would change the sequence read by `addLastConfig`. A full staged design would need an explicit candidate metadata input and a review of signing and consensus side effects. |
+| Fence around existing public update | Keeps native ordering, but a fence on channel lookup does not protect synchronous callbacks, cached policy references, shared TLS trust pools and cluster dialers. Those could observe changes before commit. |
+| Selected hybrid | Keep private writer support for native orderer sequence, last-config metadata and signing. Stage operational callbacks on both roles. Release the fence only after the ledger is durable, the checkpoint advances and the serving generation is complete. |
 
-Consequently, a post-commit-only checkpoint callback cannot prevent
-pre-commit publication. The ledger append and a separate protected policy
-store also do not share an atomic transaction.
+## Write-ahead protocol
 
-## Proposed protocol for review
+```text
+startup -> RECOVERY_REQUIRED -> ACTIVE(previous | candidate)
+                            \-> QUARANTINED
 
-This is a candidate for prototyping only after architecture approval:
+ACTIVE(previous) -> PREPARED -> COMMIT_PENDING -> ACTIVE(candidate)
+                       |              |
+                       +--> recovery <-+
+```
 
-1. **Authenticate and prepare before publication.** At the peer's
-   `Channel.Apply` boundary and the orderer's
-   `BlockWriter.WriteConfigBlock` boundary, obtain the channel ID from the
-   validated config envelope, use Fabric's existing config authorization and
-   validation, and compare the exact candidate config sequence and digest
-   against a separately operator-signed transition. Persist and flush a
-   `PREPARED` journal record containing the channel, block/config identity,
-   previous and candidate checkpoint versions/digests, and transition
-   authorization before publishing candidate resources. Do not treat a
-   signature alone as Fabric authorization.
-2. **Serialize and gate channel use.** Hold the channel's existing config
-   serialization boundary while preparing, committing and activating. Once
-   prepared, block channel admissions/operations that could observe a mixed
-   config/checkpoint state. The peer implementation must account for
-   endorsement, delivery, gossip, private-data, and all readers of the bundle.
-   The orderer implementation must account for consensus leader and follower
-   paths and the signing identity/metadata needed to write the config block.
-3. **Commit, then activate and checkpoint.** Append the authenticated config
-   block to the ledger. Only after durable success, atomically mark the journal
-   committed, advance the protected local checkpoint, publish the candidate
-   resources, and reopen admissions. The orderer must preserve the correct
-   candidate last-config sequence and block signature while avoiding
-   pre-append publication; this requires an explicit candidate-sequence
-   metadata path or another reviewed mechanism, not merely moving
-   `support.Update`.
-4. **Recover before readiness.** Before listeners, channel services, or
-   participation become ready, read the durable journal and committed ledger
-   configuration. If the candidate block is committed and matches `PREPARED`,
-   complete checkpoint advancement and activation. If it is not committed,
-   discard/abort the preparation and retain the prior policy. If the ledger,
-   journal, signatures, or checkpoint conflict, keep the affected channel
-   closed and fail readiness; never silently roll back to an older serving
-   state. Crash injection must cover each journal fsync, ledger append, state
-   update and resource publication boundary.
+- **ACTIVE.** The authenticated checkpoint matches the exact committed
+  configuration, the bundle and its dependent resources are installed, and
+  admissions have opened. An initial channel binding is independently
+  provisioned. A mismatch closes admission even if the preceding config could
+  otherwise serve.
+- **PREPARED.** Verify Fabric authorization using the previous config's
+  validator and compatibility checks. Independently verify the ML-DSA operator
+  transition and the signed replacement policy with `VerifyOperatorTransition`.
+  Sync the record before entering native commit. The signed records bind
+  network, node, channel, both checkpoint versions and digests, exact next
+  config sequence and deterministic digest, and `pactway-pq-tls-v1`. The
+  journal records prior and candidate block numbers and header hashes. A header
+  hash binds the previous hash and data hash, and the proof checks the actual
+  config block data before using that identity. Block signatures are generated
+  by the native writer and are outside the transition digest.
+- **COMMIT_PENDING.** Close admission, cancel and drain the old generation,
+  persist commit intent, then invoke Fabric commit. Confirm that the latest
+  committed config is the exact recorded block and sync the block-file
+  directory before replacing the checkpoint. An error after entry leaves the
+  gate closed. Never infer commit outcome from the return value alone.
+- **Publication.** Replace the checkpoint and signed policy together. Run the
+  serving publication callbacks while the gate is closed. Sync the completed
+  journal before opening the new generation. Publication after restart must
+  rebuild local derived state idempotently. Callback failure leaves the gate
+  closed and can be retried from the recovered state.
+- **RECOVERY_REQUIRED.** Every fresh process begins closed. Open Fabric stores
+  and recover their indexes and state DB before inspecting the latest config.
+  Orderers also need a native Raft apply/replay barrier. When the old ledger
+  config and checkpoint match and the candidate block position is absent,
+  persist `ABORTED` and resume the previous generation. When the candidate
+  block matches a commit-pending record, revalidate both authorizations against
+  the recorded predecessor. Advance only from the exact old checkpoint. If the
+  new checkpoint already exists, authenticate it and complete publication.
+- **QUARANTINED.** Persist a per-channel marker for an unauthorized committed
+  config, conflicting identities, or invalid recovery state. A configured node
+  may stop participating on a channel whose network has legitimately advanced.
+  Preserve its ledger and the consensus decision. Treat a corrupt or missing
+  node-wide checkpoint as a readiness failure for every bound channel. Operator
+  remediation is outside this proof and no automatic path clears a quarantine.
 
-These are design obligations, not demonstrated properties. In particular,
-the exact peer and orderer lock scope, atomic checkpoint write, block-signing
-semantics, and safe orderer metadata construction remain unresolved.
+The selected local store uses one owning process and one node-wide transition
+writer because one bootstrap policy versions all channel bindings. The proof
+requires a private, operator-provisioned directory on a local Linux filesystem.
+Create a same-directory mode-0600 temporary file, write, sync and close it,
+rename over the target, and sync the directory. Ignore unfinished temporary
+files during recovery. A crash can leave either whole version around rename.
+Independently reconcile the ledger, journal and checkpoint. Existing Fabric
+block storage syncs block contents. The adapter also syncs the channel
+block-file directory, including when a new block file is created by rotation.
+Durability of freshly provisioned directory ancestors is a provisioning
+requirement. The process-loss tests do not reproduce power loss or prove storage
+behavior under a privileged host rollback.
 
-## Required review and falsification tests
+## Native interception points
 
-Before implementing channel capability or persistent policy integration,
-architecture review must approve a concrete design and ownership of the
-journal. A prototype must then demonstrate:
+### Peer
 
-- authenticated channel creation/join and normal non-weakening updates;
-- rejection of missing, stale, conflicting, unauthorized, or weakening
-  transitions before any candidate bundle is visible;
-- leader, follower and concurrent channel-use behavior;
-- crashes before and after each durable write, followed by restart that either
-  completes the authorized transition or fails closed;
-- ledger config sequence, last-config metadata, block signatures and
-  checkpoint agree after each recovery case; and
-- an old binary's behavior is tested only after the actual capability is
-  supported and advertised.
+`gossip/state` hands blocks to `gossip/privdata.coordinator.StoreBlock` for
+validation and commit. The V14 and V20 validation routers call `Channel.Apply`
+for a config transaction. That method validates, builds a bundle and calls
+`BundleSource.Update`. The bundle pointer is swapped before callbacks, and
+`applyLock` ends before ledger commit. The `LedgerCommitter.CommitLegacy`
+post-commit callback runs after the peer ledger returns.
 
-The current component verifier does not provide any of these lifecycle
-guarantees. Until this review and prototype pass, the PQ4.0B channel-binding
-and transition-recovery gates remain **INCOMPLETE**.
+The focused test runs the V20 validator with a private `Channel.Apply`, commits
+through the real committer and kvledger, and publishes a separate serving
+`BundleSource`. Its post-commit callback observes the old serving bundle. On
+reopen it compares `ConfigBlockFromLedger` with
+`RetrievePersistedChannelConfig` before publication. Node integration must
+capture config block identity at `StoreBlock`, defer the real gossip, TLS
+roots, MSP registration and lifecycle callbacks, and contain failures before
+`Peer.createChannel` creates serving resources or inserts the channel. Check
+the provisioned binding and native admin authorization at genesis join. A
+snapshot join stays closed when the expected committed block or provenance
+cannot be established.
+
+### Orderer
+
+`StandardChannel.ProcessConfigUpdateMsg` establishes Fabric authorization
+before submission. Recheck local approval at the proposal boundary using the
+current sequence and again for the concrete block at apply. For both Raft
+leaders and followers, `etcdraft.Chain.apply` routes ordered config blocks
+through `writeConfigBlock`. Catch-up uses `commitBlock`. Participation
+followers in `follower.Chain.pullUntilTarget` append directly and then use the
+config for verification, endpoints and membership. Registrar initialization,
+join and both role switches must carry the same gate across chain objects.
+
+The focused test uses the real `BlockWriter.WriteConfigBlock` with
+`ChainSupport` backed by a private callback-free bundle. The writer waits for
+any prior append, updates the private bundle, reads its sequence in
+`addLastConfig`, signs through the native signer, and appends synchronously.
+The proof verifies both representations of last-config, committed block
+contents, the signature under the prior block-validation policy, and metadata
+on the following normal block. In production, Raft also uses the candidate
+for membership computation and updates its options before the block writer.
+Fencing just `WriteConfigBlock` cannot cover that earlier mutation or
+establish replay completion.
+
+For an ordered config missing local approval, stop at the pre-apply boundary,
+preserve the Raft WAL and keep the channel quarantined. Block signing is
+allowed only in the Fabric commit lane for an approved candidate. Restart must
+check already-decided Raft work even if the prior block and checkpoint match.
+The current production `WriteConfigBlock` method cannot signal a channel-local
+pause to its caller, and calling the synchronous `Halt` from the apply loop can
+wait for that same loop. The smallest follow-on seam is a per-channel
+pre-apply result before membership/options mutation that propagates a
+quarantine decision to the Raft loop owner, plus a replay-completion signal
+before normal admission. The separate participation follower needs an
+equivalent guard before append and verifier publication. Review these seams
+before changing consensus runtime or claiming leader/follower enforcement.
+
+## Admission and TLS
+
+Use a generation lease at endorsement, Gateway, discovery, gossip, delivery
+and private-data dispatch, and at orderer broadcast, deliver and cluster
+dispatch. Recheck streaming operations per message and before sending. Cancel
+old generations and wait for their leases to release before native commit.
+Handlers must release their lease without needing the transition owner.
+Close admission before taking Fabric resource or block writer locks. Callbacks
+must never acquire a lease or wait for gated work. A raw stable bundle pointer
+is immutable but does not confer a right to continue serving with it.
+
+A listener can serve multiple channels before the handshake knows the channel.
+Provision the strongest profile required by the local listener's channels and
+hold that TLS minimum throughout transition and recovery. Channel admission
+remains separate from TLS connection acceptance. Candidate roots, dialer
+endpoints and caches stay private until approved publication. Changes to shared
+resources must use an atomic approved snapshot and prevent candidate-channel
+work from using prior connections or credentials. Other channels may keep
+their leases for a non-weakening update with unchanged bindings and the same
+listener floor. This PR does not wire these rules into the production RPC,
+background work, listener or callback fan-out.
+
+## Acceptance and next steps
+
+The [gate report](pq4.0b-gate-report.md#pq40c-activation-proof) records evidence
+and the crash matrix. The prototype leaves existing baseline and enrollment
+capability behavior unchanged. Keep PQ4.0B enforcement INCOMPLETE pending the
+following work after architecture review.
+
+1. Integrate protected node bootstrap and native ledger/Raft recovery readiness.
+   Wire peer and orderer admission and callback publication through the reviewed
+   seams, and prove quarantine and recovery in a multi-node test.
+2. Bind the reviewed contract to fresh genesis and channel participation before
+   enabling or advertising the channel capability. Verify snapshot provenance,
+   node authorization distribution, and compatibility with existing binaries.
+3. Roll out the reviewed strict TLS profile across the listener and dialer paths,
+   including shared resources and connection invalidation, and rerun full
+   network and regression acceptance before progressing to PQ4.1.
