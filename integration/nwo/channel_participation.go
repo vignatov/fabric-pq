@@ -8,6 +8,7 @@ package nwo
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -221,23 +222,25 @@ func getBodyE(client *http.Client, url string) ([]byte, error) {
 // errors are returned rather than asserted on, so that callers polling for a
 // state change (for example right after an orderer is restarted) retry instead
 // of aborting the spec.
-func getBodyBinary(client *http.Client, url string) func() ([]byte, error) {
-	return func() ([]byte, error) {
-		resp, err := client.Get(url)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, errors.New(string(bodyBytes))
-		}
-		return bodyBytes, nil
+func getBodyBinary(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
 	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New(string(bodyBytes))
+	}
+	return bodyBytes, nil
 }
 
 type ChannelInfo struct {
@@ -283,7 +286,16 @@ func Fetch(n *Network, o *Orderer, channel string, blockID string) (*common.Bloc
 	return FetchTimeShift(n, o, channel, blockID, 0)
 }
 
+// FetchWithContext permits cancellation while waiting for an orderer's block response.
+func FetchWithContext(ctx context.Context, n *Network, o *Orderer, channel string, blockID string) (*common.Block, error) {
+	return fetchTimeShift(ctx, n, o, channel, blockID, 0)
+}
+
 func FetchTimeShift(n *Network, o *Orderer, channel string, blockID string, timeShift time.Duration) (*common.Block, error) {
+	return fetchTimeShift(context.Background(), n, o, channel, blockID, timeShift)
+}
+
+func fetchTimeShift(ctx context.Context, n *Network, o *Orderer, channel string, blockID string, timeShift time.Duration) (*common.Block, error) {
 	authClient, _ := OrdererOperationalClientsTimeShift(n, o, timeShift)
 
 	protocol := "http"
@@ -292,7 +304,7 @@ func FetchTimeShift(n *Network, o *Orderer, channel string, blockID string, time
 	}
 	fetchURL := fmt.Sprintf("%s://127.0.0.1:%d/participation/v1/channels/%s/blocks/%s", protocol, n.OrdererPort(o, AdminPort), channel, blockID)
 
-	body, err := getBodyBinary(authClient, fetchURL)()
+	body, err := getBodyBinary(ctx, authClient, fetchURL)
 	if err != nil {
 		return nil, err
 	}

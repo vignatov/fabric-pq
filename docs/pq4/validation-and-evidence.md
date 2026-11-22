@@ -142,6 +142,14 @@ during startup or before TLS handshakes. It does not cover a rolled-back
 quorum, Byzantine orderers, a freshness authority for peers or CCAAS, or a
 PQ4 transport policy.
 
+In [CI run 44972948242](https://github.com/vignatov/fabric-pq/actions/runs/44972948242),
+the restored orderer emitted the expected commit-index panic, but the test
+timed out while polling for its exit or catch-up. An unbounded config fetch
+could block the poll, and creating a fresh asynchronous exit channel on every
+poll could miss the exit. The test now bounds each fetch with a cancellable
+context and retains one exit channel; it still rejects an unexpected exit,
+failed catch-up or overall timeout.
+
 ## Observed results
 
 | Check | Result and evidence boundary |

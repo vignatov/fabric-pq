@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package msp
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -264,16 +265,19 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		}
 		runners[lagging] = network.OrdererRunner(orderers[lagging])
 		ordererProcesses[lagging] = ifrit.Invoke(runners[lagging])
+		processWait := ordererProcesses[lagging].Wait()
 		var processErr error
 		var outcome string
 		Eventually(func() string {
 			select {
-			case processErr = <-ordererProcesses[lagging].Wait():
+			case processErr = <-processWait:
 				outcome = "exited"
 				return outcome
 			default:
 			}
-			block, err := nwo.Fetch(network, orderers[lagging], "testchannel", "config")
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			block, err := nwo.FetchWithContext(ctx, network, orderers[lagging], "testchannel", "config")
+			cancel()
 			if err != nil {
 				return ""
 			}
@@ -292,7 +296,7 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		}, network.EventuallyTimeout, time.Second).Should(Or(Equal("exited"), Equal("caught-up")))
 		if outcome == "caught-up" {
 			select {
-			case processErr = <-ordererProcesses[lagging].Wait():
+			case processErr = <-processWait:
 				outcome = "exited"
 			default:
 			}
