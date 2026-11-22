@@ -1,5 +1,21 @@
 # PQ4.0 threat model: review draft
 
+## Isolated development baseline
+
+PQ4.0 development assumes a trusted operator and approved Pactway binaries.
+Protected local bootstrap configuration, trust anchors and a local policy
+checkpoint are treated as trustworthy. Network attackers and incompatible or
+compromised remote participants are in scope. Unauthorized channel-policy
+downgrade and mismatched transport configuration must be rejected.
+
+The baseline does **not** cover complete privileged-host compromise or the
+simultaneous restoration of all local files, private keys, secrets and
+checkpoints to an earlier state. It therefore cannot detect a complete
+host-state rollback. External or hardware-backed freshness remains a
+separately documented production requirement for a stronger threat model.
+The independent witness remains research evidence and is not a mandatory
+runtime dependency for the isolated demonstration.
+
 ## Assets and scope
 
 Protect confidentiality and integrity of session traffic and authenticate

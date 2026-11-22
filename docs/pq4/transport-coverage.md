@@ -6,6 +6,12 @@ ECDSA TLS certificates, and no PQ4 transport policy exists. Go's defaults
 may negotiate hybrid key exchange on some links; no baseline network
 handshake evidence establishes which group was used.
 
+The revised PQ4.0 design requires strict policy at bootstrap and on every
+protected listener and endpoint. Any listener serving a PQ4-required channel
+must enforce the strict listener profile for all connections. In strict
+mode, CCAAS `tls_required=false` is invalid regardless of
+`client_auth_required`.
+
 The new scope requires CCAAS as well as administration. "Required" below
 means a future PQ4 acceptance obligation, not that the baseline satisfies it.
 Unless noted, endpoint values are from

@@ -1,8 +1,9 @@
 # PQ4.0 architecture: review draft
 
-**Status: no approved PQ4 transport implementation.** This document describes
-the current boundary and questions for the mandatory architecture gate; it
-does not authorize PQ4.1.
+**Status: PQ4.0 architecture review in progress; PQ4.1 is not authorized.**
+The reviewed isolated-development threat model and enforcement design are
+recorded here, but implementation approval still requires the focused proofs
+listed in the gate below.
 
 ## Existing and intended boundaries
 
@@ -74,10 +75,66 @@ Module v1.0.0; the passing test used `GOFIPS140=off`.
 
 ## Gate
 
-Architecture review must select and substantiate a trusted policy and
-bootstrap design, resolve shared-listener behavior, demonstrate all mandatory
-positive and negative policy tests and prove unsupported-binary behavior
-before any PQ4.1 transport change. See the
-[policy proof gaps](transport-policy-enforcement.md#feasibility-evidence-and-gaps)
-and [threat model](threat-model.md). Existing local code and successful
-component handshakes do not pass that gate.
+For isolated PQ4.0 development, the selected baseline is trusted
+operator-protected local state: approved binaries and protected bootstrap
+configuration, trust anchors and policy checkpoints. Network attackers and
+incompatible or compromised remote participants are in scope. Complete
+privileged-host compromise or simultaneous rollback of every local file,
+secret and checkpoint is excluded. This baseline does not detect complete
+host-state rollback.
+
+The proposed implementation is layered: a trusted bootstrap policy governs
+pre-handshake listeners and outbound connections, an authenticated
+versioned channel capability binds channels to that policy, and explicit
+endpoint policies cover CCAAS and administration. Shared listeners serving
+any PQ4-required channel must enforce the strict profile for every
+connection; a mixed configuration must be rejected rather than configured
+with separate listener bypasses in the initial demonstration.
+
+Mandatory evidence is listed in
+[transport-policy enforcement](transport-policy-enforcement.md) and
+[validation and evidence](validation-and-evidence.md). Existing local code
+and successful component handshakes do not pass the gate.
+
+## PQ4 implementation map
+
+PQ4.1 may only proceed after the PQ4.0 gate passes. The implementation map
+is:
+
+- **PQ4.1 bootstrap and shared transport policy:** add strict configuration
+  validation and policy loading before `comm` or HTTP listeners become ready;
+  preserve classical constructors and behavior when PQ4 is not selected.
+- **PQ4.2 channel binding:** add a distinct versioned transport capability,
+  authenticated channel/update checks, local-policy agreement and downgrade
+  rejection.
+- **PQ4.3 Fabric peer/orderer transport:** apply strict TLS 1.3, X25519MLKEM768
+  and ML-DSA-65 policy to shared peer and orderer connections, preserving
+  strongest-policy behavior on PQ4 listeners and covering reload and pools.
+- **PQ4.4 CCAAS and administration:** reject plaintext CCAAS metadata,
+  require strict peer-to-CCAAS and server/client certificates, and apply the
+  policy to orderer admin, peer operations and osnadmin paths.
+- **PQ4.5 validation and release guard:** run end-to-end acceptance,
+  unsupported-binary checks, rotation/restart tests and signed evidence
+  collection before release; keep CCAAS private keys out of packages.
+
+## Revised gate recommendation
+
+The revised architecture is a defensible isolated-development design: a
+trusted bootstrap policy can reject missing or weakened configuration before
+listener readiness, a versioned authenticated channel binding can reject
+disagreement and exact configuration changes, strongest-policy shared
+listeners can prevent a weak connection from reaching a PQ4-required listener,
+and explicit CCAAS/admin policies can close non-channel paths. The
+operator-protected checkpoint is adequate only within the stated development
+threat model; complete host-state rollback remains explicitly excluded.
+
+The evidence remains incomplete. Standalone strict TLS, signed policy,
+channel hash binding and strict CCAAS/admin prototypes do not prove real
+Fabric listener readiness, channel-update authentication, CCAAS runtime
+enforcement or peer/orderer integration. The unknown-capability process test
+proves unsupported software rejection for an unknown test name, not for an
+approved PQ4 capability. Therefore the gate recommendation is **STOP:
+do not proceed to PQ4.1 implementation** until the remaining real
+integration proofs are added or explicitly delegated to a later, separately
+approved implementation phase. Independent freshness is not required for
+this isolated-development stop.

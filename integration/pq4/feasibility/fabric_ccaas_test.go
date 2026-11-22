@@ -52,6 +52,13 @@ type chaincodeServerInput struct {
 
 type registrationHandler struct{ chaincodeID string }
 
+func validateStrictCCAASMetadata(metadata externalbuilder.ChaincodeServerUserData) error {
+	if metadata.TLSRequired {
+		return nil
+	}
+	return errors.New("strict PQ4 policy rejects plaintext CCAAS metadata")
+}
+
 func (handler registrationHandler) HandleChaincodeStream(stream ccintf.ChaincodeStream) error {
 	message, err := stream.Recv()
 	if err != nil {
@@ -144,6 +151,20 @@ func TestFabricCCAASPlaintextMetadata(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("strict PQ4 rejects plaintext metadata", func(t *testing.T) {
+		require.ErrorContains(t, validateStrictCCAASMetadata(externalbuilder.ChaincodeServerUserData{
+			TLSRequired: false,
+		}), "rejects plaintext")
+		require.ErrorContains(t, validateStrictCCAASMetadata(externalbuilder.ChaincodeServerUserData{
+			TLSRequired:        false,
+			ClientAuthRequired: true,
+		}), "rejects plaintext")
+		require.NoError(t, validateStrictCCAASMetadata(externalbuilder.ChaincodeServerUserData{
+			TLSRequired:        true,
+			ClientAuthRequired: true,
+		}))
+	})
 }
 
 func TestFabricCCAASShimMLDSACompatibility(t *testing.T) {

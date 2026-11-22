@@ -4,6 +4,13 @@ Status: **NOT PROVEN; architecture decision and PQ4.1 are blocked**. This
 document records the candidates and evidence available so far, not an
 approved implementation or a statement that PQ4 endpoints exist.
 
+The revised PQ4.0 baseline uses trusted operator-protected local state. It
+requires the strict profile for every connection on a shared listener that
+serves at least one PQ4-required channel. The independent witness is research
+evidence, not a mandatory runtime dependency. Complete host-state rollback
+remains outside the development threat model and must not be claimed as
+detected.
+
 ## Candidates
 
 | Candidate | Strength | Unresolved security gap |
@@ -167,6 +174,30 @@ The following mandatory proofs are **not yet available**:
 No positive or negative PQ4 policy-integration test, PQ4-required
 unsupported-binary test, or network-wide PQ4 transaction has been run. A
 design assertion or the standalone TLS success does not satisfy those tests.
+
+## Revised PQ4.0 gate
+
+The following focused prototype evidence is required before PQ4.1:
+
+1. A strict listener rejects TLS 1.2 and classical-only X25519 key exchange.
+2. A strict listener rejects classical-only endpoint authentication.
+3. An approved ML-DSA mutual-TLS handshake succeeds with X25519MLKEM768.
+4. Bootstrap verifies policy and trust anchor before listener readiness.
+5. Missing, invalid or conflicting bootstrap configuration fails closed.
+6. A versioned authenticated channel capability agrees with local policy.
+7. Unauthorized channel downgrade or removal is rejected.
+8. An unsupported binary rejects the PQ4 capability.
+9. Strict CCAAS rejects `tls_required=false`, even when client authentication
+   is requested.
+10. Strict administration transport rejects weaker TLS and authentication.
+11. The prototype explicitly records that complete host-state rollback cannot
+    be detected in the isolated development threat model.
+
+For shared listeners, the initial implementation must enforce the strict
+profile for all connections on any listener serving a PQ4-required channel.
+Where that guarantee cannot be implemented, mixed configuration must be
+rejected. Later listener separation must prove channel-to-listener binding
+and must not provide a bypass around the strict policy.
 The additional Go
 `VerifyConnection` feasibility experiment rejects classical leaf keys only
 after normal chain validation; it does not address authenticated policy,

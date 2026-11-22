@@ -33,6 +33,10 @@ GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestFabricCCAASP
 PASS
 GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestAuthenticatedPolicyPrototype github.com/hyperledger/fabric/integration/pq4/feasibility
 PASS
+GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestFabricCCAASPlaintextMetadata github.com/hyperledger/fabric/integration/pq4/feasibility
+PASS
+GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=5 -run TestFabricAdminMLDSACompatibility github.com/hyperledger/fabric/integration/pq4/feasibility
+PASS
 ```
 
 The tests were run on a PQ4 feasibility worktree based on the commit above.
@@ -186,3 +190,38 @@ The tests intentionally include a baseline classical fallback. They do not
 change Fabric's transport behavior. See
 [transport-policy enforcement](transport-policy-enforcement.md) for the
 mandatory unresolved architecture gate.
+
+## Revised PQ4.0 gate status
+
+The current focused work is not sufficient for a pass recommendation.
+Partial or expected evidence:
+
+| Gate proof | Status |
+| --- | --- |
+| Strict listener: TLS 1.2 and X25519-only rejection | Prototype test passes in standalone TLS. |
+| Classical-only endpoint authentication rejection | Prototype test passes for ECDSA leaves. |
+| Approved hybrid KEM and ML-DSA mutual TLS | Prototype test passes. |
+| Bootstrap policy verification before readiness | Prototype test passes, but no Fabric listener integration. |
+| Missing, invalid or conflicting bootstrap fail closed | Prototype test passes. |
+| Channel capability and local policy agreement | Sample channel binding passes; no Fabric channel update or capability implementation. |
+| Unauthorized channel downgrade | Exact channel hash binding passes for changed config; production update enforcement remains absent. |
+| Unsupported-binary capability rejection | Existing baseline/upstream unknown-capability evidence passes; not a real PQ4 capability. |
+| Strict CCAAS no plaintext | Metadata check proves baseline plaintext and rejects strict metadata in the prototype; no peer runtime integration. |
+| Strict administration | Strict and baseline ML-DSA component evidence exists; strict prototype is test-only. |
+| Complete host-state rollback boundary | Explicitly out of the isolated development threat model; witness restoration demonstrates the limitation only as research evidence. |
+
+An independent or hardware freshness service is not required for this gate.
+It is a production requirement only for a threat model that includes complete
+host-state rollback.
+
+The live unsupported-capability integration pass also ran after the revised
+review:
+
+```text
+GOFLAGS=-buildvcs=false go test -mod=vendor -count=1 -timeout 15m -v -run TestMSP github.com/hyperledger/fabric/integration/msp -args -ginkgo.focus=PQ4
+PASS: 4 specs passed, 12 unrelated specs skipped
+```
+
+That result confirms baseline and test-unknown-capability behavior only. It
+is not evidence for an implemented PQ4 capability or for pre-handshake
+transport rejection.

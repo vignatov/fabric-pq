@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,4 +77,53 @@ func TestFabricAdminMLDSACompatibility(t *testing.T) {
 	require.Equal(t, tls.X25519, serverState.CurveID)
 	require.NotEmpty(t, serverState.VerifiedChains)
 	t.Log("baseline admin listener accepted an X25519-only client")
+
+	t.Run("strict PQ4 administration", func(t *testing.T) {
+		strictServer, strictClient := configs(ca, serverCert, clientCert, true)
+		strictServer.VerifyConnection = func(state tls.ConnectionState) error {
+			if state.DidResume || len(state.VerifiedChains) == 0 {
+				return io.ErrUnexpectedEOF
+			}
+			return nil
+		}
+		strict := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NotNil(t, r.TLS)
+			assertStrictState(t, *r.TLS, true)
+			w.WriteHeader(http.StatusOK)
+		}))
+		strict.TLS = strictServer
+		strict.StartTLS()
+		defer strict.Close()
+
+		strictClient.ServerName = "127.0.0.1"
+		response, err := osnadmin.ListAllChannels(strict.URL, ca.pool, clientCert)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, response.StatusCode)
+		assertStrictState(t, *response.TLS, true)
+		require.NoError(t, response.Body.Close())
+
+		classicalServerConfig := strictServer.Clone()
+		classicalServerConfig.Certificates = []tls.Certificate{ca.classicalLeaf(t, x509.ExtKeyUsageServerAuth)}
+		classical := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		classical.TLS = classicalServerConfig
+		classical.StartTLS()
+		defer classical.Close()
+
+		classicalClient := strictClient.Clone()
+		classicalClient.Certificates = []tls.Certificate{ca.classicalLeaf(t, x509.ExtKeyUsageClientAuth)}
+		classicalClient.CurvePreferences = []tls.CurveID{tls.X25519}
+		classicalTransport := &http.Transport{TLSClientConfig: classicalClient, DisableKeepAlives: true}
+		defer classicalTransport.CloseIdleConnections()
+		_, err = (&http.Client{Transport: classicalTransport, Timeout: 5 * time.Second}).Get(classical.URL)
+		require.Error(t, err)
+
+		oldTLSClient := strictClient.Clone()
+		oldTLSClient.MinVersion, oldTLSClient.MaxVersion = tls.VersionTLS12, tls.VersionTLS12
+		oldTLSTransport := &http.Transport{TLSClientConfig: oldTLSClient, DisableKeepAlives: true}
+		defer oldTLSTransport.CloseIdleConnections()
+		_, err = (&http.Client{Transport: oldTLSTransport, Timeout: 5 * time.Second}).Get(strict.URL)
+		require.Error(t, err)
+	})
 }
