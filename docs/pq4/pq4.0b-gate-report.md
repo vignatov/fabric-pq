@@ -208,8 +208,8 @@ background admission, and consensus runtime stay on their existing paths.
 `TestPQ40COrdererCrashRecovery` starts a separate test process for each row and
 exits from the selected hook without defers. The parent reopens the local
 Fabric ledger and protected store, runs recovery twice, and counts checkpoint
-writes. The rows describe the expected results. See test provenance below
-for execution status. Directory sync and rename hooks test process loss,
+writes. All 15 subprocess cases passed in the first Linux proof run below.
+Directory sync and rename hooks test process loss,
 including a rename visible to the next process before directory sync. They do
 not simulate power loss or interrupt a kernel write.
 
@@ -224,11 +224,21 @@ not simulate power loss or interrupt a kernel write.
 | Before, during and after serving resource publication | Candidate ledger and checkpoint; COMMIT_PENDING | Rebuild publication from trusted state, then open the candidate generation. |
 | After durable ACTIVE journal and after opening the gate | Candidate ledger, checkpoint and ACTIVE journal | Restore the active generation with zero additional checkpoint writes. |
 | Peer commits without a preparation record | Candidate peer ledger and prior checkpoint | Persist quarantine, leave admission closed on repeated recovery. Covered by `TestPQ40CPeerActivation/committed_without_preparation`. |
+| Simulated native commit error before or after append | COMMIT_PENDING and prior checkpoint, with either prior or candidate ledger | Keep admission closed on error and reconcile against the actual ledger. Both cases passed in `TestPQ40COrdererUncertainCommit`. |
 
 ### PQ4.0C test provenance
 
 - Base commit `b91dd57c781f3ce5c848769e1a3ec3e87f7a4116`, verified against
   `origin/main` before branching.
+- First proof commit `243d6d2a2b1ff2ed1d62f82b67e92227c36b0aa0` on Ubuntu
+  24.04, Go 1.27.4, Linux amd64. The focused race tests and vet passed, and
+  PQ4.0 Feasibility and PQ4.0B Component Checks passed. Basic Checks flagged
+  one Go literal lint and skipped dependent Fabric tests on that run.
+  [Verify Build 45081026724](https://github.com/vignatov/fabric-pq/actions/runs/45081026724).
+- A Windows amd64 Go 1.27.4 check cross-compiled and vetted the Linux proof.
+  Native Windows PQ4.0 feasibility and policy tests passed. The full existing
+  `comm` suite failed `TestNewGRPCServerInvalidParameters` on Windows socket-error
+  wording. The Linux PQ4.0B component job passed the `comm` suite.
 - The **PQ4.0C Activation Proof** job records the exact tested commit, Go
   version, Linux runner and FIPS mode. It runs the following commands:
 

@@ -103,6 +103,7 @@ func TestPQ40COrdererActivation(t *testing.T) {
 	lgr, view := ordererActivationLedger(t, t.TempDir(), func(string) {})
 	require.NoError(t, lgr.Append(genesis))
 	controller := fixture.Channel(store, view)
+	controller.Validate = checkResources
 	require.ErrorContains(t, controller.Recover(false), "native replay must settle")
 	_, _, _, admitted := controller.Gate.Acquire()
 	require.False(t, admitted)
@@ -209,6 +210,7 @@ func TestPQ40COrdererUncertainCommit(t *testing.T) {
 			lgr, view := ordererActivationLedger(t, t.TempDir(), func(string) {})
 			require.NoError(t, lgr.Append(genesis))
 			controller := fixture.Channel(store, view)
+			controller.Validate = checkResources
 			require.NoError(t, controller.Recover(true))
 			writer, _ := activationWriter(t, fixture, lgr, genesis)
 			update := fixture.Update(t, base)
@@ -278,6 +280,7 @@ func TestPQ40COrdererCrashRecovery(t *testing.T) {
 			require.NoError(t, err)
 			_, view := ordererActivationLedger(t, filepath.Join(root, "ledger"), func(string) {})
 			controller := fixture.Channel(store, view)
+			controller.Validate = checkResources
 			wantSequence := uint64(0)
 			wantWrites := 0
 			if scenario.committed {
@@ -328,6 +331,7 @@ func TestPQ40COrdererCrashWorker(t *testing.T) {
 	lgr, view := ordererActivationLedger(t, filepath.Join(root, "ledger"), probe)
 	require.NoError(t, lgr.Append(genesis))
 	controller := fixture.Channel(store, view)
+	controller.Validate = checkResources
 	controller.Publish = func(*channelconfig.Bundle) error {
 		probe("during-publication")
 		return nil

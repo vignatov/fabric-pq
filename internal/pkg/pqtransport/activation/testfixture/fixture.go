@@ -53,7 +53,9 @@ func New(t *testing.T) Fixture {
 	require.NoError(t, err)
 	config, err := msp.GetLocalMspConfig(dir, nil, "SampleOrg")
 	require.NoError(t, err)
-	local, err := msp.New(&msp.BCCSPNewOpts{NewBaseOpts: msp.NewBaseOpts{Version: msp.MSPv3_0}}, crypto)
+	opts := &msp.BCCSPNewOpts{}
+	opts.Version = msp.MSPv3_0
+	local, err := msp.New(opts, crypto)
 	require.NoError(t, err)
 	require.NoError(t, local.Setup(config))
 	signer, err := local.GetDefaultSigningIdentity()

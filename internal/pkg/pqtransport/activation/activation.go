@@ -55,7 +55,7 @@ type Channel struct {
 	ID       string
 	Signer   *mldsa.PublicKey
 	Crypto   bccsp.BCCSP
-	Validate func(previous, candidate *channelconfig.Bundle) error
+	Validate func(channelconfig.Resources) error
 	Publish  func(*channelconfig.Bundle) error
 }
 
@@ -117,7 +117,7 @@ func (c *Channel) verifyFabric(previous, next configuration) error {
 		return err
 	}
 	if c.Validate != nil {
-		return c.Validate(previous.bundle, next.bundle)
+		return c.Validate(next.bundle)
 	}
 	return nil
 }
@@ -403,6 +403,11 @@ func (c *Channel) Recover(replaySettled bool) error {
 	}
 	if err := c.match(policy, committed); err != nil {
 		return c.quarantine(err)
+	}
+	if c.Validate != nil {
+		if err := c.Validate(committed.bundle); err != nil {
+			return c.quarantine(err)
+		}
 	}
 	if c.Publish != nil {
 		if err := c.Publish(committed.bundle); err != nil {
