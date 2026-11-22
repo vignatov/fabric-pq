@@ -1,8 +1,8 @@
 # PQ4.0 transport-policy enforcement review
 
-Status: **NOT PROVEN; architecture decision and PQ4.1 are blocked**. This
-document records the candidates and evidence available so far, not an
-approved implementation or a statement that PQ4 endpoints exist.
+Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. The development trust
+boundary and shared-listener rule are selected, but the layered design and
+its evidence still require architecture review. No PQ4 endpoints exist.
 
 The revised PQ4.0 baseline uses trusted operator-protected local state. It
 requires the strict profile for every connection on a shared listener that
@@ -17,39 +17,35 @@ detected.
 | --- | --- | --- |
 | Authenticated channel capability alone | Authenticated version and unsupported-binary rejection can be tied to channel configuration. | The TLS handshake occurs before a channel is identified or its configuration can be read; admin and CCAAS may have no channel context. This candidate alone cannot establish the required pre-handshake protection. |
 | Trusted, versioned node/network transport policy alone | Can govern bootstrap, all listener and client construction, CCAAS and admin before a channel is known. | Needs an authenticated trust anchor, provisioning and rollback protection, agreement with network/channel requirements, and a way to prevent old binaries from silently participating. A local environment flag by itself is insufficient. |
-| Layered node policy and authenticated channel requirement | Can bind a pre-handshake minimum to a channel's authenticated requirement and cover non-channel paths. | The binding, bootstrap trust, downgrade-resistant updates and old-binary behavior remain unimplemented and unproved. It is a candidate for review, not a selected architecture. |
+| Layered node policy and authenticated channel requirement | Proposed development design can bind a pre-handshake minimum to a channel's authenticated requirement and cover non-channel paths. | The binding, bootstrap trust, downgrade-resistant updates and old-binary behavior remain unimplemented and unproved. Architecture approval remains pending. |
 
 Do not treat the existing `PactwayHybridCertificatePactwayV1` enrollment
 capability as a transport capability. If a distinct transport capability is
 chosen, its precise semantics, fresh-genesis behavior and removal protection
 must be implemented and tested; a capability by itself does not control TLS.
 
-For further feasibility work, the pragmatic candidate is the layered policy
-with a separately protected freshness authority or checkpoint. Its trust
-domain must remain outside each restored node snapshot; simply placing another
-file or process on the same restored host is not sufficient. Bootstrap would
-authenticate that source using an independently provisioned trust anchor and
-fail closed when it is unavailable or conflicts with the signed node policy.
-The source itself must have rollback-resistant state and authenticated updates;
-restoring it together with the nodes is outside this candidate's assumed
-boundary. Its provisioning, independent protection, secure bootstrap
-transport, update and recovery procedures have not been implemented or
-verified. This is a review candidate, not an architecture approval or a reason
-to start PQ4.1.
+The development baseline instead relies on a trusted operator-protected local
+checkpoint, bootstrap policy and trust anchors. It does not detect simultaneous
+restoration of all local state. An independently protected freshness authority
+or hardware-backed checkpoint is optional research for a stronger production
+threat model; it is not a PQ4.0 development prerequisite. Such a source would
+need a trust domain outside restored node snapshots, authenticated access and
+updates, rollback-resistant storage, and recovery procedures. None of those
+properties has been implemented or verified by the local witness experiment.
 
-For a node serving mixed channels, the conservative shared-listener candidate
-requires the strictest applicable policy for every connection on that
-listener. This would also reject classical clients of weaker channels on the
-same listener; it must not change behavior on nodes where PQ4 is not selected.
-Separate strict and classical listeners could retain mixed connectivity, but
-would additionally require non-bypassable binding of every request and
-stream to its listener's permitted channels. This is not a single generic
-pre-handshake check: for example, the
+For a shared listener serving any PQ4-required channel, the selected rule
+requires strict PQ4 policy for every connection; reject the mixed
+configuration if that cannot be guaranteed. This also rejects classical
+clients of weaker channels on that listener, but must not change behavior
+where PQ4 is not selected. Separate strict and classical listeners are not
+part of the initial demonstration. If considered later, they would require
+non-bypassable binding of every request and stream to its listener's permitted
+channels. This is not a single generic pre-handshake check: for example, the
 [endorser](../../core/endorser/endorser.go) extracts the channel from a
 proposal, [delivery](../../common/deliver/deliver.go) reads it from an
 envelope, and [gossip](../../gossip/comm/comm_impl.go) has a bidirectional
-stream with its own message handling. Neither candidate has been proved in a
-Fabric network or selected by the architecture review.
+stream with its own message handling. Strongest-policy enforcement has not
+yet been proved in a Fabric network.
 
 ## Trust boundaries and required design decisions
 
@@ -60,9 +56,8 @@ Fabric network or selected by the architecture review.
   missing, stale or conflicting state. Specify the attacker and the
   consequences of an administrator or host with access to local keys,
   configuration, binaries or persistent rollback state.
-- Decide whether mixed-security channels require separate listeners or the
-  strongest policy across a shared listener. Prove that a weaker channel
-  cannot create a path into a PQ4-required channel.
+- Implement the selected strongest-policy rule and prove that a weaker
+  channel cannot create a path into a PQ4-required channel.
 - Enforce and authenticate policy for both peer-to-CCAAS connections,
   including the independently constructed chaincode server; avoid
   distributing private TLS client keys in chaincode packages.
@@ -78,9 +73,10 @@ An authentic signature alone does not establish policy freshness: an older,
 validly signed policy remains valid. If an attacker can restore every piece
 of node state to an earlier snapshot, the restarted node cannot distinguish
 that snapshot from its original execution without a trusted freshness source
-outside the restored state. The review must identify such a source or
-explicitly exclude that attacker. Likewise, software enforcement cannot
-protect a node whose attacker can replace its binary or control its process;
+outside the restored state. The development threat model explicitly excludes
+that attacker; a stronger production threat model must identify such a
+source. Likewise, software enforcement cannot protect a node whose attacker
+can replace its binary or control its process;
 these boundaries must not be hidden behind a signed-policy claim.
 
 ## Feasibility evidence and gaps
@@ -101,7 +97,10 @@ actual external-builder reader and external-chaincode runtime. Both
 test gRPC server, with no server-observed client authentication. The test
 does not run a Fabric peer or prove that an attacker can alter an installed
 package. It does show that a future strict policy cannot treat the metadata's
-client-auth flag as evidence that TLS was enabled.
+client-auth flag as evidence that TLS was enabled. A separate test-only guard
+rejects plaintext metadata but does not validate client authentication,
+ML-DSA identity or hybrid key exchange. Actual strict CCAAS enforcement must
+validate those properties at the peer and server enforcement points.
 
 Baseline and pinned-upstream peer and orderer processes also rejected a
 genesis containing a deliberately unknown test capability with an explicit
@@ -116,8 +115,8 @@ channel-config protobuf hash to the policy; Fabric's `channelconfig.NewBundle`
 parses that sample. The prototype rejects missing, tampered, stale,
 conflicting and weakened inputs. Its strict listener configuration rejects
 TLS 1.2, X25519-only key exchange and an ECDSA client certificate.
-This tests the strongest-policy-before-handshake idea without selecting it
-as the architecture. If both the older policy and its checkpoint are
+This tests the strongest-policy-before-handshake idea without integrating it
+into a Fabric listener. If both the older policy and its checkpoint are
 restored, the prototype accepts them: the checkpoint must actually be
 protected against rollback.
 
@@ -198,6 +197,7 @@ profile for all connections on any listener serving a PQ4-required channel.
 Where that guarantee cannot be implemented, mixed configuration must be
 rejected. Later listener separation must prove channel-to-listener binding
 and must not provide a bypass around the strict policy.
+
 The additional Go
 `VerifyConnection` feasibility experiment rejects classical leaf keys only
 after normal chain validation; it does not address authenticated policy,

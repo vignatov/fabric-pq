@@ -129,9 +129,12 @@ operator-protected checkpoint is adequate only within the stated development
 threat model; complete host-state rollback remains explicitly excluded.
 
 The evidence remains incomplete. Standalone strict TLS, signed policy,
-channel hash binding and strict CCAAS/admin prototypes do not prove real
-Fabric listener readiness, channel-update authentication, CCAAS runtime
-enforcement or peer/orderer integration. The unknown-capability process test
+channel hash binding, a plaintext-only CCAAS guard and a strict HTTPS test
+listener do not prove real Fabric listener readiness, channel-update
+authentication, CCAAS runtime enforcement or peer/orderer integration.
+The CCAAS guard does not validate client authentication, ML-DSA identity or
+hybrid key exchange; the actual PQ4 CCAAS enforcement point must validate
+those properties. The unknown-capability process test
 proves unsupported software rejection for an unknown test name, not for an
 approved PQ4 capability. Therefore the gate recommendation is **STOP:
 do not proceed to PQ4.1 implementation** until the remaining real

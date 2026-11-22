@@ -84,10 +84,10 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		capabilities := &commonproto.Capabilities{}
 		value := updated.GetChannelGroup().GetValues()["Capabilities"]
 		Expect(value).NotTo(BeNil())
-		Expect(proto.Unmarshal(value.Value, capabilities)).To(Succeed())
-		Expect(capabilities.Capabilities).To(HaveKey("V2_0"))
-		Expect(capabilities.Capabilities).To(HaveKey("V3_0"))
-		delete(capabilities.Capabilities, "V2_0")
+		Expect(proto.Unmarshal(value.GetValue(), capabilities)).To(Succeed())
+		Expect(capabilities.GetCapabilities()).To(HaveKey("V2_0"))
+		Expect(capabilities.GetCapabilities()).To(HaveKey("V3_0"))
+		delete(capabilities.GetCapabilities(), "V2_0")
 		value.Value = protoutil.MarshalOrPanic(capabilities)
 
 		unauthorized := signHybridConfigUpdate(network, org1, "User1", testDir, "unauthorized.pb", "testchannel", current, updated)
@@ -112,13 +112,13 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		committedCapabilities := &commonproto.Capabilities{}
 		committedValue := committed.GetChannelGroup().GetValues()["Capabilities"]
 		Expect(proto.Unmarshal(committedValue.GetValue(), committedCapabilities)).To(Succeed())
-		Expect(committedCapabilities.Capabilities).NotTo(HaveKey("V2_0"))
-		Expect(committedCapabilities.Capabilities).To(HaveKey("V3_0"))
-		Expect(committedValue.Version).To(Equal(value.Version + 1))
+		Expect(committedCapabilities.GetCapabilities()).NotTo(HaveKey("V2_0"))
+		Expect(committedCapabilities.GetCapabilities()).To(HaveKey("V3_0"))
+		Expect(committedValue.GetVersion()).To(Equal(value.GetVersion() + 1))
 
 		replayError := fmt.Sprintf(
 			"attempt to set key [Value]  /Channel/Capabilities to version %d, but key is at version %d",
-			committedValue.Version, committedValue.Version,
+			committedValue.GetVersion(), committedValue.GetVersion(),
 		)
 		nwo.UpdateWithStatus(network, orderer, "testchannel", authorized, http.StatusBadRequest, replayError)
 		Expect(proto.Equal(nwo.GetConfig(network, org1, orderer, "testchannel"), committed)).To(BeTrue())
@@ -139,8 +139,8 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		Expect(proto.Equal(restored, current)).To(BeTrue())
 		restoredCapabilities := &commonproto.Capabilities{}
 		Expect(proto.Unmarshal(restored.GetChannelGroup().GetValues()["Capabilities"].GetValue(), restoredCapabilities)).To(Succeed())
-		Expect(restoredCapabilities.Capabilities).To(HaveKey("V2_0"))
-		Expect(restoredCapabilities.Capabilities).To(HaveKey("V3_0"))
+		Expect(restoredCapabilities.GetCapabilities()).To(HaveKey("V2_0"))
+		Expect(restoredCapabilities.GetCapabilities()).To(HaveKey("V3_0"))
 		nwo.Update(network, orderer, "testchannel", authorized)
 		Eventually(func() bool {
 			return proto.Equal(nwo.GetConfig(network, org1, orderer, "testchannel"), committed)
@@ -223,9 +223,9 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		value := updated.GetChannelGroup().GetValues()["Capabilities"]
 		capabilities := &commonproto.Capabilities{}
 		Expect(proto.Unmarshal(value.GetValue(), capabilities)).To(Succeed())
-		Expect(capabilities.Capabilities).To(HaveKey("V2_0"))
-		Expect(capabilities.Capabilities).To(HaveKey("V3_0"))
-		delete(capabilities.Capabilities, "V2_0")
+		Expect(capabilities.GetCapabilities()).To(HaveKey("V2_0"))
+		Expect(capabilities.GetCapabilities()).To(HaveKey("V3_0"))
+		delete(capabilities.GetCapabilities(), "V2_0")
 		value.Value = protoutil.MarshalOrPanic(capabilities)
 		const updateFile = "quorum-authorized.pb"
 		authorized := signHybridConfigUpdate(network, org1, "Admin", testDir, updateFile, "testchannel", current, updated, org2)
@@ -244,9 +244,9 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		committedCapabilities := &commonproto.Capabilities{}
 		committedValue := committed.GetChannelGroup().GetValues()["Capabilities"]
 		Expect(proto.Unmarshal(committedValue.GetValue(), committedCapabilities)).To(Succeed())
-		Expect(committedCapabilities.Capabilities).NotTo(HaveKey("V2_0"))
-		Expect(committedCapabilities.Capabilities).To(HaveKey("V3_0"))
-		Expect(committedValue.Version).To(Equal(value.Version + 1))
+		Expect(committedCapabilities.GetCapabilities()).NotTo(HaveKey("V2_0"))
+		Expect(committedCapabilities.GetCapabilities()).To(HaveKey("V3_0"))
+		Expect(committedValue.GetVersion()).To(Equal(value.GetVersion() + 1))
 		otherSurvivor := 3 - leader - lagging
 		Eventually(func() bool {
 			return proto.Equal(nwo.GetConfig(network, org1, orderers[otherSurvivor], "testchannel"), committed)
@@ -307,7 +307,7 @@ var _ = Describe("PQ4 config update feasibility", func() {
 		} else {
 			replayError := fmt.Sprintf(
 				"attempt to set key [Value]  /Channel/Capabilities to version %d, but key is at version %d",
-				committedValue.Version, committedValue.Version,
+				committedValue.GetVersion(), committedValue.GetVersion(),
 			)
 			nwo.UpdateWithStatus(network, orderers[lagging], "testchannel", authorized, http.StatusBadRequest, replayError)
 			fmt.Fprintln(GinkgoWriter, "Restored orderer caught up and rejected the stale update.")

@@ -71,7 +71,7 @@ func TestFabricCommServerCredentialsResetTLSMinimum(t *testing.T) {
 		var remote peer.Peer
 		response, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}, grpc.Peer(&remote))
 		require.NoError(t, err)
-		require.Equal(t, healthpb.HealthCheckResponse_SERVING, response.Status)
+		require.Equal(t, healthpb.HealthCheckResponse_SERVING, response.GetStatus())
 		auth, ok := remote.AuthInfo.(credentials.TLSInfo)
 		require.True(t, ok)
 		require.Equal(t, uint16(tls.VersionTLS12), auth.State.Version)
@@ -164,7 +164,7 @@ func TestFabricCommMLDSACompatibility(t *testing.T) {
 			var remote peer.Peer
 			reply, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}, grpc.Peer(&remote))
 			require.NoError(t, err)
-			require.Equal(t, healthpb.HealthCheckResponse_SERVING, reply.Status)
+			require.Equal(t, healthpb.HealthCheckResponse_SERVING, reply.GetStatus())
 			auth, ok := remote.AuthInfo.(credentials.TLSInfo)
 			require.True(t, ok)
 			serverState := <-serverStates

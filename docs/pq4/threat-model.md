@@ -41,9 +41,9 @@ ML-DSA authentication address different portions of that threat.
   authenticated trust anchor must exist before network connections. Channel
   configuration alone cannot prevent a pre-channel fallback.
 - A signed or authenticated node policy must not be silently replaced by
-  an older or contradictory policy. The trusted administrator, policy
-  distribution, rollback-resistant state and boot assumptions remain
-  unselected and unproved.
+  an older or contradictory policy. The trusted operator-protected local
+  checkpoint is the selected development assumption; policy distribution,
+  checkpoint update and recovery procedures remain unproved.
 - A shared listener must not allow a weaker channel or client to downgrade a
   strict channel. Administration and CCAAS cannot be left outside policy
   merely because they lack channel context.

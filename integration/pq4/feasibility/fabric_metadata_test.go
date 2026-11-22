@@ -30,7 +30,7 @@ func TestFabricMSPMLDSATrustAnchor(t *testing.T) {
 	base, err := msp.GetVerifyingMspConfig(fixture, "SampleOrg", "bccsp")
 	require.NoError(t, err)
 	fabricConfig := &mspproto.FabricMSPConfig{}
-	require.NoError(t, proto.Unmarshal(base.Config, fabricConfig))
+	require.NoError(t, proto.Unmarshal(base.GetConfig(), fabricConfig))
 	fabricConfig.TlsIntermediateCerts = nil
 
 	for _, test := range []struct {
@@ -48,11 +48,9 @@ func TestFabricMSPMLDSATrustAnchor(t *testing.T) {
 			require.NoError(t, err)
 			provider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 			require.NoError(t, err)
-			instance, err := msp.New(&msp.BCCSPNewOpts{
-				NewBaseOpts: msp.NewBaseOpts{Version: msp.MSPv1_4_3},
-			}, provider)
+			instance, err := msp.New(&msp.BCCSPNewOpts{Version: msp.MSPv1_4_3}, provider)
 			require.NoError(t, err)
-			err = instance.Setup(&mspproto.MSPConfig{Type: base.Type, Config: encoded})
+			err = instance.Setup(&mspproto.MSPConfig{Type: base.GetType(), Config: encoded})
 			if test.wantFailure {
 				require.ErrorContains(t, err, "CA Certificate did not have the CA attribute")
 				return

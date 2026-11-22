@@ -206,8 +206,8 @@ Partial or expected evidence:
 | Channel capability and local policy agreement | Sample channel binding passes; no Fabric channel update or capability implementation. |
 | Unauthorized channel downgrade | Exact channel hash binding passes for changed config; production update enforcement remains absent. |
 | Unsupported-binary capability rejection | Existing baseline/upstream unknown-capability evidence passes; not a real PQ4 capability. |
-| Strict CCAAS no plaintext | Metadata check proves baseline plaintext and rejects strict metadata in the prototype; no peer runtime integration. |
-| Strict administration | Strict and baseline ML-DSA component evidence exists; strict prototype is test-only. |
+| Strict CCAAS no plaintext | The baseline metadata/runtime test demonstrates plaintext. A test-only plaintext guard rejects `tls_required=false` but does not check client authentication, ML-DSA identity or hybrid key exchange; it is not integrated into the peer runtime. |
+| Strict administration | Baseline Fabric HTTP components and a test-only strict HTTPS listener exercise ML-DSA mTLS. The strict listener rejects classical-only key exchange, TLS 1.2 and a classical client identity; it is not a Fabric admin listener. |
 | Complete host-state rollback boundary | Explicitly out of the isolated development threat model; witness restoration demonstrates the limitation only as research evidence. |
 
 An independent or hardware freshness service is not required for this gate.
@@ -219,9 +219,16 @@ review:
 
 ```text
 GOFLAGS=-buildvcs=false go test -mod=vendor -count=1 -timeout 15m -v -run TestMSP github.com/hyperledger/fabric/integration/msp -args -ginkgo.focus=PQ4
-PASS: 4 specs passed, 12 unrelated specs skipped
+PASS: 4 specs passed, 12 skipped (including the selected upstream-binary
+spec, which requires separately supplied binaries)
 ```
 
 That result confirms baseline and test-unknown-capability behavior only. It
 is not evidence for an implemented PQ4 capability or for pre-handshake
 transport rejection.
+
+The Verify Build workflow includes a dedicated PQ4.0 Feasibility job running
+`go test -mod=vendor -race -count=1 ./integration/pq4/feasibility` and
+`go vet -mod=vendor ./integration/pq4/feasibility` with `GOFIPS140=off`.
+The job exercises the same development-only non-FIPS environment; its status
+on the pull request is the CI result, not a production or gate approval.

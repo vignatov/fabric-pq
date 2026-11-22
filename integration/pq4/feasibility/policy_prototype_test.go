@@ -336,7 +336,10 @@ func TestAuthenticatedPolicyPrototype(t *testing.T) {
 		untrustedTransport := &http.Transport{TLSClientConfig: untrustedTLS, DisableKeepAlives: true}
 		defer untrustedTransport.CloseIdleConnections()
 		untrustedClient := &http.Client{Transport: untrustedTransport, Timeout: 5 * time.Second}
-		_, err = untrustedClient.Get(witness.URL + "/policy.json")
+		response, err := untrustedClient.Get(witness.URL + "/policy.json")
+		if response != nil {
+			require.NoError(t, response.Body.Close())
+		}
 		require.ErrorContains(t, err, "certificate signed by unknown authority")
 
 		missingClientTLS := nodeTLS.Clone()
@@ -344,7 +347,10 @@ func TestAuthenticatedPolicyPrototype(t *testing.T) {
 		missingClientTransport := &http.Transport{TLSClientConfig: missingClientTLS, DisableKeepAlives: true}
 		defer missingClientTransport.CloseIdleConnections()
 		missingClient := &http.Client{Transport: missingClientTransport, Timeout: 5 * time.Second}
-		_, err = missingClient.Get(witness.URL + "/policy.json")
+		response, err = missingClient.Get(witness.URL + "/policy.json")
+		if response != nil {
+			require.NoError(t, response.Body.Close())
+		}
 		require.ErrorContains(t, err, "certificate required")
 
 		stale := original

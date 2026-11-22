@@ -52,7 +52,8 @@ type chaincodeServerInput struct {
 
 type registrationHandler struct{ chaincodeID string }
 
-func validateStrictCCAASMetadata(metadata externalbuilder.ChaincodeServerUserData) error {
+// This guard only rejects plaintext metadata; it is not complete strict TLS policy validation.
+func rejectPlaintextCCAASMetadata(metadata externalbuilder.ChaincodeServerUserData) error {
 	if metadata.TLSRequired {
 		return nil
 	}
@@ -64,14 +65,14 @@ func (handler registrationHandler) HandleChaincodeStream(stream ccintf.Chaincode
 	if err != nil {
 		return err
 	}
-	if message.Type != peerproto.ChaincodeMessage_REGISTER {
+	if message.GetType() != peerproto.ChaincodeMessage_REGISTER {
 		return errors.New("expected chaincode registration")
 	}
 	id := &peerproto.ChaincodeID{}
-	if err := proto.Unmarshal(message.Payload, id); err != nil {
+	if err := proto.Unmarshal(message.GetPayload(), id); err != nil {
 		return err
 	}
-	if id.Name != handler.chaincodeID {
+	if id.GetName() != handler.chaincodeID {
 		return errors.New("unexpected registered chaincode ID")
 	}
 	return nil
@@ -153,14 +154,14 @@ func TestFabricCCAASPlaintextMetadata(t *testing.T) {
 	}
 
 	t.Run("strict PQ4 rejects plaintext metadata", func(t *testing.T) {
-		require.ErrorContains(t, validateStrictCCAASMetadata(externalbuilder.ChaincodeServerUserData{
+		require.ErrorContains(t, rejectPlaintextCCAASMetadata(externalbuilder.ChaincodeServerUserData{
 			TLSRequired: false,
 		}), "rejects plaintext")
-		require.ErrorContains(t, validateStrictCCAASMetadata(externalbuilder.ChaincodeServerUserData{
+		require.ErrorContains(t, rejectPlaintextCCAASMetadata(externalbuilder.ChaincodeServerUserData{
 			TLSRequired:        false,
 			ClientAuthRequired: true,
 		}), "rejects plaintext")
-		require.NoError(t, validateStrictCCAASMetadata(externalbuilder.ChaincodeServerUserData{
+		require.NoError(t, rejectPlaintextCCAASMetadata(externalbuilder.ChaincodeServerUserData{
 			TLSRequired:        true,
 			ClientAuthRequired: true,
 		}))
@@ -229,7 +230,7 @@ func TestFabricCCAASShimMLDSACompatibility(t *testing.T) {
 			require.NoError(t, err)
 			message, err := stream.Recv()
 			require.NoError(t, err)
-			require.Equal(t, peerproto.ChaincodeMessage_REGISTER, message.Type)
+			require.Equal(t, peerproto.ChaincodeMessage_REGISTER, message.GetType())
 			state := <-states
 			require.Equal(t, uint16(tls.VersionTLS13), state.Version)
 			require.Equal(t, test.group, state.CurveID)

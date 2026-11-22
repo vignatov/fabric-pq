@@ -5,6 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 package feasibility
 
 import (
+	"crypto/mldsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -79,16 +80,20 @@ func TestFabricAdminMLDSACompatibility(t *testing.T) {
 	t.Log("baseline admin listener accepted an X25519-only client")
 
 	t.Run("strict PQ4 administration", func(t *testing.T) {
-		strictServer, strictClient := configs(ca, serverCert, clientCert, true)
-		strictServer.VerifyConnection = func(state tls.ConnectionState) error {
-			if state.DidResume || len(state.VerifiedChains) == 0 {
-				return io.ErrUnexpectedEOF
-			}
-			return nil
-		}
+		serverBase, strictClient := configs(ca, serverCert, clientCert, true)
+		signer, err := mldsa.GenerateKey(mldsa.MLDSA65())
+		require.NoError(t, err)
+		public, ok := signer.Public().(*mldsa.PublicKey)
+		require.True(t, ok)
+		payload, signature, checkpoint := signPrototypePolicy(t, signer, prototypePolicy{
+			Network: "network-a", Node: "orderer-a", Version: 1, Profile: prototypeStrictProfile,
+			Channels: map[string]string{"channel-a": "test-binding"},
+		})
+		_, strictServer, err := bootstrapPrototypePolicy(payload, signature, public, &checkpoint, "network-a", "orderer-a", serverBase)
+		require.NoError(t, err)
+		strictStates := make(chan *tls.ConnectionState, 4)
 		strict := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			require.NotNil(t, r.TLS)
-			assertStrictState(t, *r.TLS, true)
+			strictStates <- r.TLS
 			w.WriteHeader(http.StatusOK)
 		}))
 		strict.TLS = strictServer
@@ -101,29 +106,31 @@ func TestFabricAdminMLDSACompatibility(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.StatusCode)
 		assertStrictState(t, *response.TLS, true)
 		require.NoError(t, response.Body.Close())
+		serverState := <-strictStates
+		require.NotNil(t, serverState)
+		assertStrictState(t, *serverState, true)
 
-		classicalServerConfig := strictServer.Clone()
-		classicalServerConfig.Certificates = []tls.Certificate{ca.classicalLeaf(t, x509.ExtKeyUsageServerAuth)}
-		classical := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		classical.TLS = classicalServerConfig
-		classical.StartTLS()
-		defer classical.Close()
-
-		classicalClient := strictClient.Clone()
-		classicalClient.Certificates = []tls.Certificate{ca.classicalLeaf(t, x509.ExtKeyUsageClientAuth)}
-		classicalClient.CurvePreferences = []tls.CurveID{tls.X25519}
-		classicalTransport := &http.Transport{TLSClientConfig: classicalClient, DisableKeepAlives: true}
-		defer classicalTransport.CloseIdleConnections()
-		_, err = (&http.Client{Transport: classicalTransport, Timeout: 5 * time.Second}).Get(classical.URL)
-		require.Error(t, err)
-
-		oldTLSClient := strictClient.Clone()
-		oldTLSClient.MinVersion, oldTLSClient.MaxVersion = tls.VersionTLS12, tls.VersionTLS12
-		oldTLSTransport := &http.Transport{TLSClientConfig: oldTLSClient, DisableKeepAlives: true}
-		defer oldTLSTransport.CloseIdleConnections()
-		_, err = (&http.Client{Transport: oldTLSTransport, Timeout: 5 * time.Second}).Get(strict.URL)
-		require.Error(t, err)
+		for _, test := range []struct {
+			name   string
+			mutate func(*tls.Config)
+		}{
+			{"classical key exchange", func(c *tls.Config) { c.CurvePreferences = []tls.CurveID{tls.X25519} }},
+			{"TLS 1.2", func(c *tls.Config) { c.MinVersion, c.MaxVersion = tls.VersionTLS12, tls.VersionTLS12 }},
+			{"classical client identity", func(c *tls.Config) {
+				c.Certificates = []tls.Certificate{ca.classicalLeaf(t, x509.ExtKeyUsageClientAuth)}
+			}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				clientConfig := strictClient.Clone()
+				test.mutate(clientConfig)
+				transport := &http.Transport{TLSClientConfig: clientConfig, DisableKeepAlives: true}
+				defer transport.CloseIdleConnections()
+				response, err := (&http.Client{Transport: transport, Timeout: 5 * time.Second}).Get(strict.URL)
+				if response != nil {
+					require.NoError(t, response.Body.Close())
+				}
+				require.Error(t, err)
+			})
+		}
 	})
 }
