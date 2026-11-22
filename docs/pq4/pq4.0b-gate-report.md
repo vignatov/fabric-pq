@@ -15,6 +15,17 @@ and baseline behavior remain separate.
   commit alone.
 - Environment: WSL Ubuntu 24.04, Linux amd64, Go 1.27.4, `GOFIPS140=off`,
   vendored dependencies and `GOFLAGS=-buildvcs=false`.
+- CI head: `1d5721572a5d3a7150d29ae2ae48dfc1a767ae60`, Go 1.27.4
+  (`linux/amd64`). GitHub Actions run
+  [45066471753](https://github.com/vignatov/fabric-pq/actions/runs/45066471753)
+  completed successfully, including Basic Checks, PQ4.0 Feasibility, the
+  PQ4.0B component checks, unit tests and all Verify Build integration jobs.
+  PQ3 isolated acceptance run
+  [45066471774](https://github.com/vignatov/fabric-pq/actions/runs/45066471774)
+  also completed successfully; both temporary and permanent profile
+  acceptance steps and protected-evidence verification passed.
+- CI status above means the configured workflows passed; it does not upgrade
+  any network-wide PQ4 proof below from INCOMPLETE.
 - No peer, orderer, `osnadmin` or chaincode-server binary was built or
   identified for these PQ4.0B component results. The Go test binaries were
   ephemeral and their hashes were not recorded. Binary provenance for the
@@ -79,10 +90,10 @@ Each result applies to the **requested gate**, not merely the component test.
 | Real CCAAS metadata, strict mTLS and registration | INCOMPLETE | Existing CCAAS component remains a baseline feasibility test, not strict policy enforcement. |
 | Actual orderer administration and `osnadmin` strict mTLS | INCOMPLETE | Existing HTTP feasibility components are not an orderer listener or strict `osnadmin` integration. |
 | No private keys in distributable CCAAS packages | INCOMPLETE | No strict CCAAS package was created or examined. |
-| PQ3.5 temporary/permanent acceptance | INCOMPLETE | Not rerun for this worktree; prior merged-baseline results are documented separately. |
+| PQ3.5 temporary/permanent acceptance | PASS | The PQ3 isolated acceptance workflow passed both `rfc5612-test-only-v1` and `pactway-hybrid-certificate-v1`, including protected-evidence verification, on this head; see run [45066471774](https://github.com/vignatov/fabric-pq/actions/runs/45066471774). |
 | Existing PQ4.0 regression | PASS | Full feasibility package passed locally with the component changes. |
 | Baseline Raft rollback characterization | INCOMPLETE | Not rerun for this worktree; its earlier observed panic is not PQ4 protection. |
-| Dedicated full acceptance CI and independent review | INCOMPLETE | The workflow adds component checks only. Full acceptance, CI execution and independent review have not occurred. |
+| Dedicated full acceptance CI and independent review | INCOMPLETE | The Verify Build, PQ4.0 Feasibility, PQ4.0B Component Checks and PQ3 isolated acceptance workflows passed on this head. The PQ4.0B workflow covers components only; full network acceptance and independent review have not occurred. |
 
 ### Negative-case accounting
 
@@ -165,9 +176,10 @@ PASS
 
 Intermediate focused runs failed to compile because of a syntax error and an
 unused variable during test edits. Both were corrected and the relevant
-race-enabled tests above passed afterward. Full Verify Build, network
-acceptance, unsupported binary tests, PQ3.5 acceptance and the Raft rollback
-test were not run.
+race-enabled tests above passed afterward. Network acceptance, unsupported-binary tests and the Raft rollback test were
+not run locally. Full Verify Build and PQ3 temporary/permanent profile
+acceptance ran in GitHub Actions and passed on the commit above; this does
+not provide the missing network-wide PQ4 evidence.
 
 The first PR `Basic Checks` run failed on two lint rules for one integer loop
 and one direct protobuf field access. These were changed to integer range and
