@@ -272,6 +272,12 @@ and verifies the recovered Fabric block metadata and signature.
 The subprocess runs the native Raft chain with a test support adapter.
 CI records that test executable and the separately built orderer binary.
 
+On revision `e1b5c0c3ded096bdd5686d2720da61594d659333`, Ubuntu 24.04 with
+Go 1.27.4 and `GOFIPS140=off` passed the race-enabled Raft subprocess
+cases, follower-quorum and snapshot refusal cases, and the Raft, follower,
+and delivery suites. The job log records both binary SHA-256 digests.
+[PQ4.0D Linux test log](https://github.com/vignatov/fabric-pq/actions/runs/45107469515/job/137471930424)
+
 The dedicated PQ4.0D job records the tested revision, binaries, Linux runner,
 Go version, and test output. See the PR checks for executed results, including
 PQ4.0C, PQ4 components, Fabric unit and integration tests, and both PQ3 isolated

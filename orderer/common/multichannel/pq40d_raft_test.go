@@ -222,15 +222,16 @@ func TestPQ40DRaftWorker(t *testing.T) {
 		envelope, err := protoutil.ExtractEnvelope(candidate, 0)
 		require.NoError(t, err)
 		armed.Store(true)
-		if mode == "before-guard" {
+		switch mode {
+		case "before-guard":
 			require.ErrorContains(t, native.Configure(envelope, 0), "load operator approval")
 			// Bypass the proposal guard to exercise receipt of a configuration
 			// already decided before the local orderer can authorize it.
 			require.NoError(t, native.Node.Propose(t.Context(), raw))
-		} else if mode == "snapshot-before-apply" {
+		case "snapshot-before-apply":
 			message := pq40dSnapshotMessage(native.Node.Status(), raw, 8)
 			require.NoError(t, native.Consensus(&ab.ConsensusRequest{Payload: protoutil.MarshalOrPanic(message)}, 2))
-		} else {
+		default:
 			require.NoError(t, native.Configure(envelope, 0))
 		}
 		<-time.After(10 * time.Second)
