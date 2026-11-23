@@ -10,7 +10,6 @@ SPDX-License-Identifier: Apache-2.0
 package multichannel
 
 import (
-	"fmt"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -190,7 +189,7 @@ func (r *Registrar) discoverLedgers(channelsWithJoinBlock map[string]*cb.Block) 
 		// Prune empty ledgers without a join block
 		if rl.Height() == 0 {
 			if _, ok := channelsWithJoinBlock[channelID]; !ok {
-				if r.recordProtectedFailure(channelID, fmt.Errorf("protected ledger is empty and has no join block")) {
+				if r.recordProtectedFailure(channelID, errors.New("protected ledger is empty and has no join block")) {
 					continue
 				}
 				logger.Warnf("Channel '%s' has an empty ledger without a join-block, removing it", channelID)
@@ -544,7 +543,7 @@ func (r *Registrar) createNewChain(configtx *cb.Envelope) *ChainSupport {
 
 	// If we have no blocks, we need to create the genesis block ourselves.
 	if ledgerResources.Height() == 0 {
-		if r.recordProtectedFailure(channelID, fmt.Errorf("protected channel requires a verified genesis block")) {
+		if r.recordProtectedFailure(channelID, errors.New("protected channel requires a verified genesis block")) {
 			return nil
 		}
 		if err := ledgerResources.Append(blockledger.CreateNextBlock(ledgerResources, []*cb.Envelope{configtx})); err != nil {

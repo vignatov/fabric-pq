@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
@@ -334,9 +335,7 @@ func (c *Channel) finish(record journal, committed configuration, current checkp
 	case record.Previous.Checkpoint:
 		if !publish {
 			record.Next.Blocks = make(map[string]blockIdentity, len(current.Blocks)+1)
-			for id, block := range current.Blocks {
-				record.Next.Blocks[id] = block
-			}
+			maps.Copy(record.Next.Blocks, current.Blocks)
 			record.Next.Blocks[c.ID] = record.Block
 		}
 		if err := s.write("checkpoint", record.Next); err != nil {

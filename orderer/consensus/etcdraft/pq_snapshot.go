@@ -127,7 +127,7 @@ func (c *Chain) protectedSnapshotBlocks(snapshot *raftpb.Snapshot) ([]*common.Bl
 		return nil, fmt.Errorf("%w: invalid snapshot block", errSnapshotEvidence)
 	}
 	number := target.GetHeader().GetNumber()
-	if syncer, ok := c.support.(interface{ WaitForBlockCommit() }); ok {
+	if syncer, ok := c.support.(interface{ WaitForBlockCommit() uint64 }); ok {
 		syncer.WaitForBlockCommit()
 	}
 	height := c.support.Height()
@@ -141,7 +141,7 @@ func (c *Chain) protectedSnapshotBlocks(snapshot *raftpb.Snapshot) ([]*common.Bl
 		}
 		puller, err := c.createPuller()
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", errSnapshotEvidence, err)
+			return nil, fmt.Errorf("%w: %w", errSnapshotEvidence, err)
 		}
 		defer puller.Close()
 		for sequence := height; sequence <= number; sequence++ {
@@ -179,7 +179,7 @@ func verifySnapshotVoters(state *raftpb.ConfState, block *common.Block, index ui
 		return errSnapshotEvidence
 	}
 	expected := config.GetConsenterIds()
-	if config.GetRaftIndex() == 0 || config.GetRaftIndex() > index || len(expected) == 0 ||
+	if config.GetRaftIndex() == 0 || config.GetRaftIndex() != index || len(expected) == 0 ||
 		!sameVoters(expected, state.GetVoters()) || len(state.GetLearners()) != 0 || len(state.GetVotersOutgoing()) != 0 ||
 		len(state.GetLearnersNext()) != 0 || state.GetAutoLeave() {
 		return fmt.Errorf("%w: snapshot voters do not match Fabric membership at its boundary", errSnapshotEvidence)
@@ -210,7 +210,7 @@ func (c *Chain) applyProtectedSnapshot(snapshot *raftpb.Snapshot) error {
 	}
 	for _, block := range blocks {
 		if protoutil.IsConfigBlock(block) {
-			if syncer, ok := c.support.(interface{ WaitForBlockCommit() }); ok {
+			if syncer, ok := c.support.(interface{ WaitForBlockCommit() uint64 }); ok {
 				syncer.WaitForBlockCommit()
 			}
 			if err := c.checkOrderedMembership(block); err != nil {
@@ -227,7 +227,7 @@ func (c *Chain) applyProtectedSnapshot(snapshot *raftpb.Snapshot) error {
 		}
 		c.lastBlock = block
 	}
-	if syncer, ok := c.support.(interface{ WaitForBlockCommit() }); ok {
+	if syncer, ok := c.support.(interface{ WaitForBlockCommit() uint64 }); ok {
 		syncer.WaitForBlockCommit()
 	}
 	if err := c.activation.Ledger.Sync(); err != nil {

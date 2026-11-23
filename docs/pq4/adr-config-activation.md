@@ -177,8 +177,9 @@ snapshots. Restart and role changes retain the marker. An interrupted
 authorized write remains closed until the exact transition is reconciled.
 Node-wide checkpoint corruption closes all channels bound to that store.
 
-Protected snapshots require a verifiable block history and an authenticated
-voter set at the snapshot boundary before installation. Insufficient
+Protected snapshots require a verifiable block history, an exact match
+between the signed block's Raft index and the snapshot index, and an
+authenticated voter set at that boundary before installation. Insufficient
 evidence leaves the channel closed. The bounded pull verifies up to 1,024
 missing blocks per snapshot. Participation joins from a later block start
 from the provisioned genesis anchor and verify forward before changing their

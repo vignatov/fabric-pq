@@ -456,8 +456,8 @@ func (c *Chain) start() {
 		CheckInterval: interval,
 		Condition:     c.suspectEviction,
 	}
-	c.periodicChecker.Run()
 	go c.run()
+	c.periodicChecker.Run()
 }
 
 // Order submits normal type transactions for ordering.
@@ -591,6 +591,9 @@ func (c *Chain) Consensus(req *orderer.ConsensusRequest, sender uint64) error {
 	}
 
 	if stepMsg.GetTo() != c.raftID {
+		if c.activation != nil {
+			return errors.New("Raft message targets a different protected replica")
+		}
 		c.logger.Warnf("Received msg to %d, my ID is probably wrong due to out of date, cowardly halting", stepMsg.GetTo())
 		c.halt()
 		return nil
@@ -1053,7 +1056,7 @@ func (c *Chain) writeBlock(block *common.Block, index uint64) error {
 		return nil
 	}
 	if c.activation != nil && protoutil.IsConfigBlock(block) {
-		if syncer, ok := c.support.(interface{ WaitForBlockCommit() }); ok {
+		if syncer, ok := c.support.(interface{ WaitForBlockCommit() uint64 }); ok {
 			syncer.WaitForBlockCommit()
 		}
 		if err := c.checkOrderedMembership(block); err != nil {
@@ -1478,7 +1481,7 @@ func (c *Chain) apply(ents []*raftpb.Entry) error {
 	if c.accDataSize >= c.sizeLimit && ents[position].GetType() == raftpb.EntryNormal && len(ents[position].GetData()) > 0 {
 		b := protoutil.UnmarshalBlockOrPanic(ents[position].GetData())
 		if c.activation != nil {
-			if syncer, ok := c.support.(interface{ WaitForBlockCommit() }); ok {
+			if syncer, ok := c.support.(interface{ WaitForBlockCommit() uint64 }); ok {
 				syncer.WaitForBlockCommit()
 			}
 			if verifySnapshotVoters(c.confState, c.support.Block(b.GetHeader().GetNumber()), c.appliedIndex) != nil {

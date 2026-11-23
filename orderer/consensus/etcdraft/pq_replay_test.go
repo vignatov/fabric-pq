@@ -16,10 +16,9 @@ import (
 func TestPQ40DRejectsStaleReadIndex(t *testing.T) {
 	channel := &activation.Channel{Gate: &activation.Gate{}}
 	barrier := replayBarrier{term: 1, leader: 2, requestID: []byte("old")}
-	next := raft.Status{BasicStatus: raft.BasicStatus{
-		HardState: &raftpb.HardState{Term: new(uint64(2))},
-		SoftState: raft.SoftState{Lead: 3},
-	}}
+	var next raft.Status
+	next.HardState = &raftpb.HardState{Term: new(uint64(2))}
+	next.Lead = 3
 	barrier.observe(raft.Ready{ReadStates: []raft.ReadState{{Index: 10, RequestCtx: []byte("old")}}}, next, channel)
 	require.Zero(t, barrier.index)
 	barrier.requestID = []byte("current")

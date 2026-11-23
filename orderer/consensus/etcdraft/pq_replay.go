@@ -102,7 +102,7 @@ func (c *Chain) reconcileReplay(progress *replayProgress) error {
 		return nil
 	}
 	c.snapshotPending = 0
-	if syncer, ok := c.support.(interface{ WaitForBlockCommit() }); ok {
+	if syncer, ok := c.support.(interface{ WaitForBlockCommit() uint64 }); ok {
 		syncer.WaitForBlockCommit()
 	}
 	if err := c.activation.Ledger.Sync(); err != nil {
@@ -148,7 +148,7 @@ func sameVoters(first, second []uint64) bool {
 // with the native configuration proposal path.
 func ValidateConfigForActivation(conf channelconfig.Orderer) error {
 	if conf.ConsensusType() != "etcdraft" {
-		return fmt.Errorf("protected orderer activation requires etcdraft")
+		return errors.New("protected orderer activation requires etcdraft")
 	}
 	metadata := &etcdraft.ConfigMetadata{}
 	if err := proto.Unmarshal(conf.ConsensusMetadata(), metadata); err != nil {
@@ -205,7 +205,7 @@ func (c *Chain) checkOrderedMembership(block *common.Block) error {
 		return err
 	}
 	if metadata == nil {
-		return fmt.Errorf("missing ordered Raft config metadata")
+		return errors.New("missing ordered Raft config metadata")
 	}
 	_, err = ComputeMembershipChanges(c.opts.BlockMetadata, c.opts.Consenters, metadata.GetConsenters())
 	return err

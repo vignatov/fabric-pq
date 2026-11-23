@@ -11,6 +11,11 @@ Set `General.PQActivation` in `orderer.yaml` with `Channels`, `StateDir`,
 for `StateDir` and provision its ancestors durably before startup.
 `TrustAnchor` contains raw ML-DSA-65 public key bytes. The state directory
 uses the PQ4.0C `checkpoint` record produced by `Store.Provision`. Supply
+`Version` as the initial node checkpoint version, `Digest` as the 32-byte
+SHA-256 array of the signed policy payload, and `Policy` as an object with
+the base64 fields `Payload` and `Signature`.
+
+Supply
 `genesis-<sha256(channel-id)>` as a JSON string containing the lowercase
 hex Fabric genesis header hash. For later-block participation joins, also
 supply `genesis-<sha256(channel-id)>.block` containing the raw Fabric block.

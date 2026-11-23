@@ -4,6 +4,7 @@ package multichannel
 
 import (
 	"crypto/mldsa"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,7 +37,7 @@ func newProtectedChannels(config localconfig.PQActivation) protectedChannels {
 		return p
 	}
 	if config.StateDir == "" || config.TrustAnchor == "" || config.Network == "" || config.Node == "" {
-		p.err = fmt.Errorf("protected orderer activation requires state directory, trust anchor, network and node")
+		p.err = errors.New("protected orderer activation requires state directory, trust anchor, network and node")
 		return p
 	}
 	key, err := os.ReadFile(config.TrustAnchor)
@@ -75,7 +76,7 @@ func (r *Registrar) startupConfigBlock(id string, ledger blockledger.Reader) (*c
 		return ConfigBlockOrPanic(ledger), nil
 	}
 	if ledger.Height() == 0 {
-		return nil, fmt.Errorf("protected ledger is empty")
+		return nil, errors.New("protected ledger is empty")
 	}
 	tip, err := blockledger.GetBlockByNumber(ledger, ledger.Height()-1)
 	if err != nil {
@@ -134,7 +135,7 @@ func (r *Registrar) activationFor(resources *ledgerResources) *activation.Channe
 			Height: func() (uint64, error) { return ledger.Height(), nil },
 			LatestConfig: func() (*cb.Block, error) {
 				if ledger.Height() == 0 {
-					return nil, fmt.Errorf("protected ledger is empty")
+					return nil, errors.New("protected ledger is empty")
 				}
 				tip, err := blockledger.GetBlockByNumber(ledger, ledger.Height()-1)
 				if err != nil {

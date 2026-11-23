@@ -179,7 +179,7 @@ func (n *node) run(campaign bool) {
 				n.logger.Panicf("Failed to persist etcd/raft data: %s", err)
 			}
 			if protected {
-				commit := max(rd.HardState.GetCommit(), rd.Snapshot.GetMetadata().GetIndex())
+				commit := max(rd.GetCommit(), rd.Snapshot.GetMetadata().GetIndex())
 				if commit > barrier.commit {
 					if err := n.storage.Sync(); err != nil {
 						n.chain.failProtected(err)

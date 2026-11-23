@@ -259,9 +259,9 @@ establish a Linux crash-recovery result.
 | Path | Production boundary | Evidence |
 | --- | --- | --- |
 | Raft leader | Verify staged approval before proposal and exact ordered block before native apply | Native restart harness exercises the real leader proposal and application paths. |
-| Raft follower | Run the same ordered-block guard before changing block or membership state | Shared application path and focused replay barrier tests. |
+| Raft follower | Run the same ordered-block guard before changing block or membership state | Three native Raft replicas with a test transport exercise follower quarantine and verify the remaining quorum commits the block. |
 | Snapshot and eviction | Verify signed history before restoring membership or writing catch-up blocks | Bounded application path. |
-| Participation follower | Verify genesis and each config before raw append or verifier updates | Guarded follower path. Promotion uses the native startup barrier. |
+| Participation follower | Verify genesis and each config before raw append or verifier updates | Focused append test observes ledger and verifier effects. Promotion uses the native startup barrier. |
 
 The Linux restart harness interrupts a subprocess after persisting the Raft
 commit but before the guard, after authorization but before native apply,

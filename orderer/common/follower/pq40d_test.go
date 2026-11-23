@@ -66,9 +66,9 @@ func TestPQ40DParticipationAppend(t *testing.T) {
 			base := testfixture.Config(t, genesis)
 			fixture.Provision(t, store, base)
 			update := fixture.Update(t, base)
-			block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.Header))
+			block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
 			block.Data = &cb.BlockData{Data: [][]byte{protoutil.MarshalOrPanic(fixture.Envelope(t, update))}}
-			block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+			block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 			if approved {
 				payload, err := json.Marshal(fixture.Authorize(t, 1, base, update.GetConfig()))
 				require.NoError(t, err)
