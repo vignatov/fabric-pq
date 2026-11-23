@@ -314,8 +314,11 @@ func (n *pq40dPromotionNetwork) commitConfig(t *testing.T, ledgers map[uint64]bl
 			node, _ := n.nodes.Load(id)
 			chain := node.(*etcdraft.Chain)
 			_, status := chain.StatusReport()
+			if status != types.StatusActive || ledger.Height() != blockNumber {
+				continue
+			}
 			state := chain.Node.Status()
-			if ledger.Height() != blockNumber || status != types.StatusActive || state.RaftState != raft.StateLeader || state.GetTerm() <= proposedTerm {
+			if state.RaftState != raft.StateLeader || state.GetTerm() <= proposedTerm {
 				continue
 			}
 			// An accepted proposal can still be lost on a leadership change.
