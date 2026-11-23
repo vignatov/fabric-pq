@@ -50,6 +50,13 @@ func (cs *ChainSupport) AdmissionReady() bool {
 	return cs.activation == nil || cs.activation.Ready()
 }
 
+func (cs *ChainSupport) RequiredDeliveryAdmission() <-chan struct{} {
+	if cs.activation == nil {
+		return nil
+	}
+	return cs.activation.Gate.Errored()
+}
+
 func newChainSupport(
 	registrar *Registrar,
 	ledgerResources *ledgerResources,

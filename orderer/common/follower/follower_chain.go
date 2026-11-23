@@ -15,6 +15,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
@@ -168,9 +169,12 @@ func NewChain(
 			}
 		} else if joinBlock.GetHeader().GetNumber() == 0 {
 			chain.genesis = joinBlock
-			chain.activationError = options.Activation.VerifyGenesis(joinBlock)
+			chain.activationError = options.Activation.AuthorizeGenesis(joinBlock)
 		} else {
 			chain.genesis, chain.activationError = options.Activation.GenesisBlock()
+			if chain.activationError == nil {
+				chain.activationError = options.Activation.AuthorizeGenesis(chain.genesis)
+			}
 		}
 		if chain.activationError != nil {
 			chain.status = types.StatusFailed
@@ -642,7 +646,10 @@ func (c *Chain) appendBlock(block *common.Block) error {
 		return c.ledgerResources.Append(block)
 	}
 	if err != nil {
-		c.activationError = controller.QuarantineOrderer(err)
+		c.activationError = err
+		if !errors.Is(err, activation.ErrNativeRecovery) {
+			c.activationError = controller.QuarantineOrderer(err)
+		}
 		c.setStatus(types.StatusFailed)
 		return c.activationError
 	}

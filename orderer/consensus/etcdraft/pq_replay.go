@@ -205,7 +205,7 @@ func (c *Chain) checkOrderedMembership(block *common.Block) error {
 		return err
 	}
 	if metadata == nil {
-		return errors.New("missing ordered Raft config metadata")
+		return nil
 	}
 	_, err = ComputeMembershipChanges(c.opts.BlockMetadata, c.opts.Consenters, metadata.GetConsenters())
 	return err
@@ -219,14 +219,27 @@ func (c *Chain) validateProtectedConfChange(change *raftpb.ConfChange, index uin
 		for number := c.support.Height(); number > 0; number-- {
 			block := c.support.Block(number - 1)
 			if number == 1 {
-				genesis, _, err := ConsensusMetadataFromConfigBlock(block)
+				envelope, err := ConfigEnvelopeFromBlock(block)
 				if err != nil {
 					return err
 				}
-				ids = make([]uint64, len(genesis.GetConsenters()))
-				for i := range ids {
-					ids[i] = uint64(i + 1)
+				bundle, err := channelconfig.NewBundleFromEnvelope(envelope, c.CryptoProvider)
+				if err != nil {
+					return err
 				}
+				config, ok := bundle.OrdererConfig()
+				if !ok {
+					return errors.New("protected genesis has no orderer configuration")
+				}
+				genesis := &etcdraft.ConfigMetadata{}
+				if err := proto.Unmarshal(config.ConsensusMetadata(), genesis); err != nil {
+					return err
+				}
+				metadata, err := ReadBlockMetadata(nil, genesis)
+				if err != nil {
+					return err
+				}
+				ids = metadata.GetConsenterIds()
 				break
 			}
 			metadata, err := blockRaftMetadata(block)

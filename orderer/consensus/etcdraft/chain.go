@@ -257,7 +257,7 @@ func NewChain(
 			return nil, err
 		}
 	}
-	storage, err := CreateStorage(lg, opts.WALDir, opts.SnapDir, opts.MemoryStorage)
+	storage, err := createStorage(lg, opts.WALDir, opts.SnapDir, opts.MemoryStorage, protected != nil)
 	if err != nil {
 		if protected != nil {
 			return nil, protected.QuarantineOrderer(err)

@@ -176,6 +176,8 @@ The registrar reports failure and retains the channel's ledger, WAL, and
 snapshots. Restart and role changes retain the marker. An interrupted
 authorized write remains closed until the exact transition is reconciled.
 Node-wide checkpoint corruption closes all channels bound to that store.
+Protected WAL restore preserves unreadable evidence for diagnosis.
+Best-effort delivery honors protected channel admission.
 
 Protected snapshots require a verifiable block history, an exact match
 between the signed block's Raft index and the snapshot index, and an

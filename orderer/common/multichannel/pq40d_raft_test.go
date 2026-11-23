@@ -35,6 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/server/v3/storage/wal"
 	"go.etcd.io/raft/v3"
+	"go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -162,7 +163,7 @@ func TestPQ40DRaftWorker(t *testing.T) {
 			os.Exit(pq40dCrash)
 		}
 	}
-	native, controller, ledger, support, err := pq40dNode(t, root, 1, nil, crash)
+	native, controller, ledger, support, err := pq40dNode(t, root, 1, nil, nil, crash)
 	genesis, getErr := controller.Ledger.Block(0)
 	require.NoError(t, getErr)
 	raw, getErr := os.ReadFile(filepath.Join(root, "candidate"))
@@ -216,7 +217,7 @@ func TestPQ40DRaftWorker(t *testing.T) {
 	}
 }
 
-func pq40dNode(t *testing.T, root string, raftID uint64, rpc etcdraft.RPC, probe func(string)) (*etcdraft.Chain, *activation.Channel, blockledger.ReadWriter, *ChainSupport, error) {
+func pq40dNode(t *testing.T, root string, raftID uint64, rpc etcdraft.RPC, puller etcdraft.CreateBlockPuller, probe func(string)) (*etcdraft.Chain, *activation.Channel, blockledger.ReadWriter, *ChainSupport, error) {
 	t.Helper()
 	fixture := testfixture.New(t)
 	ledger, view := ordererActivationLedger(t, filepath.Join(root, "ledger"), func(string) {})
@@ -234,8 +235,8 @@ func pq40dNode(t *testing.T, root string, raftID uint64, rpc etcdraft.RPC, probe
 	support.cutter = blockcutter.NewReceiverImpl(testfixture.ChannelID, support, blockcutter.NewMetrics(&disabled.Provider{}))
 	raftMeta, err := protoutil.GetConsenterMetadataFromBlock(tip)
 	require.NoError(t, err)
-	configuration, _, err := etcdraft.ConsensusMetadataFromConfigBlock(config)
-	require.NoError(t, err)
+	configuration := &pb.ConfigMetadata{}
+	require.NoError(t, proto.Unmarshal(support.SharedConfig().ConsensusMetadata(), configuration))
 	meta, err := etcdraft.ReadBlockMetadata(raftMeta, configuration)
 	require.NoError(t, err)
 	supported := pq40dSupport{support, func() {
@@ -250,7 +251,7 @@ func pq40dNode(t *testing.T, root string, raftID uint64, rpc etcdraft.RPC, probe
 		TickInterval: 10 * time.Millisecond, ElectionTick: 10, HeartbeatTick: 1,
 		MaxSizePerMsg: 1 << 20, MaxInflightBlocks: 4, EvictionSuspicion: time.Hour,
 		BlockMetadata: meta, Consenters: etcdraft.CreateConsentersMap(meta, configuration),
-	}, pq40dConfigurator{}, rpc, fixture.Crypto, nil, nil, nil)
+	}, pq40dConfigurator{}, rpc, fixture.Crypto, puller, nil, nil)
 	return native, &controller, ledger, support, err
 }
 
@@ -277,7 +278,7 @@ func TestPQ40DFollowerQuarantinePreservesQuorum(t *testing.T) {
 		root := t.TempDir()
 		roots[id] = root
 		pq40dProvisionGenesis(t, root, proto.CloneOf(genesis), true)
-		node, _, ledger, _, err := pq40dNode(t, root, id, pq40dTransport{id: id, nodes: nodes}, nil)
+		node, _, ledger, _, err := pq40dNode(t, root, id, pq40dTransport{id: id, nodes: nodes}, nil, nil)
 		require.NoError(t, err)
 		nodes[id] = node
 		ledgers[id] = ledger
@@ -321,4 +322,52 @@ func TestPQ40DFollowerQuarantinePreservesQuorum(t *testing.T) {
 		}
 		require.Eventually(t, func() bool { return ledger.Height() == 2 }, 15*time.Second, 20*time.Millisecond)
 	}
+}
+
+type pq40dSnapshotPuller struct {
+	etcdraft.BlockPuller
+	block *cb.Block
+}
+
+func (p pq40dSnapshotPuller) PullBlock(uint64) *cb.Block { return p.block }
+func (p pq40dSnapshotPuller) Close()                     {}
+
+func TestPQ40DSnapshotCannotBypassLocalApproval(t *testing.T) {
+	root := t.TempDir()
+	genesis := pq40dGenesis(t, 1)
+	pq40dProvisionGenesis(t, root, genesis, false)
+	raw, err := os.ReadFile(filepath.Join(root, "candidate"))
+	require.NoError(t, err)
+	proposed, err := protoutil.UnmarshalBlock(raw)
+	require.NoError(t, err)
+	source, _ := ordererActivationLedger(t, t.TempDir(), func(string) {})
+	require.NoError(t, source.Append(genesis))
+	writer, _ := activationWriter(t, testfixture.New(t), source, genesis)
+	const index = 8
+	writer.WriteConfigBlock(proposed, protoutil.MarshalOrPanic(&pb.BlockMetadata{RaftIndex: index, ConsenterIds: []uint64{1}, NextConsenterId: 2}))
+
+	native, controller, ledger, _, err := pq40dNode(t, root, 1, nil, func() (etcdraft.BlockPuller, error) {
+		return pq40dSnapshotPuller{block: proposed}, nil
+	}, nil)
+	require.NoError(t, err)
+	native.Start()
+	t.Cleanup(native.Halt)
+	require.Eventually(t, controller.Ready, 10*time.Second, 10*time.Millisecond)
+	status := native.Node.Status()
+	message := &raftpb.Message{
+		From: new(uint64(2)), To: new(uint64(1)), Term: new(status.GetTerm() + 1),
+		Type: new(raftpb.MsgSnap),
+		Snapshot: &raftpb.Snapshot{
+			Data: raw,
+			Metadata: &raftpb.SnapshotMetadata{
+				Index: new(uint64(index)), Term: new(status.GetTerm()),
+				ConfState: &raftpb.ConfState{Voters: []uint64{1}},
+			},
+		},
+	}
+	require.ErrorContains(t, native.Consensus(&ab.ConsensusRequest{Payload: protoutil.MarshalOrPanic(message)}, 2), "load catch-up operator approval")
+	require.False(t, controller.Ready())
+	require.Equal(t, uint64(1), ledger.Height())
+	_, statusAfter := native.StatusReport()
+	require.Equal(t, types.StatusFailed, statusAfter)
 }

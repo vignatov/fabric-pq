@@ -41,6 +41,15 @@ var (
 	}
 )
 
+type guardedDeliverChain struct {
+	deliver.Chain
+	admission <-chan struct{}
+}
+
+func (c guardedDeliverChain) RequiredDeliveryAdmission() <-chan struct{} {
+	return c.admission
+}
+
 var _ = Describe("Deliver", func() {
 	Describe("NewHandler", func() {
 		var fakeChainManager *mock.ChainManager
@@ -940,6 +949,14 @@ var _ = Describe("Deliver", func() {
 					Expect(fakeResponseSender.SendStatusResponseCallCount()).To(Equal(1))
 					resp := fakeResponseSender.SendStatusResponseArgsForCall(0)
 					Expect(resp).To(Equal(cb.Status_SUCCESS))
+				})
+
+				It("honors required channel admission", func() {
+					fakeChainManager.GetChainReturns(guardedDeliverChain{Chain: fakeChain, admission: errCh})
+					Expect(handler.Handle(context.Background(), server)).To(Succeed())
+					Expect(fakeChain.ReaderCallCount()).To(BeZero())
+					Expect(fakeResponseSender.SendStatusResponseCallCount()).To(Equal(1))
+					Expect(fakeResponseSender.SendStatusResponseArgsForCall(0)).To(Equal(cb.Status_SERVICE_UNAVAILABLE))
 				})
 			})
 		})
