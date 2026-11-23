@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -65,6 +66,7 @@ func TestPQ40DRaftProcessRecovery(t *testing.T) {
 		{name: "committed_without_approval", breakpoint: "before-guard"},
 		{name: "approved_before_apply", breakpoint: "before-ledger-commit", approved: true},
 		{name: "approved_after_append", breakpoint: "after-ledger-commit", approved: true},
+		{name: "snapshot_committed_before_catchup", breakpoint: "snapshot-before-apply", approved: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -85,6 +87,12 @@ func TestPQ40DRaftProcessRecovery(t *testing.T) {
 			mode := "verify-quarantine"
 			if tc.approved {
 				mode = "verify-approval"
+			}
+			if tc.breakpoint == "snapshot-before-apply" {
+				files, err := filepath.Glob(filepath.Join(root, "snap", "*.snap"))
+				require.NoError(t, err)
+				require.NotEmpty(t, files)
+				mode = "verify-approval-snapshot"
 			}
 			for range 2 {
 				out, err := run(mode)
@@ -159,16 +167,26 @@ func TestPQ40DRaftWorker(t *testing.T) {
 	}
 	var armed atomic.Bool
 	crash := func(boundary string) {
-		if mode == boundary && armed.Load() {
+		if (mode == boundary || mode == "snapshot-before-apply" && boundary == "before-ledger-commit") && armed.Load() {
 			os.Exit(pq40dCrash)
 		}
 	}
-	native, controller, ledger, support, err := pq40dNode(t, root, 1, nil, nil, crash)
+	raw, err := os.ReadFile(filepath.Join(root, "candidate"))
+	require.NoError(t, err)
+	candidate, err := protoutil.UnmarshalBlock(raw)
+	require.NoError(t, err)
+	var puller etcdraft.CreateBlockPuller
+	if strings.Contains(mode, "snapshot") {
+		factory := newFactory(filepath.Join(root, "ledger"))
+		ledger, err := factory.GetOrCreate(testfixture.ChannelID)
+		require.NoError(t, err)
+		genesis := blockledger.GetBlock(ledger, 0)
+		require.NotNil(t, genesis)
+		factory.Close()
+		puller = pq40dSnapshotProof(t, genesis, proto.CloneOf(candidate), 8)
+	}
+	native, controller, ledger, support, err := pq40dNode(t, root, 1, nil, puller, crash)
 	genesis, getErr := controller.Ledger.Block(0)
-	require.NoError(t, getErr)
-	raw, getErr := os.ReadFile(filepath.Join(root, "candidate"))
-	require.NoError(t, getErr)
-	candidate, getErr := protoutil.UnmarshalBlock(raw)
 	require.NoError(t, getErr)
 
 	if mode == "verify-quarantine" && err != nil {
@@ -188,7 +206,7 @@ func TestPQ40DRaftWorker(t *testing.T) {
 		}, 10*time.Second, 10*time.Millisecond)
 		require.False(t, controller.Ready())
 		require.Equal(t, uint64(1), ledger.Height())
-	case "verify-approval":
+	case "verify-approval", "verify-approval-snapshot":
 		require.Eventually(t, controller.Ready, 10*time.Second, 10*time.Millisecond)
 		require.Equal(t, uint64(2), ledger.Height())
 		block, err := controller.Ledger.Block(1)
@@ -209,6 +227,9 @@ func TestPQ40DRaftWorker(t *testing.T) {
 			// Bypass the proposal guard to exercise receipt of a configuration
 			// already decided before the local orderer can authorize it.
 			require.NoError(t, native.Node.Propose(t.Context(), raw))
+		} else if mode == "snapshot-before-apply" {
+			message := pq40dSnapshotMessage(native.Node.Status(), raw, 8)
+			require.NoError(t, native.Consensus(&ab.ConsensusRequest{Payload: protoutil.MarshalOrPanic(message)}, 2))
 		} else {
 			require.NoError(t, native.Configure(envelope, 0))
 		}
@@ -340,34 +361,42 @@ func TestPQ40DSnapshotCannotBypassLocalApproval(t *testing.T) {
 	require.NoError(t, err)
 	proposed, err := protoutil.UnmarshalBlock(raw)
 	require.NoError(t, err)
-	source, _ := ordererActivationLedger(t, t.TempDir(), func(string) {})
-	require.NoError(t, source.Append(genesis))
-	writer, _ := activationWriter(t, testfixture.New(t), source, genesis)
 	const index = 8
-	writer.WriteConfigBlock(proposed, protoutil.MarshalOrPanic(&pb.BlockMetadata{RaftIndex: index, ConsenterIds: []uint64{1}, NextConsenterId: 2}))
-
-	native, controller, ledger, _, err := pq40dNode(t, root, 1, nil, func() (etcdraft.BlockPuller, error) {
-		return pq40dSnapshotPuller{block: proposed}, nil
-	}, nil)
+	puller := pq40dSnapshotProof(t, genesis, proposed, index)
+	native, controller, ledger, _, err := pq40dNode(t, root, 1, nil, puller, nil)
 	require.NoError(t, err)
 	native.Start()
 	t.Cleanup(native.Halt)
 	require.Eventually(t, controller.Ready, 10*time.Second, 10*time.Millisecond)
-	status := native.Node.Status()
-	message := &raftpb.Message{
-		From: new(uint64(2)), To: new(uint64(1)), Term: new(status.GetTerm() + 1),
-		Type: new(raftpb.MsgSnap),
-		Snapshot: &raftpb.Snapshot{
-			Data: raw,
-			Metadata: &raftpb.SnapshotMetadata{
-				Index: new(uint64(index)), Term: new(status.GetTerm()),
-				ConfState: &raftpb.ConfState{Voters: []uint64{1}},
-			},
-		},
-	}
+	message := pq40dSnapshotMessage(native.Node.Status(), raw, index)
 	require.ErrorContains(t, native.Consensus(&ab.ConsensusRequest{Payload: protoutil.MarshalOrPanic(message)}, 2), "load catch-up operator approval")
 	require.False(t, controller.Ready())
 	require.Equal(t, uint64(1), ledger.Height())
 	_, statusAfter := native.StatusReport()
 	require.Equal(t, types.StatusFailed, statusAfter)
+}
+
+func pq40dSnapshotProof(t *testing.T, genesis, candidate *cb.Block, index uint64) etcdraft.CreateBlockPuller {
+	t.Helper()
+	source, _ := ordererActivationLedger(t, t.TempDir(), func(string) {})
+	require.NoError(t, source.Append(genesis))
+	writer, _ := activationWriter(t, testfixture.New(t), source, genesis)
+	writer.WriteConfigBlock(candidate, protoutil.MarshalOrPanic(&pb.BlockMetadata{RaftIndex: index, ConsenterIds: []uint64{1}, NextConsenterId: 2}))
+	return func() (etcdraft.BlockPuller, error) {
+		return pq40dSnapshotPuller{block: proto.CloneOf(candidate)}, nil
+	}
+}
+
+func pq40dSnapshotMessage(status raft.Status, raw []byte, index uint64) *raftpb.Message {
+	return &raftpb.Message{
+		From: new(uint64(2)), To: new(uint64(1)), Term: new(status.GetTerm() + 1),
+		Type: new(raftpb.MsgSnap),
+		Snapshot: &raftpb.Snapshot{
+			Data: raw,
+			Metadata: &raftpb.SnapshotMetadata{
+				Index: &index, Term: new(status.GetTerm()),
+				ConfState: &raftpb.ConfState{Voters: []uint64{1}},
+			},
+		},
+	}
 }

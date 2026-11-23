@@ -265,9 +265,10 @@ establish a Linux crash-recovery result.
 
 The Linux restart harness interrupts a subprocess after persisting the Raft
 commit but before the guard, after authorization but before native apply,
-and after the native append but before checkpoint publication. It reopens
-the same WAL and file ledger, checks repeated quarantine or authorized
-recovery, and verifies the recovered Fabric block metadata and signature.
+after the native append but before checkpoint publication, and after native
+snapshot persistence but before catch-up append. It reopens the same WAL,
+snapshot, and file ledger, checks repeated quarantine or authorized recovery,
+and verifies the recovered Fabric block metadata and signature.
 The subprocess runs the native Raft chain with a test support adapter.
 CI records that test executable and the separately built orderer binary.
 

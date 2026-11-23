@@ -425,9 +425,13 @@ func (c *Channel) recover(replaySettled, orderer bool) error {
 				if err := c.finish(record, committed, current, !orderer); err != nil || !orderer {
 					return err
 				}
-				policy, err = c.authenticate(record.Next)
+				current, err = readRecord[checkpoint](s.dir, "checkpoint")
 				if err != nil {
-					return c.quarantine(err)
+					return c.quarantineNode(err)
+				}
+				policy, err = c.authenticate(current)
+				if err != nil {
+					return c.quarantineNode(err)
 				}
 			}
 			if current.Checkpoint != record.Next.Checkpoint {
@@ -453,10 +457,6 @@ func (c *Channel) recover(replaySettled, orderer bool) error {
 	}
 	if orderer && committed.identity.Number != 0 {
 		expected := current.Blocks[c.ID]
-		if record.Channel == c.ID && record.Block == committed.identity && record.Next.Checkpoint != current.Checkpoint {
-			// Recovery above just finished this exact pending transition.
-			expected = record.Block
-		}
 		if expected != committed.identity {
 			return c.quarantine(errors.New("committed block identity conflicts with protected checkpoint"))
 		}

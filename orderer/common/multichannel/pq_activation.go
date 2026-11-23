@@ -61,10 +61,11 @@ func (r *Registrar) recordProtectedFailure(id string, err error) bool {
 	if !r.protected.contains(id) {
 		return false
 	}
+	info := types.ChannelInfo{Name: id, ConsensusRelation: types.ConsensusRelationConsenter, Status: types.StatusFailed}
 	if controller := r.protected.channels[id]; controller != nil {
 		controller.Suspend()
+		info.Height, _ = controller.Ledger.Height()
 	}
-	info := types.ChannelInfo{Name: id, ConsensusRelation: types.ConsensusRelationConsenter, Status: types.StatusFailed}
 	r.failedProtected[id] = info
 	r.ReportConsensusRelationAndStatusMetrics(id, info.ConsensusRelation, info.Status)
 	logger.Errorf("Protected channel %s stopped during initialization: %s", id, err)
