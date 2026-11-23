@@ -110,6 +110,11 @@ func NewBlockPuller(support consensus.ConsenterSupport,
 		Dialer:              stdDialer,
 		StopChannel:         make(chan struct{}),
 	}
+	if protected, ok := support.(interface{ AdmissionReady() bool }); ok && !protected.AdmissionReady() {
+		// A protected chain may need this puller to validate a snapshot before
+		// transferring ownership to the native state machine.
+		bp.MaxPullBlockRetries = 1
+	}
 
 	return &LedgerBlockPuller{
 		Height:         support.Height,

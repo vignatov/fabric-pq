@@ -25,6 +25,22 @@ type generation struct {
 	work   sync.WaitGroup
 }
 
+var closedAdmission = func() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}()
+
+// Errored closes when the currently active generation stops admitting work.
+func (g *Gate) Errored() <-chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.current == nil {
+		return closedAdmission
+	}
+	return g.current.ctx.Done()
+}
+
 func (g *Gate) isOpen() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()

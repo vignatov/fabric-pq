@@ -88,6 +88,7 @@ type evictionSuspector struct {
 	halt                       func()
 	writeBlock                 func(block *common.Block) error
 	triggerCatchUp             func(sn *raftpb.Snapshot)
+	guardedCatchUp             func(sn *raftpb.Snapshot)
 	halted                     bool
 	timesTriggered             int
 }
@@ -112,6 +113,10 @@ func (es *evictionSuspector) confirmSuspicion(cumulativeSuspicion time.Duration)
 	lastConfigBlock, err := cluster.PullLastConfigBlock(puller)
 	if err != nil {
 		es.logger.Errorf("Failed pulling the last config block: %v", err)
+		return
+	}
+	if es.guardedCatchUp != nil {
+		es.guardedCatchUp(&raftpb.Snapshot{Data: protoutil.MarshalOrPanic(lastConfigBlock)})
 		return
 	}
 

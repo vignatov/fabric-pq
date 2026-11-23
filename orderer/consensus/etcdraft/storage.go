@@ -69,9 +69,26 @@ func CreateStorage(
 	snapDir string,
 	ram MemoryStorage,
 ) (*RaftStorage, error) {
+	return createStorage(lg, walDir, snapDir, ram, false)
+}
+
+func createStorage(lg *flogging.FabricLogger, walDir, snapDir string, ram MemoryStorage, preserveEvidence bool) (*RaftStorage, error) {
 	sn, err := createSnapshotter(lg, snapDir)
 	if err != nil {
 		return nil, err
+	}
+	if preserveEvidence {
+		files, err := os.ReadDir(snapDir)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range files {
+			if strings.HasSuffix(file.Name(), ".snap") {
+				if _, err := snap.Read(lg.Zap(), filepath.Join(snapDir, file.Name())); err != nil {
+					return nil, errors.Wrap(err, "protected snapshot is corrupt")
+				}
+			}
+		}
 	}
 
 	snapshot, err := sn.Load()
@@ -87,7 +104,7 @@ func CreateStorage(
 			snapshot.GetMetadata().GetTerm(), snapshot.GetMetadata().GetIndex(), snapshot.GetMetadata().GetConfState().GetVoters())
 	}
 
-	w, st, ents, err := createOrReadWAL(lg, walDir, snapshot)
+	w, st, ents, err := createOrReadWAL(lg, walDir, snapshot, preserveEvidence)
 	if err != nil {
 		return nil, errors.Errorf("failed to create or read WAL: %s", err)
 	}
@@ -171,7 +188,7 @@ func createSnapshotter(logger *flogging.FabricLogger, snapDir string) (*snap.Sna
 	return snap.New(logger.Zap(), snapDir), nil
 }
 
-func createOrReadWAL(lg *flogging.FabricLogger, walDir string, snapshot *raftpb.Snapshot) (w *wal.WAL, st *raftpb.HardState, ents []*raftpb.Entry, err error) {
+func createOrReadWAL(lg *flogging.FabricLogger, walDir string, snapshot *raftpb.Snapshot, preserveEvidence bool) (w *wal.WAL, st *raftpb.HardState, ents []*raftpb.Entry, err error) {
 	if !wal.Exist(walDir) {
 		lg.Infof("No WAL data found, creating new WAL at path '%s'", walDir)
 		// TODO(jay_guo) add metadata to be persisted with wal once we need it.
@@ -210,6 +227,9 @@ func createOrReadWAL(lg *flogging.FabricLogger, walDir string, snapshot *raftpb.
 
 			if errc := w.Close(); errc != nil {
 				return nil, st, nil, errors.Errorf("failed to close erroneous WAL: %s", errc)
+			}
+			if preserveEvidence {
+				return nil, st, nil, errors.Wrap(err, "protected WAL could not be read")
 			}
 
 			// only repair UnexpectedEOF and only repair once

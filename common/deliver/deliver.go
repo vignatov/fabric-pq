@@ -233,10 +233,17 @@ func (h *Handler) deliverBlocks(ctx context.Context, srv *Server, envelope *cb.E
 	}
 
 	erroredChan := chain.Errored()
+	var requiredAdmission <-chan struct{}
+	if guarded, ok := chain.(interface{ RequiredDeliveryAdmission() <-chan struct{} }); ok {
+		requiredAdmission = guarded.RequiredDeliveryAdmission()
+		if requiredAdmission != nil {
+			erroredChan = requiredAdmission
+		}
+	}
 	if seekInfo.GetErrorResponse() == ab.SeekInfo_BEST_EFFORT {
 		// In a 'best effort' delivery of blocks, we should ignore consenter errors
 		// and continue to deliver blocks according to the client's request.
-		erroredChan = nil
+		erroredChan = requiredAdmission
 	}
 	select {
 	case <-erroredChan:
@@ -325,6 +332,11 @@ func (h *Handler) deliverBlocks(ctx context.Context, srv *Server, envelope *cb.E
 		// increment block number to support FAIL_IF_NOT_READY deliver behavior
 		number++
 
+		select {
+		case <-requiredAdmission:
+			return cb.Status_SERVICE_UNAVAILABLE, nil
+		default:
+		}
 		if err := accessControl.Evaluate(); err != nil {
 			logger.Warningf("[channel: %s] Client authorization revoked for deliver request from %s: %s", chdr.GetChannelId(), addr, err)
 			return cb.Status_FORBIDDEN, nil
@@ -343,6 +355,11 @@ func (h *Handler) deliverBlocks(ctx context.Context, srv *Server, envelope *cb.E
 		}
 
 		signedData := &protoutil.SignedData{Data: envelope.GetPayload(), Identity: shdr.GetCreator(), Signature: envelope.GetSignature()}
+		select {
+		case <-requiredAdmission:
+			return cb.Status_SERVICE_UNAVAILABLE, nil
+		default:
+		}
 		if err := srv.SendBlockResponse(block2send, chdr.GetChannelId(), chain, signedData); err != nil {
 			logger.Warningf("[channel: %s] Error sending to %s: %s", chdr.GetChannelId(), addr, err)
 			return cb.Status_INTERNAL_SERVER_ERROR, err

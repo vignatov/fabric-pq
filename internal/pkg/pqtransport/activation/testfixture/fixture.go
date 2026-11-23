@@ -99,6 +99,12 @@ func (f Fixture) Update(t *testing.T, base *cb.Config) *cb.ConfigEnvelope {
 	require.NoError(t, proto.Unmarshal(value.GetValue(), batch))
 	batch.AbsoluteMaxBytes++
 	value.Value = protoutil.MarshalOrPanic(batch)
+	return f.UpdateTo(t, base, next)
+}
+
+// UpdateTo signs and validates the difference between two test configurations.
+func (f Fixture) UpdateTo(t *testing.T, base, next *cb.Config) *cb.ConfigEnvelope {
+	t.Helper()
 	update, err := update.Compute(base, next)
 	require.NoError(t, err)
 	update.ChannelId = ChannelID

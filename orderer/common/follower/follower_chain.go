@@ -15,6 +15,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
@@ -94,6 +95,8 @@ type ChannelParticipationMetricsReporter interface {
 // i.e. the follower is performing onboarding for an etcdraft.Chain. Otherwise, the follower return clusterRelation
 // "follower".
 type Chain struct {
+	activationError   error
+	genesis           *common.Block
 	mutex             sync.Mutex    // Protects the start/stop flags & channels, consensusRelation & status. All the rest are immutable or accessed only by the go-routine.
 	started           bool          // Start once.
 	stopped           bool          // Stop once.
@@ -158,6 +161,26 @@ func NewChain(
 		cryptoProvider:                      cryptoProvider,
 		channelParticipationMetricsReporter: channelParticipationMetricsReporter,
 	}
+	if options.Activation != nil {
+		if chain.firstHeight > 0 {
+			chain.activationError = options.Activation.VerifyGenesis(ledgerResources.Block(0))
+			if chain.activationError == nil {
+				chain.activationError = options.Activation.RecoverOrdererLedger()
+			}
+		} else if joinBlock.GetHeader().GetNumber() == 0 {
+			chain.genesis = joinBlock
+			chain.activationError = options.Activation.AuthorizeGenesis(joinBlock)
+		} else {
+			chain.genesis, chain.activationError = options.Activation.GenesisBlock()
+			if chain.activationError == nil {
+				chain.activationError = options.Activation.AuthorizeGenesis(chain.genesis)
+			}
+		}
+		if chain.activationError != nil {
+			chain.status = types.StatusFailed
+			return chain, nil
+		}
+	}
 
 	if ledgerResources.Height() > 0 {
 		if err := chain.loadLastConfig(); err != nil {
@@ -185,7 +208,14 @@ func NewChain(
 
 		// Check the block puller creation function once before we start the follower. This ensures we can extract
 		// the endpoints from the join-block.
-		puller, err := blockPullerFactory.BlockPuller(joinBlock, nil)
+		source := joinBlock
+		if options.Activation != nil {
+			source = chain.genesis
+			if chain.firstHeight > 0 {
+				source = chain.lastConfig
+			}
+		}
+		puller, err := blockPullerFactory.BlockPuller(source, nil)
 		if err != nil {
 			return nil, errors.WithMessage(err, "error creating a block puller from join-block")
 		}
@@ -194,7 +224,7 @@ func NewChain(
 		if chain.joinBlock.GetHeader().GetNumber() < chain.ledgerResources.Height() {
 			chain.status = types.StatusActive
 		}
-		if isMem, _ := chain.clusterConsenter.IsChannelMember(chain.joinBlock); isMem {
+		if isMem, _ := chain.clusterConsenter.IsChannelMember(chain.joinBlock); isMem && options.Activation == nil {
 			chain.consensusRelation = types.ConsensusRelationConsenter
 		}
 
@@ -297,6 +327,11 @@ func (c *Chain) run() {
 		close(c.doneChan)
 		c.logger.Debug("The follower.Chain puller goroutine is exiting")
 	}()
+	if c.activationError != nil {
+		c.setStatus(types.StatusFailed)
+		c.logger.Errorf("Protected participation follower stopped: %v", c.activationError)
+		return
+	}
 
 	if err := c.pull(); err != nil {
 		c.logger.Warnf("Pull failed, follower chain stopped, error: %s", err)
@@ -383,14 +418,21 @@ func (c *Chain) pullUpToJoin() error {
 
 	var err error
 	// Block puller created with endpoints from the join-block.
-	c.blockPuller, err = c.blockPullerFactory.BlockPuller(c.joinBlock, c.stopChan)
+	source := c.joinBlock
+	if c.options.Activation != nil {
+		source = c.genesis
+		if c.ledgerResources.Height() > 0 {
+			source = c.lastConfig
+		}
+	}
+	c.blockPuller, err = c.blockPullerFactory.BlockPuller(source, c.stopChan)
 	if err != nil { // This should never happen since we check the join-block before we start.
 		return errors.WithMessagef(err, "error creating block puller")
 	}
 	defer c.blockPuller.Close()
 	// Since we created the block-puller with the join-block, do not update the endpoints from the
 	// config blocks that precede it.
-	err = c.pullUntilLatestWithRetry(targetHeight, false)
+	err = c.pullUntilLatestWithRetry(targetHeight, c.options.Activation != nil)
 	if err != nil {
 		return err
 	}
@@ -485,6 +527,9 @@ func (c *Chain) pullUntilLatestWithRetry(latestNetworkHeight uint64, updateEndpo
 			c.logger.Debugf("Pulled %d blocks until latest network height: %d", numPulled, latestNetworkHeight)
 			break
 		}
+		if c.activationError != nil {
+			return c.activationError
+		}
 
 		c.logger.Debugf("Error while trying to pull to latest height: %d; going to try again in %v; error: %s",
 			latestNetworkHeight, retryInterval, errPull)
@@ -552,7 +597,7 @@ func (c *Chain) pullUntilTarget(targetHeight uint64, updateEndpoints bool) (uint
 			}
 
 			actualPrevHash = protoutil.BlockHeaderHash(nextBlock.GetHeader())
-			if err := c.ledgerResources.Append(nextBlock); err != nil {
+			if err := c.appendBlock(nextBlock); err != nil {
 				return n, errors.WithMessagef(err, "failed to append block %d to the ledger", nextBlock.GetHeader().GetNumber())
 			}
 
@@ -574,6 +619,41 @@ func (c *Chain) pullUntilTarget(targetHeight uint64, updateEndpoints bool) (uint
 	}
 	c.logger.Debugf("Pulled blocks from %d to %d", firstBlockToPull, targetHeight)
 	return targetHeight - firstBlockToPull, nil
+}
+
+func (c *Chain) appendBlock(block *common.Block) error {
+	controller := c.options.Activation
+	if controller == nil {
+		return c.ledgerResources.Append(block)
+	}
+	if err := controller.ValidateBlockShape(block); err != nil {
+		c.activationError = controller.QuarantineOrderer(err)
+		c.setStatus(types.StatusFailed)
+		return c.activationError
+	}
+	var err error
+	switch {
+	case block.GetHeader().GetNumber() == 0:
+		if err = controller.AuthorizeGenesis(block); err == nil {
+			err = c.ledgerResources.Append(block)
+		}
+		if err == nil {
+			err = controller.RecoverOrdererLedger()
+		}
+	case protoutil.IsConfigBlock(block):
+		err = controller.ApplyOrdererConfig(block, func() error { return c.ledgerResources.Append(block) })
+	default:
+		return c.ledgerResources.Append(block)
+	}
+	if err != nil {
+		c.activationError = err
+		if !errors.Is(err, activation.ErrNativeRecovery) {
+			c.activationError = controller.QuarantineOrderer(err)
+		}
+		c.setStatus(types.StatusFailed)
+		return c.activationError
+	}
+	return nil
 }
 
 func (c *Chain) loadLastConfig() error {

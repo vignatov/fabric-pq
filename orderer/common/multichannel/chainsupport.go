@@ -11,6 +11,7 @@ import (
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
 	"github.com/hyperledger/fabric/orderer/common/msgprocessor"
 	"github.com/hyperledger/fabric/orderer/common/types"
@@ -21,6 +22,7 @@ import (
 
 // ChainSupport holds the resources for a particular channel.
 type ChainSupport struct {
+	activation *activation.Channel
 	*ledgerResources
 	msgprocessor.Processor
 	*BlockWriter
@@ -38,6 +40,21 @@ type ChainSupport struct {
 	// Therefore, we let each chain report its cluster relation and status through this interface. Non cluster
 	// type chains (solo) are assigned a static reporter.
 	consensus.StatusReporter
+}
+
+func (cs *ChainSupport) OrdererActivation() *activation.Channel {
+	return cs.activation
+}
+
+func (cs *ChainSupport) AdmissionReady() bool {
+	return cs.activation == nil || cs.activation.Ready()
+}
+
+func (cs *ChainSupport) RequiredDeliveryAdmission() <-chan struct{} {
+	if cs.activation == nil {
+		return nil
+	}
+	return cs.activation.Gate.Errored()
 }
 
 func newChainSupport(
@@ -74,6 +91,15 @@ func newChainSupport(
 
 	// Set up the block writer
 	cs.BlockWriter = newBlockWriter(lastBlock, cs)
+	cs.activation = registrar.activationFor(ledgerResources)
+	if cs.activation != nil {
+		if err := cs.activation.VerifyGenesis(ledgerResources.Block(0)); err != nil {
+			return nil, cs.activation.QuarantineOrderer(err)
+		}
+		if err := cs.activation.RecoverOrdererLedger(); err != nil {
+			return nil, err
+		}
+	}
 
 	// Set up the consenter
 	consenterType := ledgerResources.SharedConfig().ConsensusType()

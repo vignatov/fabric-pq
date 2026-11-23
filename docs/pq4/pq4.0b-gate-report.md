@@ -251,3 +251,57 @@ The existing Verify Build jobs cover Basic Checks, lint, PQ4.0 feasibility and
 PQ4.0B components, and the Fabric unit and integration suites. PQ3 acceptance
 runs in its existing workflow. A build or cross-compilation alone does not
 establish a Linux crash-recovery result.
+## PQ4.0D Raft quarantine and replay evidence
+
+**Overall PQ4.0B gate remains INCOMPLETE.** See the
+[native interception diagram, quarantine transitions, and replay contract](adr-config-activation.md#pq40d-native-orderer-lifecycle).
+
+The local `General.PQActivation.Channels` selector is an isolated-development
+opt-in. Removing a channel selects baseline behavior without checking its
+signed protected checkpoint. Production qualification requires protection
+selection bound to signed bootstrap policy and protected state, with refusal
+when the local selector disagrees.
+
+| Path | Production boundary | Evidence |
+| --- | --- | --- |
+| Raft leader | Verify staged approval before proposal and exact ordered block before native apply | Native restart harness exercises the real leader proposal and application paths. |
+| Raft follower | Run the same ordered-block guard before changing block or membership state | Three native Raft replicas with a test transport exercise follower quarantine, quorum survival, and ordering a new block on a separate classical channel. |
+| Snapshot and eviction | Verify signed history before restoring membership or writing catch-up blocks | Incoming Raft snapshot test supplies a signed newer config and checks that missing approval leaves the ledger untouched. |
+| Participation follower | Verify genesis and each config before raw append or verifier updates | Focused append coverage and a TLS block-pull test through registrar promotion and native Raft replay. |
+
+The protected promotion test joins through the registrar using a signed
+membership block. The participation follower pulls only through that block.
+After promotion, a newer committed configuration arrives through native Raft
+and pauses before ledger append. The test observes the native commit index
+ahead of the applied index, closed broadcast and delivery admission, and no
+configuration publication. Releasing the append lets the node apply the
+expected block, publish its configuration, and open admission. The test runs
+real Raft replicas with a controlled test transport and a local TLS delivery
+fixture. It passed under the race detector on `e7ec9fe108990b3a5a675987aefb9ffbd4d1bb46`.
+[Linux promotion evidence](https://github.com/vignatov/fabric-pq/actions/runs/45153492245/job/137620512128)
+
+The Linux restart harness interrupts a subprocess after persisting the Raft
+commit but before the guard, after authorization but before native apply,
+after the native append but before checkpoint publication, and after native
+snapshot persistence but before catch-up append. It reopens the same WAL,
+snapshot, and file ledger, checks repeated quarantine or authorized recovery,
+and verifies the recovered Fabric block metadata and signature.
+The subprocess runs the native Raft chain with a test support adapter.
+CI records that test executable and the separately built orderer binary.
+
+On revision `e1b5c0c3ded096bdd5686d2720da61594d659333`, Ubuntu 24.04 with
+Go 1.27.4 and `GOFIPS140=off` passed the race-enabled Raft subprocess
+cases, follower-quorum and snapshot refusal cases, and the Raft, follower,
+and delivery suites. The job log records both binary SHA-256 digests.
+[PQ4.0D Linux test log](https://github.com/vignatov/fabric-pq/actions/runs/45107469515/job/137471930424)
+
+The dedicated PQ4.0D job records the tested revision, binaries, Linux runner,
+Go version, and test output. See the PR checks for executed results, including
+PQ4.0C, PQ4 components, Fabric unit and integration tests, and both PQ3 isolated
+profiles. Endpoint-level enforcement, a distributed crash matrix, and
+full shared TLS callback and resource publication remain open evidence.
+Full network qualification also requires TLS-first bootstrap across shared
+listeners, per-service and stream admission, the authenticated
+`PactwayPQTransportV1` capability, and strict CCAAS and orderer administration.
+The process-crash tests provide no evidence for power loss or privileged host
+rollback.
