@@ -25,6 +25,8 @@ import (
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
+	"github.com/hyperledger/fabric/common/channelconfig"
+	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
@@ -110,8 +112,14 @@ func pq40dProvision(t *testing.T, root string, approved bool) {
 
 func pq40dGenesis(t *testing.T, nodes int) *cb.Block {
 	t.Helper()
+	return pq40dGenesisForChannel(t, testfixture.ChannelID, nodes)
+}
+
+func pq40dGenesisForChannel(t *testing.T, channelID string, nodes int) *cb.Block {
+	t.Helper()
 	fixture := testfixture.New(t)
-	genesis := testfixture.Genesis(t)
+	genesis, err := configtxtest.MakeGenesisBlock(channelID)
+	require.NoError(t, err)
 	envelope, err := protoutil.ExtractEnvelope(genesis, 0)
 	require.NoError(t, err)
 	config := &cb.ConfigEnvelope{}
@@ -126,7 +134,9 @@ func pq40dGenesis(t *testing.T, nodes int) *cb.Block {
 	}
 	consensusType := config.GetConfig().GetChannelGroup().GetGroups()["Orderer"].GetValues()["ConsensusType"]
 	consensusType.Value = protoutil.MarshalOrPanic(&ab.ConsensusType{Type: "etcdraft", Metadata: protoutil.MarshalOrPanic(metadata)})
-	genesis.Data.Data[0] = protoutil.MarshalOrPanic(fixture.Envelope(t, config))
+	signed, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG, channelID, fixture.Fabric, config, 0, 0)
+	require.NoError(t, err)
+	genesis.Data.Data[0] = protoutil.MarshalOrPanic(signed)
 	genesis.Header.DataHash = protoutil.ComputeBlockDataHash(genesis.GetData())
 	return genesis
 }
@@ -255,26 +265,32 @@ func pq40dNode(t *testing.T, root string, raftID uint64, rpc etcdraft.RPC, pulle
 	support.BlockWriter = writer
 	support.activation = &controller
 	support.cutter = blockcutter.NewReceiverImpl(testfixture.ChannelID, support, blockcutter.NewMetrics(&disabled.Provider{}))
+	opts := pq40dRaftOptions(t, root, support, tip, raftID)
+	supported := pq40dSupport{support, func() {
+		if probe != nil {
+			probe("before-guard")
+		}
+	}}
+	native, err := etcdraft.NewChain(supported, opts, pq40dConfigurator{}, rpc, fixture.Crypto, puller, nil, nil)
+	return native, &controller, ledger, support, err
+}
+
+func pq40dRaftOptions(t *testing.T, root string, support *ChainSupport, tip *cb.Block, raftID uint64) etcdraft.Options {
+	t.Helper()
 	raftMeta, err := protoutil.GetConsenterMetadataFromBlock(tip)
 	require.NoError(t, err)
 	configuration := &pb.ConfigMetadata{}
 	require.NoError(t, proto.Unmarshal(support.SharedConfig().ConsensusMetadata(), configuration))
 	meta, err := etcdraft.ReadBlockMetadata(raftMeta, configuration)
 	require.NoError(t, err)
-	supported := pq40dSupport{support, func() {
-		if probe != nil {
-			probe("before-guard")
-		}
-	}}
-	native, err := etcdraft.NewChain(supported, etcdraft.Options{
+	return etcdraft.Options{
 		RaftID: raftID, WALDir: filepath.Join(root, "wal"), SnapDir: filepath.Join(root, "snap"),
 		Clock: clock.NewClock(), MemoryStorage: raft.NewMemoryStorage(),
 		Logger: flogging.MustGetLogger("pq40d.test"), Metrics: etcdraft.NewMetrics(&disabled.Provider{}),
 		TickInterval: 10 * time.Millisecond, ElectionTick: 10, HeartbeatTick: 1,
 		MaxSizePerMsg: 1 << 20, MaxInflightBlocks: 4, EvictionSuspicion: time.Hour,
 		BlockMetadata: meta, Consenters: etcdraft.CreateConsentersMap(meta, configuration),
-	}, pq40dConfigurator{}, rpc, fixture.Crypto, puller, nil, nil)
-	return native, &controller, ledger, support, err
+	}
 }
 
 type pq40dTransport struct {
@@ -292,6 +308,7 @@ func (p pq40dTransport) SendSubmit(destination uint64, message *ab.SubmitRequest
 }
 
 func TestPQ40DFollowerQuarantinePreservesQuorum(t *testing.T) {
+	other, otherLedger := pq40dUnprotectedChain(t)
 	genesis := pq40dGenesis(t, 3)
 	nodes := map[uint64]*etcdraft.Chain{}
 	roots := map[uint64]string{}
@@ -344,6 +361,47 @@ func TestPQ40DFollowerQuarantinePreservesQuorum(t *testing.T) {
 		}
 		require.Eventually(t, func() bool { return ledger.Height() == 2 }, 15*time.Second, 20*time.Millisecond)
 	}
+	envelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_MESSAGE, other.ChannelID(), testfixture.New(t).Fabric, &cb.Config{}, 0, 0)
+	require.NoError(t, err)
+	require.NoError(t, other.WaitReady())
+	require.NoError(t, other.Order(envelope, 0))
+	require.Eventually(t, func() bool { return otherLedger.Height() == 2 }, 10*time.Second, 20*time.Millisecond)
+}
+
+func pq40dUnprotectedChain(t *testing.T) (*ChainSupport, blockledger.ReadWriter) {
+	t.Helper()
+	const channelID = "independent-channel"
+	root := t.TempDir()
+	factory := newFactory(filepath.Join(root, "ledger"))
+	t.Cleanup(factory.Close)
+	ledger, err := factory.GetOrCreate(channelID)
+	require.NoError(t, err)
+	genesis := pq40dGenesisForChannel(t, channelID, 1)
+	require.NoError(t, ledger.Append(genesis))
+	fixture := testfixture.New(t)
+	bundle, err := channelconfig.NewBundle(channelID, testfixture.Config(t, genesis), fixture.Crypto)
+	require.NoError(t, err)
+	support := &ChainSupport{
+		SignerSerializer: fixture.Fabric,
+		ledgerResources: &ledgerResources{
+			ReadWriter: ledger,
+			configResources: &configResources{
+				mutableResources: channelconfig.NewBundleSource(bundle),
+				bccsp:            fixture.Crypto,
+				signer:           fixture.Fabric,
+			},
+		},
+	}
+	support.BlockWriter = newBlockWriter(genesis, support)
+	support.cutter = blockcutter.NewReceiverImpl(channelID, support, blockcutter.NewMetrics(&disabled.Provider{}))
+	opts := pq40dRaftOptions(t, root, support, genesis, 1)
+	native, err := etcdraft.NewChain(support, opts, pq40dConfigurator{}, nil, fixture.Crypto, nil, nil, nil)
+	require.NoError(t, err)
+	support.Chain = native
+	native.Start()
+	t.Cleanup(native.Halt)
+	require.Eventually(t, func() bool { return native.Node.Status().RaftState == raft.StateLeader }, 10*time.Second, 20*time.Millisecond)
+	return support, ledger
 }
 
 type pq40dSnapshotPuller struct {
