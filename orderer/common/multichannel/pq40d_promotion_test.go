@@ -214,7 +214,13 @@ func TestPQ40DProtectedParticipationPromotion(t *testing.T) {
 		_, _, _, err := registrar.BroadcastChannelSupport(normal)
 		require.ErrorContains(t, err, "admission is closed")
 		require.Zero(t, published.Load())
-		_, status := promoted.StatusReport()
+		select {
+		case <-promoted.RequiredDeliveryAdmission():
+		default:
+			t.Fatal("delivery admission is open during replay")
+		}
+		relation, status := promoted.StatusReport()
+		require.Equal(t, types.ConsensusRelationConsenter, relation)
 		require.Equal(t, types.StatusOnBoarding, status)
 	}
 	assertClosed()
@@ -239,6 +245,11 @@ func TestPQ40DProtectedParticipationPromotion(t *testing.T) {
 	_, _, ready, err := registrar.BroadcastChannelSupport(normal)
 	require.NoError(t, err)
 	require.Same(t, promoted, ready)
+	select {
+	case <-promoted.RequiredDeliveryAdmission():
+		t.Fatal("delivery admission is closed after replay")
+	default:
+	}
 	require.Equal(t, uint64(2), published.Load())
 	require.Equal(t, uint64(3), promoted.Height())
 	got, err := promoted.RetrieveBlockByNumber(2)
@@ -266,7 +277,7 @@ func pq40dPromotionGenesis(t *testing.T, fixture testfixture.Fixture, endpoint s
 			require.NoError(t, proto.Unmarshal(value.GetValue(), wrapper))
 			msp := &mb.FabricMSPConfig{}
 			require.NoError(t, proto.Unmarshal(wrapper.GetConfig(), msp))
-			msp.TlsRootCerts = [][]byte{root}
+			msp.TlsRootCerts = append(msp.GetTlsRootCerts(), root)
 			wrapper.Config = protoutil.MarshalOrPanic(msp)
 			value.Value = protoutil.MarshalOrPanic(wrapper)
 		}
