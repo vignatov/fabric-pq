@@ -35,6 +35,7 @@ import (
 	"github.com/hyperledger/fabric/orderer/consensus"
 	"github.com/hyperledger/fabric/orderer/consensus/etcdraft"
 	"github.com/hyperledger/fabric/protoutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/raft/v3"
 	"google.golang.org/protobuf/proto"
@@ -87,34 +88,10 @@ func TestPQ40DProtectedParticipationPromotion(t *testing.T) {
 		node.Start()
 		t.Cleanup(node.Halt)
 	}
-	var leader *etcdraft.Chain
-	var source blockledger.ReadWriter
-	require.Eventually(t, func() bool {
-		for id, ledger := range sourceLedgers {
-			node, _ := transport.nodes.Load(id)
-			chain := node.(*etcdraft.Chain)
-			_, status := chain.StatusReport()
-			if status == types.StatusActive && chain.Node.Status().RaftState == raft.StateLeader {
-				leader, source = chain, ledger
-				return true
-			}
-		}
-		return false
-	}, 15*time.Second, 20*time.Millisecond)
-	require.NoError(t, leader.Configure(fixture.Envelope(t, membership), 0))
-	require.Eventually(t, func() bool { return source.Height() == 2 }, 15*time.Second, 20*time.Millisecond)
-	join, err := source.RetrieveBlockByNumber(1)
-	require.NoError(t, err)
+	join := transport.commitConfig(t, sourceLedgers, fixture.Envelope(t, membership), 0, 1)
 	joinIndex := pq40dPromotionBlockIndex(t, join)
 	require.NotZero(t, joinIndex)
-	require.Eventually(t, func() bool {
-		_, status := leader.StatusReport()
-		return status == types.StatusActive
-	}, 15*time.Second, 20*time.Millisecond)
-	require.NoError(t, leader.Configure(fixture.Envelope(t, pending), 1))
-	require.Eventually(t, func() bool { return source.Height() == 3 }, 15*time.Second, 20*time.Millisecond)
-	replayBlock, err := source.RetrieveBlockByNumber(2)
-	require.NoError(t, err)
+	replayBlock := transport.commitConfig(t, sourceLedgers, fixture.Envelope(t, pending), 1, 2)
 	replayIndex := pq40dPromotionBlockIndex(t, replayBlock)
 	require.Greater(t, replayIndex, joinIndex)
 
@@ -319,6 +296,39 @@ type pq40dPromotionNetwork struct {
 	nodes sync.Map
 }
 
+func (n *pq40dPromotionNetwork) commitConfig(t *testing.T, ledgers map[uint64]blockledger.ReadWriter, envelope *cb.Envelope, sequence, blockNumber uint64) *cb.Block {
+	t.Helper()
+	var committed *cb.Block
+	var proposedTerm uint64
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		for _, ledger := range ledgers {
+			if ledger.Height() > blockNumber {
+				block, err := ledger.RetrieveBlockByNumber(blockNumber)
+				require.NoError(collect, err)
+				committed = block
+				return
+			}
+		}
+
+		for id, ledger := range ledgers {
+			node, _ := n.nodes.Load(id)
+			chain := node.(*etcdraft.Chain)
+			_, status := chain.StatusReport()
+			state := chain.Node.Status()
+			if ledger.Height() != blockNumber || status != types.StatusActive || state.RaftState != raft.StateLeader || state.GetTerm() <= proposedTerm {
+				continue
+			}
+			// An accepted proposal can still be lost on a leadership change.
+			// Retry it in a new term only while the block is absent.
+			require.NoError(collect, chain.Configure(envelope, sequence))
+			proposedTerm = state.GetTerm()
+			break
+		}
+		collect.Errorf("waiting for committed configuration block %d", blockNumber)
+	}, 15*time.Second, 20*time.Millisecond)
+	return committed
+}
+
 type pq40dPromotionRPC struct {
 	network *pq40dPromotionNetwork
 	id      uint64
@@ -332,13 +342,9 @@ func (r pq40dPromotionRPC) SendConsensus(to uint64, request *ab.ConsensusRequest
 	return node.(*etcdraft.Chain).Consensus(request, r.id)
 }
 
-func (r pq40dPromotionRPC) SendSubmit(to uint64, request *ab.SubmitRequest, report func(error)) error {
-	node, present := r.network.nodes.Load(to)
-	if !present {
-		return errors.New("test replica is disconnected")
-	}
-	report(node.(*etcdraft.Chain).Submit(request, r.id))
-	return nil
+func (r pq40dPromotionRPC) SendSubmit(to uint64, _ *ab.SubmitRequest, _ func(error)) error {
+	// The test submits directly to the leader and reselects it on each retry.
+	return fmt.Errorf("Raft leadership changed before node %d could submit to node %d", r.id, to)
 }
 
 type pq40dPromotionConsenter struct {
