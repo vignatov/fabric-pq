@@ -171,7 +171,7 @@ func (c *Chain) protectedSnapshotBlocks(snapshot *raftpb.Snapshot, restored bool
 			// A remote claim can be replaced. Conflicting voters in our own
 			// persisted snapshot and ledger at the same index cannot be ignored.
 			if errors.Is(err, errSnapshotVoters) && (!restored || number >= height) {
-				return nil, fmt.Errorf("%w: %v", errSnapshotEvidence, err)
+				return nil, fmt.Errorf("%w: %w", errSnapshotEvidence, err)
 			}
 			return nil, err
 		}
