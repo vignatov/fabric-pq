@@ -47,16 +47,17 @@ type Authorization struct {
 // Channel connects the proof to one channel's native ledger and publication
 // boundary. An orderer must complete native replay before recovering readiness.
 type Channel struct {
-	Store    *Store
-	Gate     *Gate
-	Ledger   Ledger
-	Network  string
-	Node     string
-	ID       string
-	Signer   *mldsa.PublicKey
-	Crypto   bccsp.BCCSP
-	Validate func(channelconfig.Resources) error
-	Publish  func(*channelconfig.Bundle) error
+	BootstrapError error
+	Store          *Store
+	Gate           *Gate
+	Ledger         Ledger
+	Network        string
+	Node           string
+	ID             string
+	Signer         *mldsa.PublicKey
+	Crypto         bccsp.BCCSP
+	Validate       func(channelconfig.Resources) error
+	Publish        func(*channelconfig.Bundle) error
 }
 
 type configuration struct {
@@ -214,6 +215,10 @@ func (s *Store) readJournal() (journal, error) {
 // leave an ambiguous durable outcome on error, so the gate stays closed until
 // recovery. A Fabric-invalid candidate cannot enter the native commit path.
 func (c *Channel) Apply(block *cb.Block, auth Authorization, commit func() error) error {
+	return c.apply(block, auth, commit, false)
+}
+
+func (c *Channel) apply(block *cb.Block, auth Authorization, commit func() error, orderer bool) error {
 	s := c.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -221,7 +226,7 @@ func (c *Channel) Apply(block *cb.Block, auth Authorization, commit func() error
 		c.Gate.close()
 		return err
 	}
-	if s.gates[c.ID] != c.Gate || !c.Gate.isOpen() {
+	if s.gates[c.ID] != c.Gate || (!orderer && !c.Gate.isOpen()) {
 		return errors.New("channel must establish native readiness before applying a configuration")
 	}
 	previous, err := c.latest()
@@ -249,7 +254,7 @@ func (c *Channel) Apply(block *cb.Block, auth Authorization, commit func() error
 	if err != nil {
 		return c.quarantineNode(err)
 	}
-	if pending.Phase == prepared || pending.Phase == commitPending {
+	if !orderer && (pending.Phase == prepared || pending.Phase == commitPending) {
 		if pending.Channel == c.ID {
 			c.Gate.close()
 		}
@@ -267,13 +272,23 @@ func (c *Channel) Apply(block *cb.Block, auth Authorization, commit func() error
 		!bytes.Equal(block.GetHeader().GetPreviousHash(), protoutil.BlockHeaderHash(tip.GetHeader())) {
 		return c.quarantine(errors.New("invalid checkpoint version or configuration block order"))
 	}
-	record := journal{
-		Phase: prepared, Channel: c.ID, Base: previous.identity, Block: next.identity, Previous: current,
-		Next: checkpoint{
-			Checkpoint: pqtransport.Checkpoint{Version: current.Version + 1, Digest: sha256.Sum256(auth.Policy)},
-			Policy:     signedDocument{auth.Policy, auth.PolicySignature},
-		},
-		Operation: signedDocument{auth.Transition, auth.TransitionSignature},
+	record := c.record(previous, next, current, auth)
+	if orderer {
+		switch {
+		case (pending.Phase == prepared || pending.Phase == commitPending) &&
+			pending.Channel == c.ID && pending.Base == previous.identity &&
+			pending.Block == next.identity && pending.Previous.Checkpoint == current.Checkpoint:
+			record = pending
+		case pending.Phase == commitPending ||
+			(pending.Phase == prepared && (pending.Channel != c.ID || next.identity.Number < pending.Block.Number)):
+			return c.quarantine(errors.New("ordered block conflicts with unfinished checkpoint transition"))
+		default:
+			auth, err = c.stagedAuthorization(current.Version + 1)
+			if err != nil {
+				return c.quarantine(fmt.Errorf("load operator approval: %w", err))
+			}
+			record = c.record(previous, next, current, auth)
+		}
 	}
 	if err := c.verifyOperator(previous, next, record); err != nil {
 		return c.quarantine(err)
@@ -290,6 +305,9 @@ func (c *Channel) Apply(block *cb.Block, auth Authorization, commit func() error
 	}
 	s.probe("before-ledger-commit")
 	if err := commit(); err != nil {
+		if orderer {
+			return errors.Join(ErrNativeRecovery, err)
+		}
 		return fmt.Errorf("native commit outcome requires recovery: %w", err)
 	}
 	s.probe("after-ledger-commit")
@@ -297,10 +315,16 @@ func (c *Channel) Apply(block *cb.Block, auth Authorization, commit func() error
 	if err != nil || committed.identity != record.Block {
 		return c.quarantine(errors.Join(errors.New("native commit does not match prepared block"), err))
 	}
-	return c.finish(record, committed, current)
+	if err := c.finish(record, committed, current, !orderer); err != nil {
+		if orderer {
+			return errors.Join(ErrNativeRecovery, err)
+		}
+		return err
+	}
+	return nil
 }
 
-func (c *Channel) finish(record journal, committed configuration, current checkpoint) error {
+func (c *Channel) finish(record journal, committed configuration, current checkpoint, publish bool) error {
 	s := c.Store
 	if err := c.Ledger.Sync(); err != nil {
 		return err
@@ -308,6 +332,13 @@ func (c *Channel) finish(record journal, committed configuration, current checkp
 	s.probe("ledger-durable")
 	switch current.Checkpoint {
 	case record.Previous.Checkpoint:
+		if !publish {
+			record.Next.Blocks = make(map[string]blockIdentity, len(current.Blocks)+1)
+			for id, block := range current.Blocks {
+				record.Next.Blocks[id] = block
+			}
+			record.Next.Blocks[c.ID] = record.Block
+		}
 		if err := s.write("checkpoint", record.Next); err != nil {
 			return err
 		}
@@ -316,7 +347,7 @@ func (c *Channel) finish(record journal, committed configuration, current checkp
 		return c.quarantine(errors.New("checkpoint conflicts with prepared transition"))
 	}
 	s.probe("before-publication")
-	if c.Publish != nil {
+	if publish && c.Publish != nil {
 		if err := c.Publish(committed.bundle); err != nil {
 			return fmt.Errorf("publish configuration: %w", err)
 		}
@@ -326,7 +357,9 @@ func (c *Channel) finish(record journal, committed configuration, current checkp
 	if err := s.write("journal", record); err != nil {
 		return err
 	}
-	c.Gate.publish(committed.bundle)
+	if publish {
+		c.Gate.publish(committed.bundle)
+	}
 	s.probe("active")
 	return nil
 }
@@ -335,6 +368,13 @@ func (c *Channel) finish(record journal, committed configuration, current checkp
 // before installing an active generation. replaySettled describes native
 // orderer application readiness, including any pending committed Raft entry.
 func (c *Channel) Recover(replaySettled bool) error {
+	return c.recover(replaySettled, false)
+}
+
+func (c *Channel) recover(replaySettled, orderer bool) error {
+	if c.BootstrapError != nil {
+		return c.BootstrapError
+	}
 	s := c.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -346,7 +386,7 @@ func (c *Channel) Recover(replaySettled bool) error {
 	if err := c.checkQuarantine(); err != nil {
 		return err
 	}
-	if !replaySettled {
+	if !replaySettled && !orderer {
 		return errors.New("native replay must settle before activation")
 	}
 	current, err := readRecord[checkpoint](s.dir, "checkpoint")
@@ -383,19 +423,27 @@ func (c *Channel) Recover(replaySettled bool) error {
 				return c.quarantine(err)
 			}
 			if record.Phase != active {
-				return c.finish(record, committed, current)
+				if err := c.finish(record, committed, current, !orderer); err != nil || !orderer {
+					return err
+				}
+				policy, err = c.authenticate(record.Next)
+				if err != nil {
+					return c.quarantine(err)
+				}
 			}
 			if current.Checkpoint != record.Next.Checkpoint {
 				return c.quarantine(errors.New("active journal conflicts with checkpoint"))
 			}
 		case committed.identity == record.Base && record.Phase != active && current.Checkpoint == record.Previous.Checkpoint:
 			height, err := c.Ledger.Height()
-			if err != nil || height > record.Block.Number {
+			if err != nil || (height > record.Block.Number && record.Phase == commitPending) {
 				return c.quarantine(errors.Join(errors.New("prepared block position conflicts with ledger"), err))
 			}
-			record.Phase = aborted
-			if err := s.write("journal", record); err != nil {
-				return err
+			if replaySettled {
+				record.Phase = aborted
+				if err := s.write("journal", record); err != nil {
+					return err
+				}
 			}
 		default:
 			return c.quarantine(errors.New("committed configuration conflicts with activation journal"))
@@ -404,10 +452,23 @@ func (c *Channel) Recover(replaySettled bool) error {
 	if err := c.match(policy, committed); err != nil {
 		return c.quarantine(err)
 	}
+	if orderer && committed.identity.Number != 0 {
+		expected := current.Blocks[c.ID]
+		if record.Channel == c.ID && record.Block == committed.identity && record.Next.Checkpoint != current.Checkpoint {
+			// Recovery above just finished this exact pending transition.
+			expected = record.Block
+		}
+		if expected != committed.identity {
+			return c.quarantine(errors.New("committed block identity conflicts with protected checkpoint"))
+		}
+	}
 	if c.Validate != nil {
 		if err := c.Validate(committed.bundle); err != nil {
 			return c.quarantine(err)
 		}
+	}
+	if !replaySettled {
+		return nil
 	}
 	if c.Publish != nil {
 		if err := c.Publish(committed.bundle); err != nil {

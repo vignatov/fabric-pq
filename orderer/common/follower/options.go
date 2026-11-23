@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 )
 
 const (
@@ -27,6 +28,7 @@ const (
 
 // Options contains some configuration options relevant to the follower.Chain.
 type Options struct {
+	Activation            *activation.Channel
 	Logger                *flogging.FabricLogger
 	PullRetryMinInterval  time.Duration
 	PullRetryMaxInterval  time.Duration

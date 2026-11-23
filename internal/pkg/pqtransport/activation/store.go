@@ -2,8 +2,7 @@
 SPDX-License-Identifier: Apache-2.0
 */
 
-// Package activation is a bounded proof of local channel activation. Node
-// binaries do not instantiate it.
+// Package activation authenticates and durably reconciles local channel activation.
 package activation
 
 import (
@@ -27,6 +26,7 @@ type signedDocument struct {
 type checkpoint struct {
 	pqtransport.Checkpoint
 	Policy signedDocument
+	Blocks map[string]blockIdentity `json:",omitempty"`
 }
 
 type phase string

@@ -7,7 +7,8 @@
 Use staged serving resources and a channel admission fence. A private commit path
 may use the candidate only for Fabric validation and native commit bookkeeping.
 External requests and background consumers enter through the active generation.
-The implementation in this PR is a Linux proof invoked by tests.
+PQ4.0C exercised this design through Linux test adapters. PQ4.0D wires
+the local authorization store into the orderer Raft and participation lifecycle.
 
 | Approach | Fabric constraints |
 | --- | --- |
@@ -136,6 +137,52 @@ quarantine decision to the Raft loop owner, plus a replay-completion signal
 before normal admission. The separate participation follower needs an
 equivalent guard before append and verifier publication. Review these seams
 before changing consensus runtime or claiming leader/follower enforcement.
+
+## PQ4.0D native orderer lifecycle
+
+```mermaid
+flowchart TD
+    WAL["WAL HardState, retained entries, snapshot"] --> Ready["Raft Ready"]
+    Wire["Incoming Raft snapshot"] --> Proof["Validate signed block history and voters"]
+    Proof --> Ready
+    Ready --> Guard["Verify ordered CONFIG before native application"]
+    Pull["Participation follower and eviction pull"] --> Guard
+    Guard -->|Approved| Apply["Native membership and block commit"]
+    Guard -->|Terminal refusal| Stop["Persist channel quarantine and stop application"]
+    Apply --> Ack["Durable checkpoint and application acknowledgement"]
+    Ack --> Barrier["Applied through quorum ReadIndex and local commit"]
+    Barrier --> Admission["Open channel admission"]
+```
+
+The protected orderer starts in recovery with admission closed. It uses WAL
+commit state, native snapshots, the retained log tail, the ledger's Raft
+indices, and a fresh quorum-confirmed Raft `ReadIndex` for the current
+term and leader. A learner or partition without sufficient evidence stays
+closed. Fabric syncs the protected commit watermark before application. The
+Ready owner waits for a successful application result before advancing Raft.
+The startup check is scoped to decisions covered by that read barrier and
+work discovered in the local Raft lifecycle.
+
+The leader binds its staged operator approval to the exact proposal. Apply
+rechecks the real config block, Fabric predecessor authorization, ledger tip,
+policy version, signed transition, and the strict transport floor. The
+application owner enters the native writer only after the authorization
+record is durable. The writer retains responsibility for Fabric metadata
+and signatures. Endpoint reconfiguration follows durable application.
+
+Terminal refusal closes the generation and commits a channel-local marker.
+The Raft owner stops before acknowledging the refused application.
+The registrar reports failure and retains the channel's ledger, WAL, and
+snapshots. Restart and role changes retain the marker. An interrupted
+authorized write remains closed until the exact transition is reconciled.
+Node-wide checkpoint corruption closes all channels bound to that store.
+
+Protected snapshots require a verifiable block history and an authenticated
+voter set at the snapshot boundary before installation. Insufficient
+evidence leaves the channel closed. The bounded pull verifies up to 1,024
+missing blocks per snapshot. Participation joins from a later block start
+from the provisioned genesis anchor and verify forward before changing their
+verifier or endpoints. Promotion to Raft requires the same replay barrier.
 
 ## Admission and TLS
 

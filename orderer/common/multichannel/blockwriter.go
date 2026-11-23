@@ -159,6 +159,12 @@ func (bw *BlockWriter) WriteConfigBlock(block *cb.Block, encodedMetadataValue []
 	}
 }
 
+// WaitForBlockCommit drains the asynchronous normal-block writer.
+func (bw *BlockWriter) WaitForBlockCommit() {
+	bw.committingBlock.Lock()
+	bw.committingBlock.Unlock()
+}
+
 // WriteBlock should be invoked for blocks which contain normal transactions.
 // It sets the target block as the pending next block, and returns before it is committed.
 // Before returning, it acquires the committing lock, and spawns a go routine which will

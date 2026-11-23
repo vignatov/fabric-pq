@@ -96,9 +96,29 @@ func (n *node) run(campaign bool) {
 	halfElectionTimeout := electionTimeout / 2
 
 	raftTicker := n.clock.NewTicker(n.tickInterval)
+	defer func() {
+		raftTicker.Stop()
+		n.Stop()
+		n.storage.Close()
+		n.logger.Infof("Raft node stopped")
+		close(n.chain.doneC)
+	}()
+	var barrier replayBarrier
+	if n.chain.activation != nil {
+		state, _, err := n.config.Storage.InitialState()
+		if err != nil {
+			n.chain.failProtected(err)
+			return
+		}
+		barrier.commit = max(state.GetCommit(), n.storage.Snapshot().GetMetadata().GetIndex())
+	}
 
 	if s := n.storage.Snapshot(); !raft.IsEmptySnap(s) {
-		n.chain.snapC <- s
+		select {
+		case n.chain.snapC <- s:
+		case <-n.chain.haltC:
+			return
+		}
 	}
 
 	elected := make(chan struct{})
@@ -138,11 +158,35 @@ func (n *node) run(campaign bool) {
 
 			n.Tick()
 			n.tracker.Check(&status)
+			if n.chain.activation != nil {
+				barrier.request(n.Node, status, n.chain.activation)
+			}
 
 		case rd := <-n.Ready():
+			protected := n.chain.activation != nil
+			if protected {
+				barrier.observe(rd, n.Status(), n.chain.activation)
+				if !raft.IsEmptySnap(rd.Snapshot) || containsConfiguration(rd.CommittedEntries) {
+					n.chain.activation.Suspend()
+				}
+			}
 			startStoring := n.clock.Now()
 			if err := n.storage.Store(rd.Entries, rd.HardState, rd.Snapshot); err != nil {
+				if protected {
+					n.chain.failProtected(err)
+					return
+				}
 				n.logger.Panicf("Failed to persist etcd/raft data: %s", err)
+			}
+			if protected {
+				commit := max(rd.HardState.GetCommit(), rd.Snapshot.GetMetadata().GetIndex())
+				if commit > barrier.commit {
+					if err := n.storage.Sync(); err != nil {
+						n.chain.failProtected(err)
+						return
+					}
+					barrier.commit = commit
+				}
 			}
 			duration := n.clock.Since(startStoring).Seconds()
 			n.metrics.DataPersistDuration.Observe(duration)
@@ -151,13 +195,46 @@ func (n *node) run(campaign bool) {
 			}
 
 			if !raft.IsEmptySnap(rd.Snapshot) {
-				n.chain.snapC <- rd.Snapshot
+				select {
+				case n.chain.snapC <- rd.Snapshot:
+				case <-n.chain.haltC:
+					return
+				case <-n.chain.protectedStop:
+					return
+				}
 			}
 
 			// skip empty apply
-			if len(rd.CommittedEntries) != 0 || rd.SoftState != nil {
+			if protected {
+				app := apply{
+					entries: rd.CommittedEntries, soft: rd.SoftState,
+					replay: &replayProgress{commit: barrier.commit, read: barrier.index, last: n.lastIndex()},
+					ack:    make(chan error, 1),
+				}
+				select {
+				case n.chain.applyC <- app:
+				case <-n.chain.haltC:
+					return
+				case <-n.chain.protectedStop:
+					return
+				}
+				select {
+				case err := <-app.ack:
+					if err != nil {
+						return
+					}
+				case <-n.chain.haltC:
+					return
+				case <-n.chain.protectedStop:
+					return
+				}
+			} else if len(rd.CommittedEntries) != 0 || rd.SoftState != nil {
 				n.maybeSyncWAL(rd.CommittedEntries)
-				n.chain.applyC <- apply{rd.CommittedEntries, rd.SoftState}
+				select {
+				case n.chain.applyC <- apply{entries: rd.CommittedEntries, soft: rd.SoftState}:
+				case <-n.chain.haltC:
+					return
+				}
 			}
 
 			if campaign && rd.SoftState != nil {
@@ -176,11 +253,8 @@ func (n *node) run(campaign bool) {
 			n.send(rd.Messages)
 
 		case <-n.chain.haltC:
-			raftTicker.Stop()
-			n.Stop()
-			n.storage.Close()
-			n.logger.Infof("Raft node stopped")
-			close(n.chain.doneC) // close after all the artifacts are closed
+			return
+		case <-n.chain.protectedStop:
 			return
 		}
 	}
@@ -198,7 +272,7 @@ func (n *node) send(msgs []*raftpb.Message) {
 		status := raft.SnapshotFinish
 
 		// Replace node list in snapshot with CURRENT node list in cluster.
-		if msg.GetType() == raftpb.MsgSnap {
+		if msg.GetType() == raftpb.MsgSnap && n.chain.activation == nil {
 			state := n.confState.Load()
 			if state != nil {
 				msg.Snapshot.Metadata.ConfState = state.(*raftpb.ConfState)

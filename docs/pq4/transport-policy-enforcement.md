@@ -1,8 +1,26 @@
 # PQ4.0 transport-policy enforcement review
 
-Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. The development trust
-boundary and shared-listener rule are selected, but the layered design and
-its evidence still require architecture review. No PQ4 node endpoints exist.
+Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. PQ4.0D adds the local
+orderer configuration authorization boundary. Strict service endpoint and
+shared-listener enforcement still require integration evidence.
+
+### Isolated orderer provisioning
+
+Set `General.PQActivation` in `orderer.yaml` with `Channels`, `StateDir`,
+`TrustAnchor`, `Network` and `Node`. Use a private local Linux directory
+for `StateDir` and provision its ancestors durably before startup.
+`TrustAnchor` contains raw ML-DSA-65 public key bytes. The state directory
+uses the PQ4.0C `checkpoint` record produced by `Store.Provision`. Supply
+`genesis-<sha256(channel-id)>` as a JSON string containing the lowercase
+hex Fabric genesis header hash. For later-block participation joins, also
+supply `genesis-<sha256(channel-id)>.block` containing the raw Fabric block.
+
+Stage each operator authorization as a complete JSON record named
+`approval-<sha256(channel-id)>-<next-node-checkpoint-version>`. Its four
+base64 fields are `Transition`, `TransitionSignature`, `Policy` and
+`PolicySignature`. Publish the file atomically before submitting the
+configuration. The node-wide checkpoint serializes operator transitions.
+The initial policy must bind every protected channel this node serves.
 
 The revised PQ4.0 baseline uses trusted operator-protected local state. It
 requires the strict profile for every connection on a shared listener that

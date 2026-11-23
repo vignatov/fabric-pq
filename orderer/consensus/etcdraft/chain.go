@@ -22,6 +22,7 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
@@ -139,8 +140,9 @@ type Options struct {
 }
 
 type submit struct {
-	req    *orderer.SubmitRequest
-	leader chan uint64
+	req      *orderer.SubmitRequest
+	leader   chan uint64
+	proposal chan error
 }
 
 type gc struct {
@@ -151,7 +153,16 @@ type gc struct {
 
 // Chain implements consensus.Chain interface.
 type Chain struct {
-	configurator Configurator
+	activation        *activation.Channel
+	protectedStop     chan struct{}
+	protectedStopOnce sync.Once
+	snapshotRequests  chan snapshotRequest
+	snapshotPending   uint64
+	stagedSnapshot    *verifiedSnapshot
+	startInvoked      atomic.Bool
+	applicationDone   chan struct{}
+	commsPending      bool
+	configurator      Configurator
 
 	rpc RPC
 
@@ -231,9 +242,33 @@ func NewChain(
 	lg := opts.Logger.With("channel", support.ChannelID(), "node", opts.RaftID)
 
 	fresh := !wal.Exist(opts.WALDir)
+	var protected *activation.Channel
+	if s, ok := support.(interface{ OrdererActivation() *activation.Channel }); ok {
+		protected = s.OrdererActivation()
+	}
+	if protected != nil {
+		if err := protected.VerifyGenesis(support.Block(0)); err != nil {
+			return nil, protected.QuarantineOrderer(err)
+		}
+		if err := protected.RecoverOrdererLedger(); err != nil {
+			return nil, err
+		}
+		if err := protected.CheckRaftStorage(fresh); err != nil {
+			return nil, err
+		}
+	}
 	storage, err := CreateStorage(lg, opts.WALDir, opts.SnapDir, opts.MemoryStorage)
 	if err != nil {
+		if protected != nil {
+			return nil, protected.QuarantineOrderer(err)
+		}
 		return nil, errors.Errorf("failed to restore persisted raft data: %s", err)
+	}
+	if protected != nil {
+		if err := protected.MarkRaftStorage(); err != nil {
+			_ = storage.Close()
+			return nil, err
+		}
 	}
 
 	if opts.SnapshotCatchUpEntries == 0 {
@@ -251,7 +286,14 @@ func NewChain(
 	var snapBlkNum uint64
 	cc := &raftpb.ConfState{}
 	if s := storage.Snapshot(); !raft.IsEmptySnap(s) {
-		b := protoutil.UnmarshalBlockOrPanic(s.GetData())
+		b, err := protoutil.UnmarshalBlock(s.GetData())
+		if err != nil && protected != nil {
+			_ = storage.Close()
+			return nil, protected.QuarantineOrderer(err)
+		}
+		if err != nil {
+			lg.Panicf("unmarshal snapshot block: %v", err)
+		}
 		snapBlkNum = b.GetHeader().GetNumber()
 		cc = s.GetMetadata().GetConfState()
 	}
@@ -262,6 +304,7 @@ func NewChain(
 	}
 
 	c := &Chain{
+		activation:        protected,
 		configurator:      conf,
 		rpc:               rpc,
 		channelID:         support.ChannelID(),
@@ -302,6 +345,12 @@ func NewChain(
 		logger:         lg,
 		opts:           opts,
 		CryptoProvider: cryptoProvider,
+	}
+	if protected != nil {
+		c.status = types.StatusOnBoarding
+		c.protectedStop = make(chan struct{})
+		c.snapshotRequests = make(chan snapshotRequest)
+		c.applicationDone = make(chan struct{})
 	}
 
 	// Sets initial values for metrics
@@ -358,10 +407,25 @@ func NewChain(
 
 // Start instructs the orderer to begin serving the chain and keep it current.
 func (c *Chain) Start() {
+	if c.activation != nil {
+		if c.startInvoked.CompareAndSwap(false, true) {
+			go c.startProtected()
+		}
+		return
+	}
+	c.start()
+}
+
+func (c *Chain) start() {
 	c.logger.Infof("Starting Raft node")
 
 	if err := c.configureComm(); err != nil {
 		c.logger.Errorf("Failed to start chain, aborting: +%v", err)
+		if c.activation != nil {
+			c.failProtected(err)
+			_ = c.Node.storage.Close()
+			close(c.applicationDone)
+		}
 		close(c.doneC)
 		return
 	}
@@ -377,7 +441,6 @@ func (c *Chain) Start() {
 	close(c.errorC)
 
 	go c.gc()
-	go c.run()
 
 	es := c.newEvictionSuspector()
 
@@ -394,6 +457,7 @@ func (c *Chain) Start() {
 		Condition:     c.suspectEviction,
 	}
 	c.periodicChecker.Run()
+	go c.run()
 }
 
 // Order submits normal type transactions for ordering.
@@ -416,11 +480,17 @@ func (c *Chain) WaitReady() error {
 	if err := c.isRunning(); err != nil {
 		return err
 	}
+	if c.activation != nil && !c.activation.Ready() {
+		return errors.New("protected channel admission is closed")
+	}
 
 	select {
 	case c.submitC <- nil:
 	case <-c.doneC:
 		return errors.Errorf("chain is stopped")
+	}
+	if c.activation != nil && !c.activation.Ready() {
+		return errors.New("protected channel admission is closed")
 	}
 
 	return nil
@@ -428,6 +498,9 @@ func (c *Chain) WaitReady() error {
 
 // Errored returns a channel that closes when the chain stops.
 func (c *Chain) Errored() <-chan struct{} {
+	if c.activation != nil {
+		return c.activation.Gate.Errored()
+	}
 	c.errorCLock.RLock()
 	defer c.errorCLock.RUnlock()
 	return c.errorC
@@ -442,8 +515,10 @@ func (c *Chain) stop() bool {
 	select {
 	case <-c.startC:
 	default:
-		c.logger.Warn("Attempted to halt a chain that has not started")
-		return false
+		if c.activation == nil || !c.startInvoked.Load() {
+			c.logger.Warn("Attempted to halt a chain that has not started")
+			return false
+		}
 	}
 
 	select {
@@ -452,6 +527,9 @@ func (c *Chain) stop() bool {
 		return false
 	}
 	<-c.doneC
+	if c.applicationDone != nil {
+		<-c.applicationDone
+	}
 
 	c.statusReportMutex.Lock()
 	defer c.statusReportMutex.Unlock()
@@ -517,6 +595,12 @@ func (c *Chain) Consensus(req *orderer.ConsensusRequest, sender uint64) error {
 		c.halt()
 		return nil
 	}
+	if c.activation != nil && stepMsg.GetFrom() != sender {
+		return errors.New("Raft sender conflicts with authenticated cluster identity")
+	}
+	if c.activation != nil && stepMsg.GetType() == raftpb.MsgSnap {
+		return c.authorizeIncomingSnapshot(stepMsg)
+	}
 
 	if err := c.Node.Step(context.TODO(), stepMsg); err != nil {
 		return fmt.Errorf("failed to process Raft Step message: %w", err)
@@ -543,14 +627,23 @@ func (c *Chain) Consensus(req *orderer.ConsensusRequest, sender uint64) error {
 // - the actual leader via the transport mechanism
 // The call fails if there's no leader elected yet.
 func (c *Chain) Submit(req *orderer.SubmitRequest, sender uint64) error {
+	if c.activation != nil && !c.activation.Ready() {
+		return errors.New("protected channel admission is closed")
+	}
 	if err := c.isRunning(); err != nil {
 		c.Metrics.ProposalFailures.Add(1)
 		return err
 	}
 
 	leadC := make(chan uint64, 1)
+	request := &submit{req: req, leader: leadC}
+	if c.activation != nil {
+		if config, _ := c.isConfig(req.GetPayload()); config {
+			request.proposal = make(chan error, 1)
+		}
+	}
 	select {
-	case c.submitC <- &submit{req, leadC}:
+	case c.submitC <- request:
 		lead := <-leadC
 		if lead == raft.None {
 			c.Metrics.ProposalFailures.Add(1)
@@ -560,6 +653,13 @@ func (c *Chain) Submit(req *orderer.SubmitRequest, sender uint64) error {
 		if lead != c.raftID {
 			if err := c.forwardToLeader(lead, req); err != nil {
 				return err
+			}
+		} else if request.proposal != nil {
+			select {
+			case err := <-request.proposal:
+				return err
+			case <-c.doneC:
+				return ErrChainHalting
 			}
 		}
 
@@ -613,6 +713,8 @@ func (c *Chain) forwardToLeader(lead uint64, req *orderer.SubmitRequest) error {
 type apply struct {
 	entries []*raftpb.Entry
 	soft    *raft.SoftState
+	replay  *replayProgress
+	ack     chan error
 }
 
 func isCandidate(state raft.StateType) bool {
@@ -620,6 +722,9 @@ func isCandidate(state raft.StateType) bool {
 }
 
 func (c *Chain) run() {
+	if c.applicationDone != nil {
+		defer close(c.applicationDone)
+	}
 	ticking := false
 	timer := c.clock.NewTimer(time.Second)
 	// we need a stopped timer rather than nil,
@@ -702,6 +807,9 @@ func (c *Chain) run() {
 	becomeFollower := func() {
 		cancelProp()
 		c.blockInflight = 0
+		if c.activation != nil && c.confChangeInProgress == nil {
+			c.configInflight = false
+		}
 		_ = c.support.BlockCutter().Cut()
 		stopTimer()
 		submitC = c.submitC
@@ -714,6 +822,10 @@ func (c *Chain) run() {
 		case s := <-submitC:
 			if s == nil {
 				// polled by `WaitReady`
+				continue
+			}
+			if c.activation != nil && !c.activation.Ready() {
+				s.leader <- raft.None
 				continue
 			}
 
@@ -729,11 +841,17 @@ func (c *Chain) run() {
 
 			batches, pending, err := c.ordered(s.req)
 			if err != nil {
+				if s.proposal != nil {
+					s.proposal <- err
+				}
 				c.logger.Errorf("Failed to order message: %s", err)
 				continue
 			}
 
 			if !pending && len(batches) == 0 {
+				if s.proposal != nil {
+					s.proposal <- nil
+				}
 				continue
 			}
 
@@ -743,7 +861,10 @@ func (c *Chain) run() {
 				stopTimer()
 			}
 
-			c.propose(propC, bc, batches...)
+			err = c.propose(propC, bc, batches...)
+			if s.proposal != nil {
+				s.proposal <- err
+			}
 
 			if c.configInflight {
 				c.logger.Info("Received config transaction, pause accepting transaction till it is committed")
@@ -814,7 +935,19 @@ func (c *Chain) run() {
 				}
 			}
 
-			c.apply(app.entries)
+			err := c.apply(app.entries)
+			if err == nil && app.replay != nil {
+				err = c.reconcileReplay(app.replay)
+			}
+			if app.ack != nil {
+				if err != nil {
+					c.failProtected(err)
+				}
+				app.ack <- err
+			}
+			if err != nil {
+				continue
+			}
 
 			if c.justElected {
 				msgInflight := c.Node.lastIndex() > c.appliedIndex
@@ -855,7 +988,20 @@ func (c *Chain) run() {
 			c.logger.Debugf("Batch timer expired, creating block")
 			c.propose(propC, bc, batch) // we are certain this is normal block, no need to block
 
+		case request := <-c.snapshotRequests:
+			request.result <- c.stepProtectedSnapshot(request.message)
+
 		case sn := <-c.snapC:
+			if c.activation != nil {
+				if err := c.applyProtectedSnapshot(sn); err != nil {
+					if sn.GetMetadata().GetIndex() == 0 && errors.Is(err, errSnapshotEvidence) {
+						c.logger.Warningf("Protected eviction catch-up is waiting for evidence: %s", err)
+					} else {
+						c.failProtected(err)
+					}
+				}
+				continue
+			}
 			if sn.GetMetadata().GetIndex() != 0 {
 				if sn.GetMetadata().GetIndex() <= c.appliedIndex {
 					c.logger.Debugf("Skip snapshot taken at index %d, because it is behind current applied index %d", sn.GetMetadata().GetIndex(), c.appliedIndex)
@@ -874,6 +1020,9 @@ func (c *Chain) run() {
 			}
 
 		case <-c.doneC:
+			if c.activation != nil {
+				c.activation.Suspend()
+			}
 			stopTimer()
 			cancelProp()
 
@@ -890,14 +1039,36 @@ func (c *Chain) run() {
 	}
 }
 
-func (c *Chain) writeBlock(block *common.Block, index uint64) {
+func (c *Chain) writeBlock(block *common.Block, index uint64) error {
 	if block.GetHeader().GetNumber() > c.lastBlock.GetHeader().GetNumber()+1 {
+		if c.activation != nil {
+			return errors.New("gap in protected Fabric block sequence")
+		}
 		c.logger.Panicf("Got block [%d], expect block [%d]", block.GetHeader().GetNumber(), c.lastBlock.GetHeader().GetNumber()+1)
 	} else if block.GetHeader().GetNumber() < c.lastBlock.GetHeader().GetNumber()+1 {
 		c.logger.Infof("Got block [%d], expect block [%d], this node was forced to catch up", block.GetHeader().GetNumber(), c.lastBlock.GetHeader().GetNumber()+1)
-		return
+		if c.activation != nil {
+			return c.verifyReplayedBlock(block, index)
+		}
+		return nil
 	}
+	if c.activation != nil && protoutil.IsConfigBlock(block) {
+		if syncer, ok := c.support.(interface{ WaitForBlockCommit() }); ok {
+			syncer.WaitForBlockCommit()
+		}
+		if err := c.checkOrderedMembership(block); err != nil {
+			return err
+		}
+		return c.activation.ApplyOrdererConfig(block, func() error {
+			c.writeBlockUnchecked(block, index)
+			return nil
+		})
+	}
+	c.writeBlockUnchecked(block, index)
+	return nil
+}
 
+func (c *Chain) writeBlockUnchecked(block *common.Block, index uint64) {
 	if c.blockInflight > 0 {
 		c.blockInflight-- // only reduce on leader
 	}
@@ -1029,9 +1200,17 @@ func (c *Chain) ordered(msg *orderer.SubmitRequest) (batches [][]*common.Envelop
 	return batches, pending, nil
 }
 
-func (c *Chain) propose(ch chan<- *common.Block, bc *blockCreator, batches ...[]*common.Envelope) {
+func (c *Chain) propose(ch chan<- *common.Block, bc *blockCreator, batches ...[]*common.Envelope) error {
 	for _, batch := range batches {
-		b := bc.createNextBlock(batch)
+		trial := *bc
+		b := trial.createNextBlock(batch)
+		if c.activation != nil && protoutil.IsConfigBlock(b) {
+			if err := c.activation.PrepareOrdererProposal(b); err != nil {
+				c.logger.Warningf("Protected configuration proposal rejected: %s", err)
+				return err
+			}
+		}
+		*bc = trial
 		c.logger.Infof("Created block [%d], there are %d blocks in flight", b.GetHeader().GetNumber(), c.blockInflight)
 
 		select {
@@ -1047,6 +1226,7 @@ func (c *Chain) propose(ch chan<- *common.Block, bc *blockCreator, batches ...[]
 
 		c.blockInflight++
 	}
+	return nil
 }
 
 func (c *Chain) catchUp(snap *raftpb.Snapshot) error {
@@ -1113,7 +1293,7 @@ func (c *Chain) commitBlock(block *common.Block) {
 		c.opts.Consenters = configMembership.NewConsenters
 		c.raftMetadataLock.Unlock()
 
-		if err := c.configureComm(); err != nil {
+		if err := c.configureAppliedComm(); err != nil {
 			c.logger.Panicf("Failed to configure communication: %s", err)
 		}
 	}
@@ -1166,12 +1346,15 @@ func (c *Chain) detectConfChange(block *common.Block) *MembershipChanges {
 	return changes
 }
 
-func (c *Chain) apply(ents []*raftpb.Entry) {
+func (c *Chain) apply(ents []*raftpb.Entry) error {
 	if len(ents) == 0 {
-		return
+		return nil
 	}
 
 	if ents[0].GetIndex() > c.appliedIndex+1 {
+		if c.activation != nil {
+			return errors.New("gap in protected Raft application")
+		}
 		c.logger.Panicf("first index of committed entry[%d] should <= appliedIndex[%d]+1", ents[0].GetIndex(), c.appliedIndex)
 	}
 
@@ -1184,24 +1367,56 @@ func (c *Chain) apply(ents []*raftpb.Entry) {
 			}
 
 			position = i
-			c.accDataSize += uint32(len(ents[i].GetData()))
+			if c.activation == nil {
+				c.accDataSize += uint32(len(ents[i].GetData()))
+			}
 
 			// We need to strictly avoid re-applying normal entries,
 			// otherwise we are writing the same block twice.
-			if ents[i].GetIndex() <= c.appliedIndex {
+			if c.activation == nil && ents[i].GetIndex() <= c.appliedIndex {
 				c.logger.Debugf("Received block with raft index (%d) <= applied index (%d), skip", ents[i].GetIndex(), c.appliedIndex)
 				break
 			}
 
-			block := protoutil.UnmarshalBlockOrPanic(ents[i].GetData())
-			c.writeBlock(block, ents[i].GetIndex())
+			block, err := protoutil.UnmarshalBlock(ents[i].GetData())
+			if err != nil {
+				if c.activation != nil {
+					return err
+				}
+				c.logger.Panicf("unmarshal Raft block: %v", err)
+			}
+			if c.activation != nil {
+				if err := c.activation.ValidateBlockShape(block); err != nil {
+					return err
+				}
+				if ents[i].GetIndex() <= c.appliedIndex {
+					if err := c.verifyReplayedBlock(block, ents[i].GetIndex()); err != nil {
+						return err
+					}
+					break
+				}
+			}
+			if err := c.writeBlock(block, ents[i].GetIndex()); err != nil {
+				return err
+			}
+			if c.activation != nil {
+				c.accDataSize += uint32(len(ents[i].GetData()))
+			}
 			c.Metrics.CommittedBlockNumber.Set(float64(block.GetHeader().GetNumber()))
 
 		case raftpb.EntryConfChange:
 			cc := &raftpb.ConfChange{}
 			if err := proto.Unmarshal(ents[i].GetData(), cc); err != nil {
+				if c.activation != nil {
+					return err
+				}
 				c.logger.Warnf("Failed to unmarshal ConfChange data: %s", err)
 				continue
+			}
+			if c.activation != nil {
+				if err := c.validateProtectedConfChange(cc, ents[i].GetIndex()); err != nil {
+					return err
+				}
 			}
 
 			c.confState = c.Node.ApplyConfChange(cc)
@@ -1229,6 +1444,10 @@ func (c *Chain) apply(ents []*raftpb.Entry) {
 			}
 
 			shouldHalt := cc.GetType() == raftpb.ConfChangeRemoveNode && cc.GetNodeId() == c.raftID
+			if c.activation != nil && configureComm && !shouldHalt {
+				c.commsPending = true
+				configureComm = false
+			}
 			// unblock `run` go routine so it can still consume Raft messages
 			go func() {
 				if configureComm && !shouldHalt { // no need to configure comm if this node is going to halt
@@ -1243,6 +1462,10 @@ func (c *Chain) apply(ents []*raftpb.Entry) {
 					return
 				}
 			}()
+		default:
+			if c.activation != nil {
+				return errors.Errorf("unsupported protected Raft entry type %s", ents[i].GetType())
+			}
 		}
 
 		if ents[i].GetIndex() > c.appliedIndex {
@@ -1254,6 +1477,17 @@ func (c *Chain) apply(ents []*raftpb.Entry) {
 	// take a snapshot only for ents[position].Type == raftpb.EntryNormal
 	if c.accDataSize >= c.sizeLimit && ents[position].GetType() == raftpb.EntryNormal && len(ents[position].GetData()) > 0 {
 		b := protoutil.UnmarshalBlockOrPanic(ents[position].GetData())
+		if c.activation != nil {
+			if syncer, ok := c.support.(interface{ WaitForBlockCommit() }); ok {
+				syncer.WaitForBlockCommit()
+			}
+			if verifySnapshotVoters(c.confState, c.support.Block(b.GetHeader().GetNumber()), c.appliedIndex) != nil {
+				return nil
+			}
+			if err := c.activation.Ledger.Sync(); err != nil {
+				return err
+			}
+		}
 		select {
 		case c.gcC <- &gc{index: c.appliedIndex, state: c.confState, data: ents[position].GetData()}:
 			c.logger.Infof("Accumulated %d bytes since last snapshot, exceeding size limit (%d bytes), "+
@@ -1266,6 +1500,7 @@ func (c *Chain) apply(ents []*raftpb.Entry) {
 			c.logger.Warnf("Snapshotting is in progress, it is very likely that SnapshotIntervalSize is too small")
 		}
 	}
+	return nil
 }
 
 func (c *Chain) gc() {
@@ -1400,7 +1635,7 @@ func (c *Chain) writeConfigBlock(block *common.Block, index uint64) {
 
 			c.configInflight = true
 		} else {
-			if err = c.configureComm(); err != nil {
+			if err = c.configureAppliedComm(); err != nil {
 				c.logger.Panicf("Failed to configure communication: %s", err)
 			}
 		}
@@ -1553,6 +1788,9 @@ func (c *Chain) ValidateConsensusMetadata(oldOrdererConfig, newOrdererConfig cha
 func (c *Chain) StatusReport() (types.ConsensusRelation, types.Status) {
 	c.statusReportMutex.Lock()
 	defer c.statusReportMutex.Unlock()
+	if c.activation != nil && c.status == types.StatusActive && !c.activation.Ready() {
+		return c.consensusRelation, types.StatusOnBoarding
+	}
 
 	return c.consensusRelation, c.status
 }
@@ -1572,7 +1810,7 @@ func (c *Chain) newEvictionSuspector() *evictionSuspector {
 		CryptoProvider:       c.CryptoProvider,
 	}
 
-	return &evictionSuspector{
+	suspector := &evictionSuspector{
 		amIInChannel:               consenterCertificate.IsConsenterOfChannel,
 		evictionSuspicionThreshold: c.opts.EvictionSuspicion,
 		writeBlock:                 c.support.Append,
@@ -1584,6 +1822,12 @@ func (c *Chain) newEvictionSuspector() *evictionSuspector {
 			c.halt()
 		},
 	}
+	if c.activation != nil {
+		suspector.guardedCatchUp = func(snapshot *raftpb.Snapshot) {
+			c.triggerCatchup(snapshot)
+		}
+	}
+	return suspector
 }
 
 func (c *Chain) triggerCatchup(sn *raftpb.Snapshot) {

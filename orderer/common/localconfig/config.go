@@ -50,6 +50,7 @@ type TopLevel struct {
 
 // General contains config which should be common among all orderer types.
 type General struct {
+	PQActivation      PQActivation
 	ListenAddress     string
 	ListenPort        uint16
 	TLS               TLS
@@ -69,6 +70,15 @@ type General struct {
 	MaxRecvMsgSize    int32
 	MaxSendMsgSize    int32
 	Throttling        Throttling
+}
+
+// PQActivation selects channels using the isolated-development activation store.
+type PQActivation struct {
+	Channels    []string
+	StateDir    string
+	TrustAnchor string
+	Network     string
+	Node        string
 }
 
 type Cluster struct {
@@ -322,6 +332,12 @@ func (c *TopLevel) completeInitialization(configDir string) {
 		coreconfig.TranslatePathInPlace(configDir, &c.General.LocalMSPDir)
 		// Translate file ledger location
 		coreconfig.TranslatePathInPlace(configDir, &c.FileLedger.Location)
+		if c.General.PQActivation.StateDir != "" {
+			coreconfig.TranslatePathInPlace(configDir, &c.General.PQActivation.StateDir)
+		}
+		if c.General.PQActivation.TrustAnchor != "" {
+			coreconfig.TranslatePathInPlace(configDir, &c.General.PQActivation.TrustAnchor)
+		}
 	}()
 
 	for {

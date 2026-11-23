@@ -251,3 +251,28 @@ The existing Verify Build jobs cover Basic Checks, lint, PQ4.0 feasibility and
 PQ4.0B components, and the Fabric unit and integration suites. PQ3 acceptance
 runs in its existing workflow. A build or cross-compilation alone does not
 establish a Linux crash-recovery result.
+## PQ4.0D Raft quarantine and replay evidence
+
+**Overall PQ4.0B gate remains INCOMPLETE.** See the
+[native interception diagram, quarantine transitions, and replay contract](adr-config-activation.md#pq40d-native-orderer-lifecycle).
+
+| Path | Production boundary | Evidence |
+| --- | --- | --- |
+| Raft leader | Verify staged approval before proposal and exact ordered block before native apply | Native restart harness exercises the real leader proposal and application paths. |
+| Raft follower | Run the same ordered-block guard before changing block or membership state | Shared application path and focused replay barrier tests. |
+| Snapshot and eviction | Verify signed history before restoring membership or writing catch-up blocks | Bounded application path. |
+| Participation follower | Verify genesis and each config before raw append or verifier updates | Guarded follower path. Promotion uses the native startup barrier. |
+
+The Linux restart harness interrupts a subprocess after persisting the Raft
+commit but before the guard, after authorization but before native apply,
+and after the native append but before checkpoint publication. It reopens
+the same WAL and file ledger, checks repeated quarantine or authorized
+recovery, and verifies the recovered Fabric block metadata and signature.
+The subprocess runs the native Raft chain with a test support adapter.
+CI records that test executable and the separately built orderer binary.
+
+The dedicated PQ4.0D job records the tested revision, binaries, Linux runner,
+Go version, and test output. See the PR checks for executed results, including
+PQ4.0C, PQ4 components, Fabric unit and integration tests, and both PQ3 isolated
+profiles. Endpoint-level enforcement, a distributed crash matrix, and
+full shared TLS callback and resource publication remain open evidence.

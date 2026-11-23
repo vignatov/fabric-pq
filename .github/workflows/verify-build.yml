@@ -113,6 +113,33 @@ jobs:
         run: go test -mod=vendor -race -count=1 -v -run '^TestPQ40C' ./core/peer ./orderer/common/multichannel ./internal/pkg/pqtransport/activation/...
       - name: Vet Activation Proof
         run: go vet -mod=vendor ./core/peer ./orderer/common/multichannel ./internal/pkg/pqtransport/activation/...
+  pq40d-raft-quarantine:
+    name: PQ4.0D Raft Quarantine and Replay
+    runs-on: ubuntu-24.04
+    env:
+      GOFIPS140: "off"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.4
+      - name: Build orderer and native Raft test binary
+        run: |
+          git rev-parse HEAD
+          go version
+          uname -a
+          printf 'GOFIPS140=%s\n' "$GOFIPS140"
+          go build -mod=vendor -trimpath -o "$RUNNER_TEMP/orderer" ./cmd/orderer
+          go test -mod=vendor -race -c -o "$RUNNER_TEMP/pq40d-raft.test" ./orderer/common/multichannel
+          sha256sum "$RUNNER_TEMP/orderer" "$RUNNER_TEMP/pq40d-raft.test"
+      - name: Run native Raft restart and activation cases
+        run: |
+          (cd orderer/common/multichannel && "$RUNNER_TEMP/pq40d-raft.test" -test.v -test.run '^TestPQ40D')
+          go test -mod=vendor -race -count=1 ./orderer/consensus/etcdraft ./orderer/common/follower
+      - name: Vet affected packages
+        run: go vet -mod=vendor ./internal/pkg/pqtransport/... ./orderer/consensus/etcdraft ./orderer/common/{follower,multichannel,server,localconfig}
   unit-tests:
     name: Unit Tests
     needs: basic-checks
