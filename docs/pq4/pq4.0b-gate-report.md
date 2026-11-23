@@ -261,7 +261,18 @@ establish a Linux crash-recovery result.
 | Raft leader | Verify staged approval before proposal and exact ordered block before native apply | Native restart harness exercises the real leader proposal and application paths. |
 | Raft follower | Run the same ordered-block guard before changing block or membership state | Three native Raft replicas with a test transport exercise follower quarantine, quorum survival, and ordering a new block on a separate classical channel. |
 | Snapshot and eviction | Verify signed history before restoring membership or writing catch-up blocks | Incoming Raft snapshot test supplies a signed newer config and checks that missing approval leaves the ledger untouched. |
-| Participation follower | Verify genesis and each config before raw append or verifier updates | Focused append test observes ledger and verifier effects. Promotion uses the native startup barrier. |
+| Participation follower | Verify genesis and each config before raw append or verifier updates | Focused append coverage and a TLS block-pull test through registrar promotion and native Raft replay. |
+
+The protected promotion test joins through the registrar using a signed
+membership block. The participation follower pulls only through that block.
+After promotion, a newer committed configuration arrives through native Raft
+and pauses before ledger append. The test observes the native commit index
+ahead of the applied index, closed broadcast and delivery admission, and no
+configuration publication. Releasing the append lets the node apply the
+expected block, publish its configuration, and open admission. The test runs
+real Raft replicas with a controlled test transport and a local TLS delivery
+fixture. It passed under the race detector on `e7ec9fe108990b3a5a675987aefb9ffbd4d1bb46`.
+[Linux promotion evidence](https://github.com/vignatov/fabric-pq/actions/runs/45153492245/job/137620512128)
 
 The Linux restart harness interrupts a subprocess after persisting the Raft
 commit but before the guard, after authorization but before native apply,
