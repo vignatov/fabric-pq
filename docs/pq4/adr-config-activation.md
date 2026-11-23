@@ -163,12 +163,21 @@ Ready owner waits for a successful application result before advancing Raft.
 The startup check is scoped to decisions covered by that read barrier and
 work discovered in the local Raft lifecycle.
 
+`General.PQActivation.Channels` is an isolated-development opt-in under the
+trusted local bootstrap configuration assumption. Removing an entry selects
+baseline behavior without consulting the channel's signed checkpoint. Before
+deployment, protection selection must bind to signed bootstrap policy and
+protected state, and the node must fail closed if its local selector disagrees.
+
 The leader binds its staged operator approval to the exact proposal. Apply
 rechecks the real config block, Fabric predecessor authorization, ledger tip,
 policy version, signed transition, and the strict transport floor. The
 application owner enters the native writer only after the authorization
 record is durable. The writer retains responsibility for Fabric metadata
 and signatures. Endpoint reconfiguration follows durable application.
+Replayed membership entries use the voter IDs recorded by the signed
+Fabric block preceding their Raft index, or the anchored genesis for initial
+membership. A voter already present in Raft cannot authorize an addition.
 
 Terminal refusal closes the generation and commits a channel-local marker.
 The Raft owner stops before acknowledging the refused application.
@@ -181,8 +190,11 @@ Best-effort delivery honors protected channel admission.
 
 Protected snapshots require a verifiable block history, an exact match
 between the signed block's Raft index and the snapshot index, and an
-authenticated voter set at that boundary before installation. Insufficient
-evidence leaves the channel closed. The bounded pull verifies up to 1,024
+authenticated voter set at that boundary before installation. Missing or
+conflicting voter evidence supplied by a peer leaves admission closed while later
+verified snapshots or log replay can restore readiness. A persisted snapshot
+that conflicts with the trusted local ledger at a verified boundary causes
+quarantine. The bounded pull verifies up to 1,024
 missing blocks per snapshot. Participation joins from a later block start
 from the provisioned genesis anchor and verify forward before changing their
 verifier or endpoints. Promotion to Raft requires the same replay barrier.

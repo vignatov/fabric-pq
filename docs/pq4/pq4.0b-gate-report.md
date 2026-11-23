@@ -256,6 +256,12 @@ establish a Linux crash-recovery result.
 **Overall PQ4.0B gate remains INCOMPLETE.** See the
 [native interception diagram, quarantine transitions, and replay contract](adr-config-activation.md#pq40d-native-orderer-lifecycle).
 
+The local `General.PQActivation.Channels` selector is an isolated-development
+opt-in. Removing a channel selects baseline behavior without checking its
+signed protected checkpoint. Production qualification requires protection
+selection bound to signed bootstrap policy and protected state, with refusal
+when the local selector disagrees.
+
 | Path | Production boundary | Evidence |
 | --- | --- | --- |
 | Raft leader | Verify staged approval before proposal and exact ordered block before native apply | Native restart harness exercises the real leader proposal and application paths. |
@@ -294,3 +300,8 @@ Go version, and test output. See the PR checks for executed results, including
 PQ4.0C, PQ4 components, Fabric unit and integration tests, and both PQ3 isolated
 profiles. Endpoint-level enforcement, a distributed crash matrix, and
 full shared TLS callback and resource publication remain open evidence.
+Full network qualification also requires TLS-first bootstrap across shared
+listeners, per-service and stream admission, the authenticated
+`PactwayPQTransportV1` capability, and strict CCAAS and orderer administration.
+The process-crash tests provide no evidence for power loss or privileged host
+rollback.

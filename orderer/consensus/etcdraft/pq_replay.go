@@ -199,6 +199,19 @@ func blockRaftMetadata(block *common.Block) (*etcdraft.BlockMetadata, error) {
 	return metadata, proto.Unmarshal(value.GetValue(), metadata)
 }
 
+// signedBlockRaftMetadata reads only the metadata covered by Fabric block
+// signatures. The caller establishes trust in those signatures or the local ledger.
+func signedBlockRaftMetadata(block *common.Block) (*etcdraft.BlockMetadata, error) {
+	metadata, err := protoutil.GetMetadataFromBlock(block, common.BlockMetadataIndex_SIGNATURES)
+	if err != nil {
+		return nil, err
+	}
+	if len(metadata.GetValue()) == 0 || len(metadata.GetSignatures()) == 0 {
+		return nil, errors.New("missing signed Raft block metadata")
+	}
+	return blockRaftMetadata(block)
+}
+
 func (c *Chain) checkOrderedMembership(block *common.Block) error {
 	metadata, _, err := ConsensusMetadataFromConfigBlock(block)
 	if err != nil {
@@ -214,8 +227,10 @@ func (c *Chain) checkOrderedMembership(block *common.Block) error {
 func (c *Chain) validateProtectedConfChange(change *raftpb.ConfChange, index uint64) error {
 	ids := c.opts.BlockMetadata.GetConsenterIds()
 	// Replayed membership entries can predate the current ledger config.
-	// Use the authenticated Fabric block immediately preceding the entry.
+	// Use the membership recorded at the last Fabric block before this Raft
+	// entry. The local ledger contains the already authorized block history.
 	if index <= c.opts.BlockMetadata.GetRaftIndex() {
+		ids = nil
 		for number := c.support.Height(); number > 0; number-- {
 			block := c.support.Block(number - 1)
 			if number == 1 {
@@ -242,9 +257,15 @@ func (c *Chain) validateProtectedConfChange(change *raftpb.ConfChange, index uin
 				ids = metadata.GetConsenterIds()
 				break
 			}
-			metadata, err := blockRaftMetadata(block)
+			metadata, err := signedBlockRaftMetadata(block)
 			if err != nil {
 				return err
+			}
+			if metadata.GetRaftIndex() == 0 || len(metadata.GetConsenterIds()) == 0 {
+				return fmt.Errorf("missing membership evidence at Fabric block %d", number-1)
+			}
+			if metadata.GetRaftIndex() == index {
+				return fmt.Errorf("Raft membership entry at index %d conflicts with durable Fabric block %d", index, number-1)
 			}
 			if metadata.GetRaftIndex() < index {
 				ids = metadata.GetConsenterIds()
@@ -252,11 +273,13 @@ func (c *Chain) validateProtectedConfChange(change *raftpb.ConfChange, index uin
 			}
 		}
 	}
-	present := slices.Contains(c.confState.GetVoters(), change.GetNodeId())
+	if len(ids) == 0 || change.GetNodeId() == 0 {
+		return errors.New("missing protected Raft membership evidence")
+	}
 	wanted := slices.Contains(ids, change.GetNodeId())
 	switch change.GetType() {
 	case raftpb.ConfChangeAddNode:
-		if wanted || present {
+		if wanted {
 			return nil
 		}
 	case raftpb.ConfChangeRemoveNode:

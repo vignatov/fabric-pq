@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
-	"github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
 	"github.com/hyperledger/fabric/protoutil"
 	"go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
@@ -20,7 +19,10 @@ import (
 
 const maxProtectedSnapshotBlocks = 1024
 
-var errSnapshotEvidence = errors.New("protected snapshot evidence is incomplete")
+var (
+	errSnapshotEvidence = errors.New("protected snapshot evidence is incomplete")
+	errSnapshotVoters   = errors.New("snapshot voters conflict with Fabric membership at its boundary")
+)
 
 type snapshotRequest struct {
 	message *raftpb.Message
@@ -74,7 +76,7 @@ func (c *Chain) validateRestoredRaft() error {
 	if raft.IsEmptySnap(snapshot) {
 		return nil
 	}
-	blocks, err := c.protectedSnapshotBlocks(snapshot)
+	blocks, err := c.protectedSnapshotBlocks(snapshot, true)
 	if err == nil {
 		c.stagedSnapshot = &verifiedSnapshot{snapshot: snapshot, blocks: blocks}
 	}
@@ -107,7 +109,7 @@ func (c *Chain) stepProtectedSnapshot(message *raftpb.Message) error {
 	}
 	c.activation.Suspend()
 	c.snapshotPending = max(c.snapshotPending, snapshot.GetMetadata().GetIndex())
-	blocks, err := c.protectedSnapshotBlocks(snapshot)
+	blocks, err := c.protectedSnapshotBlocks(snapshot, false)
 	if err != nil {
 		if !errors.Is(err, errSnapshotEvidence) {
 			c.failProtected(err)
@@ -120,7 +122,7 @@ func (c *Chain) stepProtectedSnapshot(message *raftpb.Message) error {
 
 // protectedSnapshotBlocks authenticates the snapshot against durable local
 // history or a bounded contiguous range of signed Fabric blocks.
-func (c *Chain) protectedSnapshotBlocks(snapshot *raftpb.Snapshot) ([]*common.Block, error) {
+func (c *Chain) protectedSnapshotBlocks(snapshot *raftpb.Snapshot, restored bool) ([]*common.Block, error) {
 	target, err := protoutil.UnmarshalBlock(snapshot.GetData())
 	if err != nil || target.GetHeader() == nil ||
 		!bytes.Equal(target.GetHeader().GetDataHash(), protoutil.ComputeBlockDataHash(target.GetData())) {
@@ -154,6 +156,9 @@ func (c *Chain) protectedSnapshotBlocks(snapshot *raftpb.Snapshot) ([]*common.Bl
 		last = blocks[len(blocks)-1]
 	}
 	if !proto.Equal(last.GetHeader(), target.GetHeader()) || !proto.Equal(last.GetData(), target.GetData()) {
+		if restored && number < height && last != nil {
+			return nil, fmt.Errorf("persisted snapshot conflicts with local Fabric block %d", number)
+		}
 		return nil, fmt.Errorf("%w: snapshot conflicts with Fabric block %d", errSnapshotEvidence, number)
 	}
 	if len(blocks) > 0 {
@@ -163,6 +168,11 @@ func (c *Chain) protectedSnapshotBlocks(snapshot *raftpb.Snapshot) ([]*common.Bl
 	}
 	if index := snapshot.GetMetadata().GetIndex(); index != 0 {
 		if err := verifySnapshotVoters(snapshot.GetMetadata().GetConfState(), last, index); err != nil {
+			// A remote claim can be replaced. Conflicting voters in our own
+			// persisted snapshot and ledger at the same index cannot be ignored.
+			if errors.Is(err, errSnapshotVoters) && (!restored || number >= height) {
+				return nil, fmt.Errorf("%w: %v", errSnapshotEvidence, err)
+			}
 			return nil, err
 		}
 	}
@@ -170,19 +180,14 @@ func (c *Chain) protectedSnapshotBlocks(snapshot *raftpb.Snapshot) ([]*common.Bl
 }
 
 func verifySnapshotVoters(state *raftpb.ConfState, block *common.Block, index uint64) error {
-	metadata, err := protoutil.GetConsenterMetadataFromBlock(block)
-	if err != nil {
-		return errSnapshotEvidence
-	}
-	config := &etcdraft.BlockMetadata{}
-	if err := proto.Unmarshal(metadata.GetValue(), config); err != nil {
-		return errSnapshotEvidence
-	}
+	config, err := signedBlockRaftMetadata(block)
 	expected := config.GetConsenterIds()
-	if config.GetRaftIndex() == 0 || config.GetRaftIndex() != index || len(expected) == 0 ||
-		!sameVoters(expected, state.GetVoters()) || len(state.GetLearners()) != 0 || len(state.GetVotersOutgoing()) != 0 ||
+	if err != nil || index == 0 || config.GetRaftIndex() != index || len(expected) == 0 {
+		return fmt.Errorf("%w: missing signed Fabric membership at Raft index %d", errSnapshotEvidence, index)
+	}
+	if !sameVoters(expected, state.GetVoters()) || len(state.GetLearners()) != 0 || len(state.GetVotersOutgoing()) != 0 ||
 		len(state.GetLearnersNext()) != 0 || state.GetAutoLeave() {
-		return fmt.Errorf("%w: snapshot voters do not match Fabric membership at its boundary", errSnapshotEvidence)
+		return errSnapshotVoters
 	}
 	return nil
 }
@@ -203,7 +208,7 @@ func (c *Chain) applyProtectedSnapshot(snapshot *raftpb.Snapshot) error {
 		}
 	} else {
 		var err error
-		blocks, err = c.protectedSnapshotBlocks(snapshot)
+		blocks, err = c.protectedSnapshotBlocks(snapshot, snapshot.GetMetadata().GetIndex() != 0)
 		if err != nil {
 			return err
 		}

@@ -34,6 +34,7 @@ import (
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus/etcdraft"
+	raftmocks "github.com/hyperledger/fabric/orderer/consensus/etcdraft/mocks"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/server/v3/storage/wal"
@@ -435,12 +436,86 @@ func TestPQ40DSnapshotCannotBypassLocalApproval(t *testing.T) {
 	require.Equal(t, types.StatusFailed, statusAfter)
 }
 
+func TestPQ40DNativeSnapshotMembershipBoundary(t *testing.T) {
+	const index = 8
+	for _, tc := range []struct {
+		name          string
+		blockIndex    uint64
+		voters        []uint64
+		boundaryError string
+	}{
+		{name: "mismatched voters", blockIndex: index, voters: []uint64{1, 2}, boundaryError: "snapshot voters conflict"},
+		{name: "missing membership", voters: []uint64{1}, boundaryError: "missing signed Fabric membership"},
+		{name: "mismatched index", blockIndex: index - 1, voters: []uint64{1}, boundaryError: "missing signed Fabric membership"},
+		{name: "verified snapshot", blockIndex: index, voters: []uint64{1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			genesis := pq40dGenesis(t, 1)
+			pq40dProvisionGenesis(t, root, genesis, true)
+			raw, err := os.ReadFile(filepath.Join(root, "candidate"))
+			require.NoError(t, err)
+			candidate, err := protoutil.UnmarshalBlock(raw)
+			require.NoError(t, err)
+			initialEvidence := pq40dSnapshotProof(t, genesis, proto.CloneOf(candidate), tc.blockIndex)
+			verifiedEvidence := pq40dSnapshotProof(t, genesis, proto.CloneOf(candidate), index)
+			var verified atomic.Bool
+			puller := func() (etcdraft.BlockPuller, error) {
+				if verified.Load() {
+					return verifiedEvidence()
+				}
+				return initialEvidence()
+			}
+			native, controller, ledger, _, err := pq40dNode(t, root, 1, &raftmocks.FakeRPC{}, puller, nil)
+			require.NoError(t, err)
+			native.Start()
+			t.Cleanup(native.Halt)
+			require.Eventually(t, controller.Ready, 10*time.Second, 20*time.Millisecond)
+
+			send := func(voters []uint64) error {
+				message := pq40dSnapshotMessage(native.Node.Status(), raw, index)
+				message.Snapshot.Metadata.ConfState.Voters = voters
+				return native.Consensus(&ab.ConsensusRequest{Payload: protoutil.MarshalOrPanic(message)}, 2)
+			}
+			if tc.boundaryError != "" {
+				err := send(tc.voters)
+				require.ErrorContains(t, err, "protected snapshot evidence is incomplete")
+				require.ErrorContains(t, err, tc.boundaryError)
+				require.False(t, controller.Ready())
+				require.Error(t, native.WaitReady())
+				require.Equal(t, uint64(1), ledger.Height())
+				state := native.Node.Status()
+				require.Less(t, state.GetCommit(), uint64(index))
+				require.Equal(t, map[uint64]struct{}{1: {}}, state.Config.Voters.IDs())
+				_, status := native.StatusReport()
+				require.Equal(t, types.StatusOnBoarding, status)
+
+				verified.Store(true)
+			}
+			require.NoError(t, send([]uint64{1}))
+			require.Eventually(t, func() bool {
+				return controller.Ready() && native.Node.Status().Applied >= index
+			}, 10*time.Second, 20*time.Millisecond)
+			require.NoError(t, native.WaitReady())
+			require.Equal(t, uint64(2), ledger.Height())
+			block, err := ledger.RetrieveBlockByNumber(1)
+			require.NoError(t, err)
+			require.True(t, proto.Equal(candidate.GetHeader(), block.GetHeader()))
+			require.Equal(t, uint64(index), pq40dPromotionBlockIndex(t, block))
+		})
+	}
+}
+
 func pq40dSnapshotProof(t *testing.T, genesis, candidate *cb.Block, index uint64) etcdraft.CreateBlockPuller {
 	t.Helper()
 	source, _ := ordererActivationLedger(t, t.TempDir(), func(string) {})
 	require.NoError(t, source.Append(genesis))
 	writer, _ := activationWriter(t, testfixture.New(t), source, genesis)
-	writer.WriteConfigBlock(candidate, protoutil.MarshalOrPanic(&pb.BlockMetadata{RaftIndex: index, ConsenterIds: []uint64{1}, NextConsenterId: 2}))
+	var metadata []byte
+	if index != 0 {
+		metadata = protoutil.MarshalOrPanic(&pb.BlockMetadata{RaftIndex: index, ConsenterIds: []uint64{1}, NextConsenterId: 2})
+	}
+	writer.WriteConfigBlock(candidate, metadata)
 	return func() (etcdraft.BlockPuller, error) {
 		return pq40dSnapshotPuller{block: proto.CloneOf(candidate)}, nil
 	}
