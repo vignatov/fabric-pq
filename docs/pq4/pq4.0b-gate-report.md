@@ -188,3 +188,66 @@ reported zero issues in both the root module and `ccaas_builder`. The old
 TLS-minimum feasibility test also encoded the prior constructor downgrade;
 it now verifies that original and cloned credential factories preserve an
 explicit TLS 1.3 minimum and report the matching `Info()` version.
+
+## PQ4.0C activation proof
+
+**Architecture status: INCOMPLETE.** The scope of this follow-up is the local
+write-ahead protocol and native lifecycle seams. Node startup, channel RPC and
+background admission, and consensus runtime stay on their existing paths.
+
+| Property | Evidence and scope |
+| --- | --- |
+| Independent Fabric and operator authorization | The peer proof uses a real MSP-signed update, V20 config validation and `Channel.Apply` on a private bundle. It exercises both authorizations, each alone and a native commit without an authorization journal. Existing policy tests cover profile downgrade, stale versions and conflicting digests. |
+| Serving visibility and native peer restart | The peer proof separates the private config validator and public `BundleSource`; its actual committer callback observes the previous serving bundle. The reopened kvledger config block and state DB must agree before startup publication. The proof tests a matching and mismatching binding after genesis initialization. |
+| Native orderer metadata | The orderer proof uses the real synchronous writer and file ledger, checks config sequence, last-config metadata, the real block signature and Raft metadata bytes, and verifies the following block. It exercises a gate lease that is cancelled and drained before append. |
+| Raft leaders, followers and startup | The proof models the replay-complete input and exercises the shared native writer. Production coverage still needs a guard before Raft membership/options mutation, a channel-local stop outcome owned by the Raft loop, and a native replay-complete signal. The direct follower append path also needs its guard. |
+| Transport and cross-channel service behavior | PQ4.0B provides strict comm component tests. Full coverage requires generation checks in service readers, callback staging, approved shared trust resources, and listener/dialer and connection-lifetime integration. |
+
+### Process-crash matrix
+
+`TestPQ40COrdererCrashRecovery` starts a separate test process for each row and
+exits from the selected hook without defers. The parent reopens the local
+Fabric ledger and protected store, runs recovery twice, and counts checkpoint
+writes. All 15 subprocess cases passed in the first Linux proof run below.
+Directory sync and rename hooks test process loss,
+including a rename visible to the next process before directory sync. They do
+not simulate power loss or interrupt a kernel write.
+
+| Exit hook | Persisted state at exit | Recovery and serving decision |
+| --- | --- | --- |
+| Before prepare and after the prepared journal file sync before rename | Prior ledger and checkpoint; no installed journal | Match and serve the prior configuration. |
+| After durable preparation | Prior ledger and checkpoint; PREPARED | Confirm the candidate is absent; record ABORTED and serve the prior configuration. |
+| After durable commit intent and at native writer append entry | Prior ledger and checkpoint; COMMIT_PENDING | Confirm the candidate is absent once native replay settles; record ABORTED and serve the prior configuration. |
+| After native append and after ledger directory sync | Candidate ledger block; prior checkpoint; COMMIT_PENDING | Revalidate both authorizations, advance exactly once and serve the candidate. |
+| After syncing the checkpoint temporary file | Candidate ledger block; prior installed checkpoint; COMMIT_PENDING | Replace the old checkpoint once and serve the candidate. |
+| After checkpoint rename and after directory sync | Candidate ledger block and new visible checkpoint; COMMIT_PENDING | Authenticate both and serve the candidate with zero additional checkpoint writes. |
+| Before, during and after serving resource publication | Candidate ledger and checkpoint; COMMIT_PENDING | Rebuild publication from trusted state, then open the candidate generation. |
+| After durable ACTIVE journal and after opening the gate | Candidate ledger, checkpoint and ACTIVE journal | Restore the active generation with zero additional checkpoint writes. |
+| Peer commits without a preparation record | Candidate peer ledger and prior checkpoint | Persist quarantine, leave admission closed on repeated recovery. Covered by `TestPQ40CPeerActivation/committed_without_preparation`. |
+| Simulated native commit error before or after append | COMMIT_PENDING and prior checkpoint, with either prior or candidate ledger | Keep admission closed on error and reconcile against the actual ledger. Both cases passed in `TestPQ40COrdererUncertainCommit`. |
+
+### PQ4.0C test provenance
+
+- Base commit `b91dd57c781f3ce5c848769e1a3ec3e87f7a4116`, verified against
+  `origin/main` before branching.
+- First proof commit `243d6d2a2b1ff2ed1d62f82b67e92227c36b0aa0` on Ubuntu
+  24.04, Go 1.27.4, Linux amd64. The focused race tests and vet passed, and
+  PQ4.0 Feasibility and PQ4.0B Component Checks passed. Basic Checks flagged
+  one Go literal lint and skipped dependent Fabric tests on that run.
+  [Verify Build 45081026724](https://github.com/vignatov/fabric-pq/actions/runs/45081026724).
+- A Windows amd64 Go 1.27.4 check cross-compiled and vetted the Linux proof.
+  Native Windows PQ4.0 feasibility and policy tests passed. The full existing
+  `comm` suite failed `TestNewGRPCServerInvalidParameters` on Windows socket-error
+  wording. The Linux PQ4.0B component job passed the `comm` suite.
+- The **PQ4.0C Activation Proof** job records the exact tested commit, Go
+  version, Linux runner and FIPS mode. It runs the following commands:
+
+```sh
+GOFIPS140=off go test -mod=vendor -race -count=1 -v -run '^TestPQ40C' ./core/peer ./orderer/common/multichannel ./internal/pkg/pqtransport/activation/...
+GOFIPS140=off go vet -mod=vendor ./core/peer ./orderer/common/multichannel ./internal/pkg/pqtransport/activation/...
+```
+
+The existing Verify Build jobs cover Basic Checks, lint, PQ4.0 feasibility and
+PQ4.0B components, and the Fabric unit and integration suites. PQ3 acceptance
+runs in its existing workflow. A build or cross-compilation alone does not
+establish a Linux crash-recovery result.

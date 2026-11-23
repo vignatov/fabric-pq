@@ -89,6 +89,30 @@ jobs:
         name: Test Orderer Config Activation Ordering
       - run: go vet -mod=vendor ./internal/pkg/pqtransport ./internal/pkg/comm ./integration/pq4/feasibility
         name: Vet Focused Components
+  pq40c-activation:
+    name: PQ4.0C Activation Proof
+    runs-on: ubuntu-24.04
+    env:
+      GOFIPS140: "off"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        name: Checkout Fabric Code
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        name: Install Go
+        with:
+          go-version: 1.27.4
+      - name: Record Test Provenance
+        run: |
+          git rev-parse HEAD
+          go version
+          uname -a
+          printf 'GOFIPS140=%s\n' "$GOFIPS140"
+      - name: Test Peer and Orderer Activation and Process Recovery
+        run: go test -mod=vendor -race -count=1 -v -run '^TestPQ40C' ./core/peer ./orderer/common/multichannel ./internal/pkg/pqtransport/activation/...
+      - name: Vet Activation Proof
+        run: go vet -mod=vendor ./core/peer ./orderer/common/multichannel ./internal/pkg/pqtransport/activation/...
   unit-tests:
     name: Unit Tests
     needs: basic-checks
