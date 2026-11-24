@@ -279,4 +279,5 @@ test now holds the purge lock through those assertions and waits for the
 scheduled purge before cleanup. Ten isolated race-enabled repetitions and the
 private-data storage package race suite passed locally. A separate hosted
 integration job failed during setup because `softhsm2` was unavailable; its
-tests did not execute in that job. Final-head hosted CI remains required.
+tests did not execute in that job. The setup script now refreshes package
+indexes before installation. Final-head hosted CI remains required.
