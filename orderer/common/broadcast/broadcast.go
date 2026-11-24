@@ -107,8 +107,34 @@ func waitReady(processor ChannelSupport, generation context.Context) error {
 		if guarded, ok := processor.(interface{ WaitReadyWithGeneration(context.Context) error }); ok {
 			return guarded.WaitReadyWithGeneration(generation)
 		}
+		return errors.New("consenter does not support protected readiness")
 	}
 	return processor.WaitReady()
+}
+
+func submitWithGeneration(processor ChannelSupport, generation context.Context, env *cb.Envelope, seq uint64, config bool) error {
+	if generation == nil {
+		if config {
+			return processor.Configure(env, seq)
+		}
+		return processor.Order(env, seq)
+	}
+	if config {
+		guarded, ok := processor.(interface {
+			ConfigureWithGeneration(context.Context, *cb.Envelope, uint64) error
+		})
+		if !ok {
+			return errors.New("consenter does not support protected config handoff")
+		}
+		return guarded.ConfigureWithGeneration(generation, env, seq)
+	}
+	guarded, ok := processor.(interface {
+		OrderWithGeneration(context.Context, *cb.Envelope, uint64) error
+	})
+	if !ok {
+		return errors.New("consenter does not support protected order handoff")
+	}
+	return guarded.OrderWithGeneration(generation, env, seq)
 }
 
 func (mt *MetricsTracker) Record(resp *ab.BroadcastResponse) {
@@ -203,7 +229,7 @@ func (bh *Handler) ProcessMessage(msg *cb.Envelope, addr string) (resp *ab.Broad
 			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: "protected channel admission is closed"}
 		}
 
-		err = processor.Order(msg, configSeq)
+		err = submitWithGeneration(processor, admission, msg, configSeq, false)
 		if err != nil {
 			logger.Warningf("[channel: %s] Rejecting broadcast of normal message from %s with SERVICE_UNAVAILABLE: rejected by Order: %s", chdr.GetChannelId(), addr, err)
 			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: err.Error()}
@@ -230,7 +256,7 @@ func (bh *Handler) ProcessMessage(msg *cb.Envelope, addr string) (resp *ab.Broad
 			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: "protected channel admission is closed"}
 		}
 
-		err = processor.Configure(config, configSeq)
+		err = submitWithGeneration(processor, admission, config, configSeq, true)
 		if err != nil {
 			logger.Warningf("[channel: %s] Rejecting broadcast of config message from %s with SERVICE_UNAVAILABLE: rejected by Configure: %s", chdr.GetChannelId(), addr, err)
 			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: err.Error()}

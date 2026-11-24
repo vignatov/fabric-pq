@@ -6,6 +6,7 @@ package broadcast_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -22,6 +23,20 @@ type guardedBroadcastSupport struct {
 type generationReadySupport struct {
 	*guardedBroadcastSupport
 	wait func(context.Context) error
+}
+
+type generationHandoffSupport struct {
+	*generationReadySupport
+	order     func(context.Context, *cb.Envelope, uint64) error
+	configure func(context.Context, *cb.Envelope, uint64) error
+}
+
+func (s *generationHandoffSupport) OrderWithGeneration(ctx context.Context, env *cb.Envelope, seq uint64) error {
+	return s.order(ctx, env, seq)
+}
+
+func (s *generationHandoffSupport) ConfigureWithGeneration(ctx context.Context, env *cb.Envelope, seq uint64) error {
+	return s.configure(ctx, env, seq)
 }
 
 func (s *generationReadySupport) WaitReadyWithGeneration(ctx context.Context) error {
@@ -122,4 +137,54 @@ func TestPQ40EBroadcastCancelsGenerationReadiness(t *testing.T) {
 	response := handler.ProcessMessage(&cb.Envelope{}, "client")
 	require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, response.GetStatus())
 	require.Zero(t, support.OrderCallCount())
+}
+
+func TestPQ40EBroadcastRequiresGenerationHandoff(t *testing.T) {
+	for _, config := range []bool{false, true} {
+		for _, supported := range []bool{false, true} {
+			t.Run(fmt.Sprintf("config=%t/supported=%t", config, supported), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				base := &guardedBroadcastSupport{ChannelSupport: &mock.ChannelSupport{}}
+				base.acquire = func() (context.Context, func(), bool) { return ctx, func() {}, true }
+				base.ProcessNormalMsgReturns(7, nil)
+				base.ProcessConfigUpdateMsgReturns(&cb.Envelope{}, 7, nil)
+				ready := &generationReadySupport{guardedBroadcastSupport: base, wait: func(got context.Context) error {
+					require.Same(t, ctx, got)
+					return nil
+				}}
+				var support broadcast.ChannelSupport = ready
+				called := false
+				if supported {
+					handoff := func(got context.Context, _ *cb.Envelope, seq uint64) error {
+						called = true
+						require.Same(t, ctx, got)
+						require.EqualValues(t, 7, seq)
+						return nil
+					}
+					support = &generationHandoffSupport{generationReadySupport: ready, order: handoff, configure: handoff}
+				}
+				registrar := &mock.ChannelSupportRegistrar{}
+				registrar.BroadcastChannelSupportReturns(&cb.ChannelHeader{ChannelId: "channel"}, config, support, nil)
+				validate := &mock.MetricsHistogram{}
+				validate.WithReturns(validate)
+				enqueue := &mock.MetricsHistogram{}
+				enqueue.WithReturns(enqueue)
+				counter := &mock.MetricsCounter{}
+				counter.WithReturns(counter)
+				handler := &broadcast.Handler{SupportRegistrar: registrar, Metrics: &broadcast.Metrics{
+					ValidateDuration: validate, EnqueueDuration: enqueue, ProcessedCount: counter,
+				}}
+				response := handler.ProcessMessage(&cb.Envelope{}, "client")
+				if supported {
+					require.Equal(t, cb.Status_SUCCESS, response.GetStatus())
+					require.True(t, called)
+				} else {
+					require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, response.GetStatus())
+				}
+				require.Zero(t, base.OrderCallCount())
+				require.Zero(t, base.ConfigureCallCount())
+			})
+		}
+	}
 }

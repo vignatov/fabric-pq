@@ -199,8 +199,11 @@ The orderer's protected registrar suppresses initial shared callbacks and
 invokes them through the activation controller after authorization. The
 focused callback test does not prove atomic TLS-root and cached-connection
 publication. Broadcast holds an authenticated serving generation during
-validation, releases it before the potentially blocking Raft handoff, and
-checks that generation again before enqueue. It does not hold a serving
+validation and releases it before the potentially blocking Raft handoff.
+Protected broadcast now requires a generation-aware readiness and submission
+interface; it rejects the request if the consenter does not implement that
+interface. The Raft consenter does not yet implement generation-aware submission,
+so protected broadcast remains unavailable. This does not hold a serving
 generation for the whole operation. Protected Raft readiness waits now observe
 the validation generation and return when it closes. Forwarding acquires the
 then-current generation and uses the generation-bound stream send, which holds

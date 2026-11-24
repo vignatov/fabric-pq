@@ -57,10 +57,34 @@ func (cs *ChainSupport) AdmissionReady() bool {
 // handoff; the handoff is not yet generation-leased.
 func (cs *ChainSupport) AcquireBroadcastAdmission() (context.Context, func(), bool) {
 	if cs.activation == nil {
-		return context.Background(), func() {}, true
+		return nil, func() {}, true
 	}
 	_, ctx, release, ok := cs.activation.Gate.Acquire()
 	return ctx, release, ok
+}
+
+// OrderWithGeneration refuses a protected handoff unless the consenter can
+// keep the validated generation attached to the submission.
+func (cs *ChainSupport) OrderWithGeneration(generation context.Context, env *cb.Envelope, seq uint64) error {
+	guarded, ok := cs.Chain.(interface {
+		OrderWithGeneration(context.Context, *cb.Envelope, uint64) error
+	})
+	if !ok {
+		return errors.New("consenter does not support protected order handoff")
+	}
+	return guarded.OrderWithGeneration(generation, env, seq)
+}
+
+// ConfigureWithGeneration applies the same handoff requirement to config
+// updates, which may themselves initiate a generation transition.
+func (cs *ChainSupport) ConfigureWithGeneration(generation context.Context, env *cb.Envelope, seq uint64) error {
+	guarded, ok := cs.Chain.(interface {
+		ConfigureWithGeneration(context.Context, *cb.Envelope, uint64) error
+	})
+	if !ok {
+		return errors.New("consenter does not support protected config handoff")
+	}
+	return guarded.ConfigureWithGeneration(generation, env, seq)
 }
 
 // WaitReadyWithGeneration prevents protected readiness waits from spanning a
