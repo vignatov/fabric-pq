@@ -168,10 +168,12 @@ committer; ordinary callbacks still publish baseline resources.
 Gateway is created after existing peer channels are initialized. Protected
 startup must therefore rebuild and publish each existing channel's Gateway
 candidate under closed admission before Gateway can serve; registering the
-stage alone does not reconstruct those caches. Registration now rejects an
-already-serving protected channel and is serialized with publication, but
-channel creation must also be serialized and the late-registration recovery
-path is not yet wired.
+stage alone does not reconstruct those caches. Registration rejects an
+already-serving protected channel. Protected lifecycle publication now retains
+the registration barrier until the serving generation opens, preventing a
+stage from being inserted between publication and admission. Channel creation
+must also be serialized and the late-registration recovery path is not yet
+wired.
 
 Gateway orderer endpoints can now be prepared without publishing them. Its
 connection cache is scoped by channel, MSP and TLS roots; publishing a changed

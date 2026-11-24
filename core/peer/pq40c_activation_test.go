@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -370,16 +371,63 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 		require.Equal(t, []uint64{0, 0}, resources)
 	})
 	var published []uint64
+	firstPublication := true
+	publicationEntered := make(chan struct{})
+	publicationContinue := make(chan struct{})
+	continuePublication := sync.OnceFunc(func() { close(publicationContinue) })
+	defer continuePublication()
 	lifecycle, err = peer.newProtectedLifecycle(&controller, lgr, initial, native, func(bundle *channelconfig.Bundle) {
-		_, _, _, admitted := controller.Gate.Acquire()
-		require.False(t, admitted)
+		_, _, release, admitted := controller.Gate.Acquire()
+		if admitted {
+			release()
+			t.Error("publication ran while admission was open")
+		}
+		if firstPublication {
+			firstPublication = false
+			close(publicationEntered)
+			<-publicationContinue
+		}
 		mspmgmt.XXXSetMSPManager(testfixture.ChannelID, bundle.MSPManager())
 		published = append(published, bundle.ConfigtxValidator().Sequence())
 	})
 	require.NoError(t, err)
 	require.Nil(t, lifecycle.serving.Resources())
 	require.Empty(t, resources)
-	require.NoError(t, lifecycle.recover())
+	peer.channels = map[string]*Channel{testfixture.ChannelID: lifecycle.serving}
+	recovered := make(chan error, 1)
+	go func() { recovered <- lifecycle.recover() }()
+	select {
+	case <-publicationEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publication did not start")
+	}
+	registrationStarted := make(chan struct{})
+	registered := make(chan error, 1)
+	go func() {
+		close(registrationStarted)
+		registered <- peer.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
+			return func() error { return nil }, nil
+		})
+	}()
+	<-registrationStarted
+	select {
+	case <-registered:
+		t.Fatal("resource registration crossed an unfinished publication")
+	case <-time.After(50 * time.Millisecond):
+	}
+	continuePublication()
+	select {
+	case err := <-recovered:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery did not finish")
+	}
+	select {
+	case err := <-registered:
+		require.ErrorContains(t, err, "must be closed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("resource registration did not finish")
+	}
 	require.Equal(t, []uint64{0}, published)
 	require.ErrorContains(t, controller.InstallPublisher(func(*channelconfig.Bundle) error { return nil }), "before admission opens")
 	validator := &validatorv20.TxValidator{
@@ -424,8 +472,7 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	require.NoError(t, err)
 	lgr, err = manager.OpenLedger(testfixture.ChannelID)
 	require.NoError(t, err)
-	controller.Gate = &activation.Gate{}
-	controller.Publish = nil
+	controller = fixture.Channel(store, controller.Ledger)
 	restoredConfig, err := RetrievePersistedChannelConfig(lgr)
 	require.NoError(t, err)
 	restoredBundle, err := channelconfig.NewBundle(testfixture.ChannelID, restoredConfig, fixture.Crypto)

@@ -143,8 +143,26 @@ func (p *Peer) AddProtectedConfigStage(stage ProtectedConfigStage) error {
 // after durable commit, while channel admission is closed. On any error the
 // owner must leave admission closed and retry publication during recovery.
 func (p *Peer) publishProtectedResources(bundle *channelconfig.Bundle) error {
+	release, err := p.beginProtectedPublication(bundle)
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
+}
+
+// beginProtectedPublication retains the registration barrier until the
+// controller has either opened the new generation or abandoned publication.
+func (p *Peer) beginProtectedPublication(bundle *channelconfig.Bundle) (func(), error) {
 	p.protectedStagesLock.RLock()
-	defer p.protectedStagesLock.RUnlock()
+	if err := p.publishProtectedResourcesLocked(bundle); err != nil {
+		p.protectedStagesLock.RUnlock()
+		return nil, err
+	}
+	return p.protectedStagesLock.RUnlock, nil
+}
+
+func (p *Peer) publishProtectedResourcesLocked(bundle *channelconfig.Bundle) error {
 	var roots *comm.TrustedRootsSnapshot
 	var err error
 	if p.ServerConfig.SecOpts.UseTLS {

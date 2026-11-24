@@ -38,9 +38,10 @@ func (p *Peer) newProtectedLifecycle(controller *activation.Channel, l ledger.Pe
 	validation := &Channel{ledger: l, cryptoProvider: p.CryptoProvider, resources: initial}
 	validation.bundleSource = channelconfig.NewBundleSource(initial, validation.bundleUpdate)
 	callbacks := append([]channelconfig.BundleActor{serving.bundleUpdate}, actors...)
-	err := controller.InstallPublisher(func(bundle *channelconfig.Bundle) error {
-		if err := p.publishProtectedResources(bundle); err != nil {
-			return err
+	err := controller.InstallPublisherWithBarrier(func(bundle *channelconfig.Bundle) (func(), error) {
+		release, err := p.beginProtectedPublication(bundle)
+		if err != nil {
+			return nil, err
 		}
 		// Validation may have applied a candidate that did not commit. Reset
 		// it to the authenticated ledger bundle before serving can reopen.
@@ -52,7 +53,7 @@ func (p *Peer) newProtectedLifecycle(controller *activation.Channel, l ledger.Pe
 		} else {
 			serving.bundleSource.Update(bundle)
 		}
-		return nil
+		return release, nil
 	})
 	if err != nil {
 		return nil, err

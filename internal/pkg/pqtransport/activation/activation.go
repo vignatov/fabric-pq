@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"sync"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -59,6 +60,7 @@ type Channel struct {
 	Crypto         bccsp.BCCSP
 	Validate       func(channelconfig.Resources) error
 	Publish        func(*channelconfig.Bundle) error
+	publication    func(*channelconfig.Bundle) (func(), error)
 }
 
 // InstallPublisher binds a publication callback before channel recovery. The
@@ -72,7 +74,7 @@ func (c *Channel) InstallPublisher(publish func(*channelconfig.Bundle) error) er
 	}
 	c.Store.mu.Lock()
 	defer c.Store.mu.Unlock()
-	if c.Gate.isOpen() || c.Publish != nil {
+	if c.Gate.isOpen() || c.Publish != nil || c.publication != nil {
 		return errors.New("protected publication must be installed before admission opens")
 	}
 	if other := c.Store.gates[c.ID]; other != nil && other != c.Gate && other.isOpen() {
@@ -80,6 +82,47 @@ func (c *Channel) InstallPublisher(publish func(*channelconfig.Bundle) error) er
 	}
 	c.Publish = publish
 	return nil
+}
+
+// InstallPublisherWithBarrier holds the returned barrier until the generation
+// is opened or publication fails. The callback must return a release function
+// on success and retain no barrier on error.
+func (c *Channel) InstallPublisherWithBarrier(publish func(*channelconfig.Bundle) (func(), error)) error {
+	if c == nil || c.Store == nil || c.Gate == nil || publish == nil {
+		return errors.New("protected publication requires a store, gate and callback")
+	}
+	if c.BootstrapError != nil {
+		return c.BootstrapError
+	}
+	c.Store.mu.Lock()
+	defer c.Store.mu.Unlock()
+	if c.Gate.isOpen() || c.Publish != nil || c.publication != nil {
+		return errors.New("protected publication must be installed before admission opens")
+	}
+	if other := c.Store.gates[c.ID]; other != nil && other != c.Gate && other.isOpen() {
+		return errors.New("another protected generation is serving this channel")
+	}
+	c.publication = publish
+	return nil
+}
+
+func (c *Channel) publishBundle(bundle *channelconfig.Bundle) (func(), error) {
+	if c.publication != nil {
+		release, err := c.publication(bundle)
+		if err != nil {
+			return nil, err
+		}
+		if release == nil {
+			return nil, errors.New("protected publication returned no barrier release")
+		}
+		return sync.OnceFunc(release), nil
+	}
+	if c.Publish != nil {
+		if err := c.Publish(bundle); err != nil {
+			return nil, err
+		}
+	}
+	return func() {}, nil
 }
 
 type configuration struct {
@@ -387,10 +430,12 @@ func (c *Channel) finish(record journal, committed configuration, current checkp
 		return c.quarantine(errors.New("checkpoint conflicts with prepared transition"))
 	}
 	s.probe("before-publication")
-	if publish && c.Publish != nil {
-		if err := c.Publish(committed.bundle); err != nil {
+	if publish {
+		release, err := c.publishBundle(committed.bundle)
+		if err != nil {
 			return fmt.Errorf("publish configuration: %w", err)
 		}
+		defer release()
 	}
 	s.probe("after-publication")
 	record.Phase = active
@@ -429,7 +474,7 @@ func (c *Channel) recover(replaySettled, orderer, requirePublisher bool) error {
 	}
 	s.gates[c.ID] = c.Gate
 	c.Gate.close()
-	if requirePublisher && c.Publish == nil {
+	if requirePublisher && c.Publish == nil && c.publication == nil {
 		return errors.New("protected peer publisher is not installed")
 	}
 	if err := c.checkQuarantine(); err != nil {
@@ -519,11 +564,11 @@ func (c *Channel) recover(replaySettled, orderer, requirePublisher bool) error {
 	if !replaySettled {
 		return nil
 	}
-	if c.Publish != nil {
-		if err := c.Publish(committed.bundle); err != nil {
-			return err
-		}
+	release, err := c.publishBundle(committed.bundle)
+	if err != nil {
+		return err
 	}
+	defer release()
 	c.Gate.publish(committed.bundle)
 	return nil
 }
