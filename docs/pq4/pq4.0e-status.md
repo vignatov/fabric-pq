@@ -112,10 +112,12 @@ A protected peer commit adapter now routes configuration blocks through the
 activation controller using a staged operator approval read under the store
 lock. It retains a generation lease for ordinary native commits and rejects
 malformed or mixed protected blocks. Real-ledger tests exercise authorized
-commit, publication after the native commit and quarantine when approval is
-missing. Peer channel creation does not yet construct this adapter: the
-private validator source, controller bootstrap, protected service admission and
-activation-controlled TLS and Gateway publication must be integrated first.
+commit, TLS-root publication after the native commit, and quarantine when
+approval is missing. A blocked-commit test checks that the generation does not
+drain until the native operation stops. Peer channel creation does not yet
+construct this adapter: the private validator source, controller bootstrap,
+protected service admission and activation-controlled TLS and Gateway
+publication must be integrated first.
 
 `comm.PrepareTrustedRootsForChain` now builds an isolated per-channel TLS-root
 snapshot and `PublishTrustedRootsForChain` installs it explicitly. Preparation
