@@ -61,6 +61,27 @@ type Channel struct {
 	Publish        func(*channelconfig.Bundle) error
 }
 
+// InstallPublisher binds a publication callback before channel recovery. The
+// store lock serializes installation with recovery and configuration changes.
+func (c *Channel) InstallPublisher(publish func(*channelconfig.Bundle) error) error {
+	if c == nil || c.Store == nil || c.Gate == nil || publish == nil {
+		return errors.New("protected publication requires a store, gate and callback")
+	}
+	if c.BootstrapError != nil {
+		return c.BootstrapError
+	}
+	c.Store.mu.Lock()
+	defer c.Store.mu.Unlock()
+	if c.Gate.isOpen() || c.Publish != nil {
+		return errors.New("protected publication must be installed before admission opens")
+	}
+	if other := c.Store.gates[c.ID]; other != nil && other != c.Gate && other.isOpen() {
+		return errors.New("another protected generation is serving this channel")
+	}
+	c.Publish = publish
+	return nil
+}
+
 type configuration struct {
 	identity blockIdentity
 	envelope *cb.ConfigEnvelope

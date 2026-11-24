@@ -312,3 +312,99 @@ func TestPQ40EProtectedPeerCommitDrainsGeneration(t *testing.T) {
 	require.False(t, admitted)
 	require.ErrorContains(t, guarded.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{}), "admission is closed")
 }
+
+func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *testing.T) {
+	fixture := testfixture.New(t)
+	genesis := testfixture.Genesis(t)
+	base := testfixture.Config(t, genesis)
+	update := fixture.Update(t, base)
+	block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
+	block.Data.Data = [][]byte{protoutil.MarshalOrPanic(fixture.Envelope(t, update))}
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
+	block.Metadata.Metadata[cb.BlockMetadataIndex_LAST_CONFIG] = protoutil.MarshalOrPanic(&cb.Metadata{
+		Value: protoutil.MarshalOrPanic(&cb.LastConfig{Index: 1}),
+	})
+	root := t.TempDir()
+	manager, err := constructLedgerMgrWithTestDefaults(root)
+	require.NoError(t, err)
+	t.Cleanup(func() { manager.Close() })
+	lgr, err := manager.CreateLedger(testfixture.ChannelID, genesis)
+	require.NoError(t, err)
+	stateDir := t.TempDir()
+	store, err := activation.OpenStore(stateDir, nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, base)
+	controller := fixture.Channel(store, activation.Ledger{
+		LatestConfig: func() (*cb.Block, error) { return ConfigBlockFromLedger(lgr) },
+		Block:        func(number uint64) (*cb.Block, error) { return lgr.GetBlockByNumber(number) },
+		Height:       func() (uint64, error) { info, err := lgr.GetBlockchainInfo(); return info.GetHeight(), err },
+		Sync: func() error {
+			return activation.SyncDirectory(filepath.Join(kvledger.BlockStorePath(root), "chains", testfixture.ChannelID))
+		},
+	})
+	initial, err := channelconfig.NewBundle(testfixture.ChannelID, base, fixture.Crypto)
+	require.NoError(t, err)
+	peer := &Peer{CryptoProvider: fixture.Crypto}
+	var resources []uint64
+	failPublication := true
+	peer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
+		return func() error {
+			if failPublication && bundle.ConfigtxValidator().Sequence() == 1 {
+				failPublication = false
+				return errors.New("injected protected resource failure")
+			}
+			resources = append(resources, bundle.ConfigtxValidator().Sequence())
+			return nil
+		}, nil
+	})
+	var lifecycle *protectedLifecycle
+	native := committer.NewLedgerCommitter(lgr, func(*cb.Block) {
+		require.Equal(t, uint64(0), lifecycle.serving.Sequence())
+		require.Equal(t, []uint64{0}, resources)
+	})
+	var published []uint64
+	lifecycle, err = peer.newProtectedLifecycle(&controller, lgr, initial, native, func(bundle *channelconfig.Bundle) {
+		_, _, _, admitted := controller.Gate.Acquire()
+		require.False(t, admitted)
+		mspmgmt.XXXSetMSPManager(testfixture.ChannelID, bundle.MSPManager())
+		published = append(published, bundle.ConfigtxValidator().Sequence())
+	})
+	require.NoError(t, err)
+	require.Nil(t, lifecycle.serving.Resources())
+	require.Empty(t, resources)
+	require.NoError(t, controller.Recover(true))
+	require.Equal(t, []uint64{0}, published)
+	require.ErrorContains(t, controller.InstallPublisher(func(*channelconfig.Bundle) error { return nil }), "before admission opens")
+	validator := &validatorv20.TxValidator{
+		ChannelID: testfixture.ChannelID, Semaphore: semaphore.New(1), ChannelResources: lifecycle.validation,
+		LedgerResources: lgr, CryptoProvider: fixture.Crypto,
+	}
+	require.NoError(t, validator.Validate(block))
+	require.Equal(t, byte(pb.TxValidationCode_VALID), block.GetMetadata().GetMetadata()[cb.BlockMetadataIndex_TRANSACTIONS_FILTER][0])
+	require.Equal(t, uint64(1), lifecycle.validation.Sequence())
+	require.Equal(t, uint64(0), lifecycle.serving.Sequence())
+	auth, err := json.Marshal(fixture.Authorize(t, 1, base, update.GetConfig()))
+	require.NoError(t, err)
+	id := sha256.Sum256([]byte(testfixture.ChannelID))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, fmt.Sprintf("approval-%x-2", id)), auth, 0o600))
+	err = lifecycle.committer.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{})
+	require.ErrorContains(t, err, "injected protected resource failure")
+	require.False(t, controller.Ready())
+	require.Equal(t, uint64(0), lifecycle.serving.Sequence())
+	require.Equal(t, []uint64{0}, resources)
+	require.NoError(t, controller.Recover(true))
+	require.Equal(t, uint64(1), lifecycle.serving.Sequence())
+	require.Equal(t, []uint64{0, 1}, published)
+	require.Equal(t, []uint64{0, 1}, resources)
+	controller.Suspend()
+	lgr.Close()
+	manager.Close()
+	manager, err = constructLedgerMgrWithTestDefaults(root)
+	require.NoError(t, err)
+	lgr, err = manager.OpenLedger(testfixture.ChannelID)
+	require.NoError(t, err)
+	controller.Gate = &activation.Gate{}
+	require.NoError(t, controller.Recover(true))
+	require.Equal(t, uint64(1), lifecycle.serving.Sequence())
+	require.Equal(t, []uint64{0, 1, 1}, resources)
+}

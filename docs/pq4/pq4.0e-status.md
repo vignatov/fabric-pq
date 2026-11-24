@@ -84,6 +84,7 @@ arguments on Linux. Other platforms fail closed.
 | Authenticated onboarding and non-genesis join provenance | Incomplete |
 | Peer bootstrap and endorsement, Gateway and background admission | Endorsement dispatch has a generation-lease hook; controller installation and other admission remain incomplete |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; not selected by peer startup |
+| Protected peer lifecycle assembly | Private validation, serving publication and guarded committer exercised with a real ledger; not selected by peer startup |
 | Orderer service, stream and follower integration under strict transport | Incomplete |
 | Orderer broadcast validation generation lease | Validation lease and cancellation-aware Raft readiness implemented; end-to-end handoff remains incomplete |
 | Cluster send cancellation and shutdown reporting | Component race tests passed; protected handoff and lease ownership remain incomplete |
@@ -118,6 +119,13 @@ drain until the native operation stops. Peer channel creation does not yet
 construct this adapter: the private validator source, controller bootstrap,
 protected service admission and activation-controlled TLS and Gateway
 publication must be integrated first.
+
+The peer now has a protected lifecycle assembly that binds separate private
+validation and serving channels, the guarded committer and the staged resource
+publisher to one controller. Publisher installation is serialized with
+controller recovery. A real-ledger component test exercises candidate
+validation, publication failure, recovery and restart. Production channel
+creation does not yet select this assembly or authenticate its controller.
 
 The peer's endorsement adapter now acquires its identity deserializer from
 the serving generation and holds the generation lease through endorsement
