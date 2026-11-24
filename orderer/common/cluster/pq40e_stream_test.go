@@ -55,8 +55,10 @@ func TestPQ40EGenerationSendDrainsAndRejectsOldGeneration(t *testing.T) {
 	stream, abort := pq40eStream(1)
 	var once sync.Once
 	stream.Cancel = func(error) { once.Do(func() { atomic.StoreUint32(stream.canceled, 1); close(abort) }) }
+	rpc := &RPC{Logger: flogging.MustGetLogger("pq40e.rpc"), StreamsByType: NewStreamsByType()}
+	rpc.StreamsByType[SubmitOperation][1] = stream
 	reported := make(chan error, 1)
-	require.NoError(t, stream.SendWithGeneration(context.Background(), controller.Gate, generation, &orderer.StepRequest{}, func(err error) { reported <- err }))
+	require.NoError(t, rpc.SendSubmitWithGeneration(context.Background(), controller.Gate, generation, 1, &orderer.SubmitRequest{}, func(err error) { reported <- err }))
 	drained := make(chan struct{})
 	go func() { controller.Suspend(); close(drained) }()
 	select {
@@ -87,7 +89,6 @@ func TestPQ40EGenerationSendDrainsAndRejectsOldGeneration(t *testing.T) {
 	release()
 	other, _ := pq40eStream(1)
 	require.Error(t, other.SendWithGeneration(context.Background(), controller.Gate, generation, &orderer.StepRequest{}, func(error) { t.Error("stale send reported completion") }))
-	rpc := &RPC{Logger: flogging.MustGetLogger("pq40e.rpc"), StreamsByType: NewStreamsByType()}
 	rpc.StreamsByType[SubmitOperation][1] = other
 	require.Error(t, rpc.SendSubmitWithGeneration(context.Background(), controller.Gate, generation, 1, &orderer.SubmitRequest{}, func(error) { t.Error("stale RPC reported completion") }))
 	require.Same(t, other, rpc.getStream(1, SubmitOperation), "a stale caller must not evict the current stream")
