@@ -9,6 +9,7 @@ package comm_test
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/stats"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestConnectionCounters(t *testing.T) {
@@ -117,6 +119,74 @@ func TestPQ40EResponseLeaseScopeEndsOnce(t *testing.T) {
 	require.Equal(t, 2, count)
 	require.False(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
 	require.False(t, comm.RetainUntilRPCEnd(context.Background(), func() {}))
+}
+
+type blockingResponseCodec struct {
+	started chan struct{}
+	finish  chan struct{}
+}
+
+func (c *blockingResponseCodec) Name() string { return "proto" }
+
+func (c *blockingResponseCodec) Marshal(v any) ([]byte, error) {
+	close(c.started)
+	<-c.finish
+	return proto.Marshal(v.(proto.Message))
+}
+
+func (c *blockingResponseCodec) Unmarshal(data []byte, v any) error {
+	return proto.Unmarshal(data, v.(proto.Message))
+}
+
+func TestPQ40EResponseLeaseSurvivesBlockedSend(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	codec := &blockingResponseCodec{started: make(chan struct{}), finish: make(chan struct{})}
+	server := grpc.NewServer(grpc.StatsHandler(comm.NewServerStatsHandler(&disabled.Provider{})), grpc.ForceServerCodec(codec))
+	service := &responseLeaseServer{acquired: make(chan struct{}), finish: make(chan struct{}), released: make(chan struct{})}
+	testpb.RegisterEmptyServiceServer(server, service)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	var finishService, finishCodec sync.Once
+	t.Cleanup(func() {
+		finishService.Do(func() { close(service.finish) })
+		finishCodec.Do(func() { close(codec.finish) })
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	done := make(chan error, 1)
+	go func() { _, err := testpb.NewEmptyServiceClient(conn).EmptyCall(ctx, &testpb.Empty{}); done <- err }()
+	select {
+	case <-service.acquired:
+	case <-ctx.Done():
+		t.Fatal("RPC did not acquire the lease")
+	}
+	finishService.Do(func() { close(service.finish) })
+	select {
+	case <-codec.started:
+	case <-ctx.Done():
+		t.Fatal("response did not enter serialization")
+	}
+	select {
+	case <-service.released:
+		t.Fatal("lease released while response send was blocked")
+	default:
+	}
+	finishCodec.Do(func() { close(codec.finish) })
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("RPC did not finish")
+	}
+	select {
+	case <-service.released:
+	case <-ctx.Done():
+		t.Fatal("lease did not release after RPC completion")
+	}
 }
 
 func TestConnMetricsGRPCServer(t *testing.T) {
