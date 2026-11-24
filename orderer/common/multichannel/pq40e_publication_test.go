@@ -49,7 +49,7 @@ func TestPQ40EOrdererCallbacksWaitForAuthorization(t *testing.T) {
 	resources, err := r.newLedgerResources(envelope)
 	require.NoError(t, err)
 	require.Empty(t, published, "candidate bundle must not invoke shared callbacks")
-	require.NoError(t, resources.ReadWriter.Append(genesis))
+	require.NoError(t, resources.Append(genesis))
 	channel := r.activationFor(resources)
 	channel.Validate = checkResources
 	require.NoError(t, channel.Recover(true))

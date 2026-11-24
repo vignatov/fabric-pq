@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"strings"
 )
 
@@ -140,11 +141,7 @@ func (p *Policy) Channels() (map[string]ChannelBinding, error) {
 	if err := p.Check(); err != nil {
 		return nil, err
 	}
-	channels := make(map[string]ChannelBinding, len(p.document.Channels))
-	for id, binding := range p.document.Channels {
-		channels[id] = binding
-	}
-	return channels, nil
+	return maps.Clone(p.document.Channels), nil
 }
 
 // Checkpoint returns the checkpoint corresponding to the authenticated policy.

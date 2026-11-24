@@ -50,7 +50,7 @@ func (g *Gate) isOpen() bool {
 // Acquire obtains a bundle and a generation context. Callers must release the
 // lease and use the context to cancel work at their dispatch and send boundaries.
 func (g *Gate) Acquire() (*channelconfig.Bundle, context.Context, func(), bool) {
-	return g.acquire(nil, false)
+	return g.acquire(context.Background(), false)
 }
 
 // AcquireMatching admits work only if expected identifies the current generation.

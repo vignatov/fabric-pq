@@ -60,7 +60,7 @@ func TestPQ40EBroadcastGenerationAdmission(t *testing.T) {
 				ValidateDuration: validate, EnqueueDuration: enqueue, ProcessedCount: counter,
 			}}
 			response := handler.ProcessMessage(&cb.Envelope{}, "client")
-			require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, response.Status)
+			require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, response.GetStatus())
 			require.Equal(t, 1, released)
 			require.Zero(t, support.OrderCallCount())
 			require.Zero(t, support.ConfigureCallCount())
@@ -83,6 +83,6 @@ func TestPQ40EBroadcastRejectsClosedGeneration(t *testing.T) {
 		ValidateDuration: validate, EnqueueDuration: enqueue, ProcessedCount: counter,
 	}}
 	response := handler.ProcessMessage(&cb.Envelope{}, "client")
-	require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, response.Status)
+	require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, response.GetStatus())
 	require.Zero(t, support.ProcessNormalMsgCallCount())
 }

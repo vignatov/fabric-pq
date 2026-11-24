@@ -157,8 +157,10 @@ also cannot retract work already handed to the consensus queue.
 The stream additionally offers a generation-bound send that rejects a stale
 generation and holds its own lease until a queued or in-flight send stops.
 Closing that generation cancels the channel-scoped stream. A Linux race test
-checks queued-send drainage and rejection after the gate reopens. This helper
-is not connected to broadcast or Raft and does not establish end-to-end safety.
+checks queued-send drainage and rejection after the gate reopens. Cluster RPC
+can carry that generation through a submit send without allowing a stale caller
+to evict a current stream. This path is not connected to broadcast or Raft and
+does not establish end-to-end safety.
 Adding a lease without addressing those boundaries could
 deadlock an activation waiting for old work to drain. Deliver has existing cancellation
 integration, but protected transport, stream-boundary and recovery evidence
@@ -216,6 +218,6 @@ full Docker-dependent integration suites remain unrun. Automatic approval
 review rejected a full Raft-suite attempt because it combined a root container,
 the host Docker socket and a broad writable host `/tmp` mount. An appropriately
 isolated Linux runner with Docker integration is needed for that matrix.
-An attempt to upload the worktree to the intended GitHub repository for a draft
-PR and hosted runner was also rejected by automatic approval review; no branch
-or PR was created.
+After explicit user approval, the development checkpoint was uploaded as draft
+PR 12 for hosted Linux CI. The results must be checked against the exact tested
+commit and do not replace the missing protected service-path integration.

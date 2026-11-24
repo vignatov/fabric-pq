@@ -87,6 +87,10 @@ func TestPQ40EGenerationSendDrainsAndRejectsOldGeneration(t *testing.T) {
 	release()
 	other, _ := pq40eStream(1)
 	require.Error(t, other.SendWithGeneration(context.Background(), controller.Gate, generation, &orderer.StepRequest{}, func(error) { t.Error("stale send reported completion") }))
+	rpc := &RPC{Logger: flogging.MustGetLogger("pq40e.rpc"), StreamsByType: NewStreamsByType()}
+	rpc.StreamsByType[SubmitOperation][1] = other
+	require.Error(t, rpc.SendSubmitWithGeneration(context.Background(), controller.Gate, generation, 1, &orderer.SubmitRequest{}, func(error) { t.Error("stale RPC reported completion") }))
+	require.Same(t, other, rpc.getStream(1, SubmitOperation), "a stale caller must not evict the current stream")
 	controller.Suspend()
 }
 
