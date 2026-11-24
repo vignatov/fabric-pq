@@ -47,14 +47,24 @@ func TestPQ40ESnapshotReportsAuthorizationErrorBeforeShutdown(t *testing.T) {
 	require.ErrorIs(t, chain.authorizeIncomingSnapshot(&raftpb.Message{}), expected)
 }
 
-func TestPQ40ESnapshotReturnsWhenApplicationExitsWithoutReport(t *testing.T) {
+func TestPQ40ESnapshotReturnsOnHaltWithBlockedApplication(t *testing.T) {
 	chain := &Chain{snapshotRequests: make(chan snapshotRequest), doneC: make(chan struct{}), applicationDone: make(chan struct{})}
+	finish := make(chan struct{})
+	defer close(finish)
 	go func() {
 		<-chain.snapshotRequests
 		close(chain.doneC)
+		<-finish
 		close(chain.applicationDone)
 	}()
-	require.ErrorIs(t, chain.authorizeIncomingSnapshot(&raftpb.Message{}), ErrChainHalting)
+	result := make(chan error, 1)
+	go func() { result <- chain.authorizeIncomingSnapshot(&raftpb.Message{}) }()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, ErrChainHalting)
+	case <-time.After(5 * time.Second):
+		t.Fatal("snapshot request did not return after external halt")
+	}
 }
 
 type protectedForwardTransport struct {
