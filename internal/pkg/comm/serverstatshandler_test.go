@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/hyperledger/fabric-lib-go/common/metrics"
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
 	"github.com/hyperledger/fabric-lib-go/common/metrics/metricsfakes"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/comm/testpb"
 	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/stats"
@@ -42,6 +44,79 @@ func TestConnectionCounters(t *testing.T) {
 		sh.HandleConn(context.Background(), &stats.ConnEnd{})
 		gt.Expect(closedConn.AddCallCount()).To(Equal(i))
 	}
+}
+
+type responseLeaseServer struct {
+	testpb.UnimplementedEmptyServiceServer
+	acquired chan struct{}
+	finish   chan struct{}
+	released chan struct{}
+}
+
+func (s *responseLeaseServer) EmptyCall(ctx context.Context, _ *testpb.Empty) (*testpb.Empty, error) {
+	if !comm.RetainUntilRPCEnd(ctx, func() { close(s.released) }) {
+		return nil, context.Canceled
+	}
+	close(s.acquired)
+	<-s.finish
+	return &testpb.Empty{}, nil
+}
+
+func TestPQ40EResponseLeaseEndsWithGRPC(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv, err := comm.NewGRPCServerFromListener(listener, comm.ServerConfig{
+		ServerStatsHandler: comm.NewServerStatsHandler(&disabled.Provider{}),
+	})
+	require.NoError(t, err)
+	service := &responseLeaseServer{acquired: make(chan struct{}), finish: make(chan struct{}), released: make(chan struct{})}
+	testpb.RegisterEmptyServiceServer(srv.Server(), service)
+	go srv.Start()
+	t.Cleanup(srv.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	done := make(chan error, 1)
+	go func() { _, err := testpb.NewEmptyServiceClient(conn).EmptyCall(ctx, &testpb.Empty{}); done <- err }()
+	select {
+	case <-service.acquired:
+	case <-ctx.Done():
+		t.Fatal("RPC did not acquire the response lease")
+	}
+	select {
+	case <-service.released:
+		t.Fatal("response lease released while handler was active")
+	default:
+	}
+	close(service.finish)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("RPC did not complete")
+	}
+	select {
+	case <-service.released:
+	case <-ctx.Done():
+		t.Fatal("response lease was not released")
+	}
+}
+
+func TestPQ40EResponseLeaseScopeEndsOnce(t *testing.T) {
+	handler := &comm.ServerStatsHandler{}
+	ctx := handler.TagRPC(context.Background(), &stats.RPCTagInfo{})
+	count := 0
+	require.True(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
+	require.True(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
+	handler.HandleRPC(ctx, &stats.OutPayload{})
+	require.Zero(t, count)
+	handler.HandleRPC(ctx, &stats.End{})
+	handler.HandleRPC(ctx, &stats.End{})
+	require.Equal(t, 2, count)
+	require.False(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
+	require.False(t, comm.RetainUntilRPCEnd(context.Background(), func() {}))
 }
 
 func TestConnMetricsGRPCServer(t *testing.T) {

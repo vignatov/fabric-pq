@@ -21,6 +21,7 @@ import (
 	"github.com/hyperledger/fabric/core/chaincode/lifecycle"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protoutil"
@@ -334,12 +335,19 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 			privateChannel := *channel
 			privateChannel.IdentityDeserializer = deserializer
 			channel = &privateChannel
+			retained := generation.Done() != nil
+			if retained && !comm.RetainUntilRPCEnd(ctx, release) {
+				release()
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected response admission is unavailable"}}, nil
+			}
 			defer func() {
 				if generation.Err() != nil {
 					response = &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected channel generation closed"}}
 					responseErr = nil
 				}
-				release()
+				if !retained {
+					release()
+				}
 			}()
 		}
 	} else {

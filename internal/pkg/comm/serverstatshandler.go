@@ -8,6 +8,7 @@ package comm
 
 import (
 	"context"
+	"sync"
 
 	"github.com/hyperledger/fabric-lib-go/common/metrics"
 	"google.golang.org/grpc/stats"
@@ -18,11 +19,55 @@ type ServerStatsHandler struct {
 	ClosedConnCounter metrics.Counter
 }
 
-func (h *ServerStatsHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
-	return ctx
+type responseLeaseKey struct{}
+
+type responseLeaseScope struct {
+	mu       sync.Mutex
+	ended    bool
+	releases []func()
 }
 
-func (h *ServerStatsHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {}
+// RetainUntilRPCEnd transfers a lease to the gRPC response lifecycle. It
+// returns false without taking ownership when no live server scope is present.
+func RetainUntilRPCEnd(ctx context.Context, release func()) bool {
+	scope, ok := ctx.Value(responseLeaseKey{}).(*responseLeaseScope)
+	if !ok || release == nil {
+		return false
+	}
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+	if scope.ended {
+		return false
+	}
+	scope.releases = append(scope.releases, sync.OnceFunc(release))
+	return true
+}
+
+func (h *ServerStatsHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
+	return context.WithValue(ctx, responseLeaseKey{}, &responseLeaseScope{})
+}
+
+func (h *ServerStatsHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
+	if _, ok := s.(*stats.End); !ok {
+		return
+	}
+	scope, ok := ctx.Value(responseLeaseKey{}).(*responseLeaseScope)
+	if !ok {
+		return
+	}
+	scope.mu.Lock()
+	if scope.ended {
+		scope.mu.Unlock()
+		return
+	}
+	scope.ended = true
+	releases := scope.releases
+	scope.releases = nil
+	scope.mu.Unlock()
+	for _, release := range releases {
+		release()
+	}
+}
 
 func (h *ServerStatsHandler) TagConn(ctx context.Context, info *stats.ConnTagInfo) context.Context {
 	return ctx

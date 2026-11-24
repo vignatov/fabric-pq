@@ -123,9 +123,11 @@ The peer's endorsement adapter now acquires its identity deserializer from
 the serving generation and holds the generation lease through endorsement
 work. A closed generation rejects the result, and closed admission rejects
 dispatch. Peer channel creation does not yet install the controller, so these
-checks are not evidence of protected process admission. The lease ends when
-the handler returns; the unary gRPC response-send boundary has not yet been
-integrated or proven.
+checks are not evidence of protected process admission. For protected calls,
+the peer gRPC stats handler retains the lease through the server RPC end after
+the unary send; a missing response scope fails closed. A real gRPC component
+test and endorsement tests exercise the handoff. A protected process-level
+response and interrupted-transition test remains required.
 
 `comm.PrepareTrustedRootsForChain` now builds an isolated per-channel TLS-root
 snapshot and `PublishTrustedRootsForChain` installs it explicitly. Preparation

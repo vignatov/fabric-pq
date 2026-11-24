@@ -23,12 +23,14 @@ import (
 	"github.com/hyperledger/fabric/core/endorser/fake"
 	"github.com/hyperledger/fabric/core/ledger"
 	ledgermock "github.com/hyperledger/fabric/core/ledger/mock"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	. "github.com/hyperledger/fabric/internal/test"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protoutil"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -286,10 +288,14 @@ var _ = Describe("Endorser", func() {
 			cancel()
 			return &pb.Endorsement{Signature: []byte("signature")}, []byte("payload"), nil
 		})
-		response, err := e.ProcessProposal(context.Background(), signedProposal)
+		rpcStats := &comm.ServerStatsHandler{}
+		rpcContext := rpcStats.TagRPC(context.Background(), &stats.RPCTagInfo{})
+		response, err := e.ProcessProposal(rpcContext, signedProposal)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(response.GetResponse().GetStatus()).To(Equal(int32(503)))
 		Expect(response.GetEndorsement()).To(BeNil())
+		Expect(released).To(BeFalse())
+		rpcStats.HandleRPC(rpcContext, &stats.End{})
 		Expect(released).To(BeTrue())
 	})
 
@@ -302,11 +308,31 @@ var _ = Describe("Endorser", func() {
 				return fakeChannelMSPIdentityDeserializer, generation, func() { released = true }, true
 			},
 		})
-		response, err := e.ProcessProposal(context.Background(), signedProposal)
+		rpcStats := &comm.ServerStatsHandler{}
+		rpcContext := rpcStats.TagRPC(context.Background(), &stats.RPCTagInfo{})
+		response, err := e.ProcessProposal(rpcContext, signedProposal)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(response.GetEndorsement()).NotTo(BeNil())
 		Expect(response.GetResponse().GetStatus()).To(Equal(int32(200)))
+		Expect(released).To(BeFalse())
+		rpcStats.HandleRPC(rpcContext, &stats.End{})
 		Expect(released).To(BeTrue())
+	})
+
+	It("rejects protected endorsement without a response lease scope", func() {
+		generation, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		released := false
+		fakeChannelFetcher.ChannelReturns(&endorser.Channel{
+			AcquireEndorsement: func() (msp.IdentityDeserializer, context.Context, func(), bool) {
+				return fakeChannelMSPIdentityDeserializer, generation, func() { released = true }, true
+			},
+		})
+		response, err := e.ProcessProposal(context.Background(), signedProposal)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetResponse().GetStatus()).To(Equal(int32(503)))
+		Expect(released).To(BeTrue())
+		Expect(fakeSupport.EndorseWithPluginCallCount()).To(BeZero())
 	})
 
 	It("rejects a proposal when protected admission is closed", func() {
