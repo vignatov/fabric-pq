@@ -94,7 +94,22 @@ func (c *Chain) authorizeIncomingSnapshot(message *raftpb.Message) error {
 	case err := <-req.result:
 		return err
 	case <-c.doneC:
-		return ErrChainHalting
+		// An accepted request is handled synchronously by the application
+		// loop. Quarantine can stop the Raft node before that loop reports
+		// the actual authorization error, so wait for its report or exit.
+		if c.applicationDone != nil {
+			select {
+			case err := <-req.result:
+				return err
+			case <-c.applicationDone:
+			}
+		}
+		select {
+		case err := <-req.result:
+			return err
+		default:
+			return ErrChainHalting
+		}
 	}
 }
 

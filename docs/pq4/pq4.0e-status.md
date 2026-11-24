@@ -137,6 +137,11 @@ real-ledger component test exercises a failed cache publication, closed
 admission and successful recovery retry. Production channel creation does not
 yet install this hook on an authenticated controller or select the protected
 committer; ordinary callbacks still publish baseline resources.
+Gateway is created after existing peer channels are initialized. Protected
+startup must therefore rebuild and publish each existing channel's Gateway
+candidate under closed admission before Gateway can serve; registering the
+stage alone does not reconstruct those caches. Registration and publication
+are serialized, but this late-registration recovery path is not yet wired.
 
 Gateway orderer endpoints can now be prepared without publishing them. Its
 connection cache is scoped by channel, MSP and TLS roots; publishing a changed
@@ -252,3 +257,10 @@ PQ4-focused jobs and eight integration matrix jobs passed. The gossip matrix
 job failed in a state-transfer test while a peer expected block 6 but received
 block 11; the cause is unconfirmed and its hosted rerun passed. Neither
 run establishes protected process readiness.
+
+On commit `c99417e`, the hosted unit suite failed because snapshot quarantine
+could close the Raft node before its accepted request returned the specific
+authorization error. The failure remained fail-closed. The request now waits
+for the application loop's response or exit after shutdown; a deterministic
+race test and repeated native snapshot regression passed locally. Final-head
+hosted CI is still required.

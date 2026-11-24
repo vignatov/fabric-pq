@@ -16,6 +16,7 @@ import (
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/raft/v3/raftpb"
 )
 
 func TestPQ40EReadinessWaitStopsWithGeneration(t *testing.T) {
@@ -32,6 +33,28 @@ func TestPQ40EReadinessWaitStopsWithGeneration(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("readiness wait did not stop with its generation")
 	}
+}
+
+func TestPQ40ESnapshotReportsAuthorizationErrorAfterShutdown(t *testing.T) {
+	chain := &Chain{snapshotRequests: make(chan snapshotRequest), doneC: make(chan struct{}), applicationDone: make(chan struct{})}
+	expected := errors.New("snapshot authorization failed")
+	go func() {
+		request := <-chain.snapshotRequests
+		close(chain.doneC)
+		request.result <- expected
+		close(chain.applicationDone)
+	}()
+	require.ErrorIs(t, chain.authorizeIncomingSnapshot(&raftpb.Message{}), expected)
+}
+
+func TestPQ40ESnapshotReturnsWhenApplicationExitsWithoutReport(t *testing.T) {
+	chain := &Chain{snapshotRequests: make(chan snapshotRequest), doneC: make(chan struct{}), applicationDone: make(chan struct{})}
+	go func() {
+		<-chain.snapshotRequests
+		close(chain.doneC)
+		close(chain.applicationDone)
+	}()
+	require.ErrorIs(t, chain.authorizeIncomingSnapshot(&raftpb.Message{}), ErrChainHalting)
 }
 
 type protectedForwardTransport struct {

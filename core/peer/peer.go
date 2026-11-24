@@ -120,8 +120,11 @@ func (p *Peer) publishTrustedRoots(snapshot *comm.TrustedRootsSnapshot) error {
 type ProtectedConfigStage func(*channelconfig.Bundle) (func() error, error)
 
 // AddProtectedConfigStage registers an activation-owned resource publisher.
-// Registration must finish before peer channel initialization begins.
+// A caller registering after channel recovery must rebuild each protected
+// channel's candidate before allowing the new consumer to serve requests.
 func (p *Peer) AddProtectedConfigStage(stage ProtectedConfigStage) {
+	p.protectedStagesLock.Lock()
+	defer p.protectedStagesLock.Unlock()
 	p.protectedConfigStages = append(p.protectedConfigStages, stage)
 }
 
@@ -129,6 +132,8 @@ func (p *Peer) AddProtectedConfigStage(stage ProtectedConfigStage) {
 // after durable commit, while channel admission is closed. On any error the
 // owner must leave admission closed and retry publication during recovery.
 func (p *Peer) publishProtectedResources(bundle *channelconfig.Bundle) error {
+	p.protectedStagesLock.RLock()
+	defer p.protectedStagesLock.RUnlock()
 	var roots *comm.TrustedRootsSnapshot
 	var err error
 	if p.ServerConfig.SecOpts.UseTLS {
@@ -217,6 +222,7 @@ type Peer struct {
 	tlsRootsLock sync.Mutex
 
 	configCallbacks       []channelconfig.BundleActor
+	protectedStagesLock   sync.RWMutex
 	protectedConfigStages []ProtectedConfigStage
 }
 

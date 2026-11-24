@@ -8,6 +8,7 @@ package peer
 
 import (
 	"testing"
+	"time"
 
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
@@ -45,4 +46,44 @@ func TestPQ40EPeerTLSRootsPublicationFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, preview)
 	require.ElementsMatch(t, preview, peer.CredentialSupport.AppRootCAsByChain())
+}
+
+func TestPQ40EProtectedStageRegistrationWaitsForPublication(t *testing.T) {
+	p := &Peer{}
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	p.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
+		return func() error { close(started); <-finish; return nil }, nil
+	})
+	published := make(chan error, 1)
+	go func() { published <- p.publishProtectedResources(nil) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publication did not start")
+	}
+	registered := make(chan struct{})
+	go func() {
+		p.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
+			return func() error { return nil }, nil
+		})
+		close(registered)
+	}()
+	select {
+	case <-registered:
+		t.Fatal("registration completed during an active publication")
+	default:
+	}
+	close(finish)
+	select {
+	case err := <-published:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("publication did not finish")
+	}
+	select {
+	case <-registered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("registration did not resume")
+	}
 }
