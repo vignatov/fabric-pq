@@ -221,7 +221,7 @@ func (c *Channel) PrepareOrdererProposal(block *cb.Block) error {
 // ApplyOrdererConfig guards an ordered block even while admission is closed
 // for replay. The caller serializes it with other native applications.
 func (c *Channel) ApplyOrdererConfig(block *cb.Block, commit func() error) error {
-	err := c.apply(block, Authorization{}, commit, true)
+	err := c.apply(block, Authorization{}, commit, true, false)
 	if errors.Is(err, ErrNativeRecovery) {
 		return err
 	}

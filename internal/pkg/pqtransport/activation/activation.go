@@ -216,10 +216,17 @@ func (s *Store) readJournal() (journal, error) {
 // leave an ambiguous durable outcome on error, so the gate stays closed until
 // recovery. A Fabric-invalid candidate cannot enter the native commit path.
 func (c *Channel) Apply(block *cb.Block, auth Authorization, commit func() error) error {
-	return c.apply(block, auth, commit, false)
+	return c.apply(block, auth, commit, false, false)
 }
 
-func (c *Channel) apply(block *cb.Block, auth Authorization, commit func() error, orderer bool) error {
+// ApplyPeerConfig consumes the independently staged approval under the same
+// store lock as checkpoint validation and preparation. Missing approval for a
+// Fabric-valid ordered configuration quarantines the protected channel.
+func (c *Channel) ApplyPeerConfig(block *cb.Block, commit func() error) error {
+	return c.apply(block, Authorization{}, commit, false, true)
+}
+
+func (c *Channel) apply(block *cb.Block, auth Authorization, commit func() error, orderer, stagedPeer bool) error {
 	s := c.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -272,6 +279,12 @@ func (c *Channel) apply(block *cb.Block, auth Authorization, commit func() error
 	if current.Version+1 == 0 || next.identity.Number != height ||
 		!bytes.Equal(block.GetHeader().GetPreviousHash(), protoutil.BlockHeaderHash(tip.GetHeader())) {
 		return c.quarantine(errors.New("invalid checkpoint version or configuration block order"))
+	}
+	if stagedPeer {
+		auth, err = c.stagedAuthorization(current.Version + 1)
+		if err != nil {
+			return c.quarantine(fmt.Errorf("load operator approval: %w", err))
+		}
 	}
 	record := c.record(previous, next, current, auth)
 	if orderer {

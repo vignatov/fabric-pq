@@ -7,9 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 package peer
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
@@ -28,7 +33,7 @@ import (
 )
 
 func TestPQ40CPeerActivation(t *testing.T) {
-	for _, scenario := range []string{"authorized", "missing operator", "missing Fabric signature", "committed without preparation", "mismatching join"} {
+	for _, scenario := range []string{"authorized", "staged authorized", "staged missing operator", "missing operator", "missing Fabric signature", "committed without preparation", "mismatching join"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := testfixture.New(t)
 			genesis := testfixture.Genesis(t)
@@ -53,7 +58,8 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			t.Cleanup(func() { manager.Close() })
 			lgr, err := manager.CreateLedger(testfixture.ChannelID, genesis)
 			require.NoError(t, err)
-			store, err := activation.OpenStore(t.TempDir(), nil)
+			stateDir := t.TempDir()
+			store, err := activation.OpenStore(stateDir, nil)
 			require.NoError(t, err)
 			if scenario == "mismatching join" {
 				fixture.Provision(t, store, update.GetConfig())
@@ -131,6 +137,24 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			case "authorized":
 				require.NoError(t, controller.Apply(block, auth, commit))
 				require.Equal(t, []uint64{0, 1}, published)
+			case "staged authorized", "staged missing operator":
+				if scenario == "staged authorized" {
+					encoded, err := json.Marshal(auth)
+					require.NoError(t, err)
+					id := sha256.Sum256([]byte(testfixture.ChannelID))
+					require.NoError(t, os.WriteFile(filepath.Join(stateDir, fmt.Sprintf("approval-%x-2", id)), encoded, 0o600))
+				}
+				native := committer.NewLedgerCommitter(lgr, func(*cb.Block) {
+					require.Equal(t, uint64(0), serving.ConfigtxValidator().Sequence())
+				})
+				guarded := &protectedCommitter{Committer: native, controller: &controller}
+				err := guarded.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{})
+				if scenario == "staged authorized" {
+					require.NoError(t, err)
+					require.Equal(t, []uint64{0, 1}, published)
+				} else {
+					require.ErrorContains(t, err, "load operator approval")
+				}
 			case "missing operator":
 				require.ErrorContains(t, controller.Apply(block, auth, commit), "operator authorization")
 			case "missing Fabric signature":
@@ -146,7 +170,7 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			require.NoError(t, err)
 			controller.Gate = &activation.Gate{}
 			err = controller.Recover(true)
-			if scenario == "missing operator" || scenario == "committed without preparation" {
+			if scenario == "missing operator" || scenario == "staged missing operator" || scenario == "committed without preparation" {
 				require.ErrorContains(t, err, "quarantined")
 				require.ErrorContains(t, controller.Recover(true), "quarantined")
 				require.Equal(t, []uint64{0}, published)
@@ -157,10 +181,77 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			require.True(t, admitted)
 			defer release()
 			want := uint64(0)
-			if scenario == "authorized" {
+			if scenario == "authorized" || scenario == "staged authorized" {
 				want = 1
 			}
 			require.Equal(t, want, bundle.ConfigtxValidator().Sequence())
 		})
 	}
+}
+
+type blockingPeerCommitter struct {
+	committer.Committer
+	started chan struct{}
+	finish  chan struct{}
+}
+
+func (c *blockingPeerCommitter) CommitLegacy(*ledger.BlockAndPvtData, *ledger.CommitOptions) error {
+	close(c.started)
+	<-c.finish
+	return nil
+}
+
+func TestPQ40EProtectedPeerCommitDrainsGeneration(t *testing.T) {
+	fixture := testfixture.New(t)
+	genesis := testfixture.Genesis(t)
+	store, err := activation.OpenStore(t.TempDir(), nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, testfixture.Config(t, genesis))
+	controller := fixture.Channel(store, activation.Ledger{
+		LatestConfig: func() (*cb.Block, error) { return genesis, nil },
+		Block: func(number uint64) (*cb.Block, error) {
+			if number != 0 {
+				return nil, errors.New("missing block")
+			}
+			return genesis, nil
+		},
+		Height: func() (uint64, error) { return 1, nil },
+		Sync:   func() error { return nil },
+	})
+	require.NoError(t, controller.Recover(true))
+	envelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_ENDORSER_TRANSACTION, testfixture.ChannelID, nil, &cb.Config{}, 0, 0)
+	require.NoError(t, err)
+	block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
+	block.Data.Data = [][]byte{protoutil.MarshalOrPanic(envelope)}
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+	native := &blockingPeerCommitter{started: make(chan struct{}), finish: make(chan struct{})}
+	guarded := &protectedCommitter{Committer: native, controller: &controller}
+	done := make(chan error, 1)
+	go func() { done <- guarded.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{}) }()
+	select {
+	case <-native.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native commit did not start")
+	}
+	drained := make(chan struct{})
+	go func() { controller.Suspend(); close(drained) }()
+	<-controller.Gate.Errored()
+	select {
+	case <-drained:
+		t.Fatal("generation drained before native commit finished")
+	default:
+	}
+	close(native.finish)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("native commit did not finish")
+	}
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("generation did not drain")
+	}
+	require.ErrorContains(t, guarded.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{}), "admission is closed")
 }

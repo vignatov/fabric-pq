@@ -83,6 +83,7 @@ arguments on Linux. Other platforms fail closed.
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Incomplete: protected service installation and provisioning lifecycle required |
 | Authenticated onboarding and non-genesis join provenance | Incomplete |
 | Peer bootstrap and endorsement, Gateway and background admission | Incomplete |
+| Peer native commit adapter with staged approval | Real-ledger race tests passed; not selected by peer startup |
 | Orderer service, stream and follower integration under strict transport | Incomplete |
 | Orderer broadcast validation generation lease | Implemented with cancellation check before enqueue; end-to-end handoff remains incomplete |
 | Cluster send cancellation and shutdown reporting | Component race tests passed; protected handoff and lease ownership remain incomplete |
@@ -106,6 +107,15 @@ configuration path updates that source before the proposed activation
 transaction has completed. A protected peer therefore needs a staged source,
 an authenticated ledger-backed controller and generation leases at dispatch
 before it can be started safely.
+
+A protected peer commit adapter now routes configuration blocks through the
+activation controller using a staged operator approval read under the store
+lock. It retains a generation lease for ordinary native commits and rejects
+malformed or mixed protected blocks. Real-ledger tests exercise authorized
+commit, publication after the native commit and quarantine when approval is
+missing. Peer channel creation does not yet construct this adapter: the
+private validator source, controller bootstrap, protected service admission and
+activation-controlled TLS and Gateway publication must be integrated first.
 
 `comm.PrepareTrustedRootsForChain` now builds an isolated per-channel TLS-root
 snapshot and `PublishTrustedRootsForChain` installs it explicitly. Preparation
@@ -226,5 +236,5 @@ On commit `dbf930a`, Verify Build and all nine integration matrix jobs passed.
 On commit `1182150`, PQ3 isolated acceptance, Basic Checks, unit tests, all
 PQ4-focused jobs and eight integration matrix jobs passed. The gossip matrix
 job failed in a state-transfer test while a peer expected block 6 but received
-block 11; the cause is unconfirmed and a hosted rerun was requested. Neither
+block 11; the cause is unconfirmed and its hosted rerun passed. Neither
 run establishes protected process readiness.
