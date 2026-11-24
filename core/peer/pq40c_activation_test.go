@@ -19,11 +19,13 @@ import (
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/channelconfig"
+	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/semaphore"
 	"github.com/hyperledger/fabric/core/committer"
 	validatorv20 "github.com/hyperledger/fabric/core/committer/txvalidator/v20"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/kvledger"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
@@ -92,6 +94,19 @@ func TestPQ40CPeerActivation(t *testing.T) {
 				},
 			})
 			var published []uint64
+			var tlsPublished []uint64
+			var tlsPeer *Peer
+			if scenario == "staged authorized" {
+				ca, err := tlsgen.NewCA()
+				require.NoError(t, err)
+				pair, err := ca.NewServerCertKeyPair("127.0.0.1")
+				require.NoError(t, err)
+				config := comm.ServerConfig{SecOpts: comm.SecureOptions{UseTLS: true, Certificate: pair.Cert, Key: pair.Key}}
+				server, err := comm.NewGRPCServer("127.0.0.1:0", config)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = server.Listener().Close() })
+				tlsPeer = &Peer{ServerConfig: config, CredentialSupport: comm.NewCredentialSupport(), server: server}
+			}
 			var serving *channelconfig.BundleSource
 			callback := func(bundle *channelconfig.Bundle) {
 				_, _, _, admitted := controller.Gate.Acquire()
@@ -99,6 +114,16 @@ func TestPQ40CPeerActivation(t *testing.T) {
 				published = append(published, bundle.ConfigtxValidator().Sequence())
 			}
 			controller.Publish = func(bundle *channelconfig.Bundle) error {
+				if tlsPeer != nil {
+					candidate, err := comm.PrepareTrustedRootsForChain(bundle)
+					if err != nil {
+						return err
+					}
+					if err := tlsPeer.publishTrustedRoots(candidate); err != nil {
+						return err
+					}
+					tlsPublished = append(tlsPublished, bundle.ConfigtxValidator().Sequence())
+				}
 				if serving == nil {
 					serving = channelconfig.NewBundleSource(bundle, callback, func(bundle *channelconfig.Bundle) {
 						mspmgmt.XXXSetMSPManager(testfixture.ChannelID, bundle.MSPManager())
@@ -130,6 +155,9 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			commit := func() error {
 				native := committer.NewLedgerCommitter(lgr, func(*cb.Block) {
 					require.Equal(t, uint64(0), serving.ConfigtxValidator().Sequence())
+					if tlsPeer != nil {
+						require.Equal(t, []uint64{0}, tlsPublished, "TLS roots changed before native commit completed")
+					}
 				})
 				return native.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{})
 			}
@@ -152,6 +180,8 @@ func TestPQ40CPeerActivation(t *testing.T) {
 				if scenario == "staged authorized" {
 					require.NoError(t, err)
 					require.Equal(t, []uint64{0, 1}, published)
+					require.Equal(t, []uint64{0, 1}, tlsPublished)
+					require.NotEmpty(t, tlsPeer.CredentialSupport.AppRootCAsByChain())
 				} else {
 					require.ErrorContains(t, err, "load operator approval")
 				}
