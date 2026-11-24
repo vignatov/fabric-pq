@@ -125,10 +125,14 @@ validation and serving channels, the guarded committer and the staged resource
 publisher to one controller. Publisher installation is serialized with
 controller recovery, and the lifecycle's peer recovery refuses to open the
 gate without a publisher. A real-ledger component test exercises candidate
-validation, publication failure, recovery and reconstruction with new peer
+validation, rejection of a candidate after private validation advanced,
+publication failure, recovery and reconstruction with new peer
 objects after ledger reopen in the same process. A fresh-process reconstruction
 test is still required. Production channel
 creation does not yet select this assembly or authenticate its controller.
+Peer activation failures close admission while the store is locked, and the
+lifecycle publisher resets the private validation source to the authenticated
+committed bundle before admission can reopen.
 
 The peer's endorsement adapter now acquires its identity deserializer from
 the serving generation and holds the generation lease through endorsement

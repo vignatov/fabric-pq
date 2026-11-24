@@ -367,7 +367,7 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	var lifecycle *protectedLifecycle
 	native := committer.NewLedgerCommitter(lgr, func(*cb.Block) {
 		require.Equal(t, uint64(0), lifecycle.serving.Sequence())
-		require.Equal(t, []uint64{0}, resources)
+		require.Equal(t, []uint64{0, 0}, resources)
 	})
 	var published []uint64
 	lifecycle, err = peer.newProtectedLifecycle(&controller, lgr, initial, native, func(bundle *channelconfig.Bundle) {
@@ -390,6 +390,20 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	require.Equal(t, byte(pb.TxValidationCode_VALID), block.GetMetadata().GetMetadata()[cb.BlockMetadataIndex_TRANSACTIONS_FILTER][0])
 	require.Equal(t, uint64(1), lifecycle.validation.Sequence())
 	require.Equal(t, uint64(0), lifecycle.serving.Sequence())
+	invalidUpdate := proto.Clone(update).(*cb.ConfigEnvelope)
+	invalidUpdate.LastUpdate = nil
+	invalidBlock := proto.Clone(block).(*cb.Block)
+	invalidBlock.Data.Data = [][]byte{protoutil.MarshalOrPanic(fixture.Envelope(t, invalidUpdate))}
+	invalidBlock.Header.DataHash = protoutil.ComputeBlockDataHash(invalidBlock.GetData())
+	err = lifecycle.committer.CommitLegacy(&ledger.BlockAndPvtData{Block: invalidBlock}, &ledger.CommitOptions{})
+	require.ErrorContains(t, err, "Fabric config authorization")
+	require.False(t, controller.Ready())
+	require.Equal(t, uint64(1), lifecycle.validation.Sequence())
+	require.NoError(t, lifecycle.recover())
+	require.Equal(t, uint64(0), lifecycle.validation.Sequence())
+	require.Equal(t, uint64(0), lifecycle.serving.Sequence())
+	require.NoError(t, validator.Validate(block))
+	require.Equal(t, uint64(1), lifecycle.validation.Sequence())
 	auth, err := json.Marshal(fixture.Authorize(t, 1, base, update.GetConfig()))
 	require.NoError(t, err)
 	id := sha256.Sum256([]byte(testfixture.ChannelID))
@@ -398,11 +412,11 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	require.ErrorContains(t, err, "injected protected resource failure")
 	require.False(t, controller.Ready())
 	require.Equal(t, uint64(0), lifecycle.serving.Sequence())
-	require.Equal(t, []uint64{0}, resources)
+	require.Equal(t, []uint64{0, 0}, resources)
 	require.NoError(t, lifecycle.recover())
 	require.Equal(t, uint64(1), lifecycle.serving.Sequence())
-	require.Equal(t, []uint64{0, 1}, published)
-	require.Equal(t, []uint64{0, 1}, resources)
+	require.Equal(t, []uint64{0, 0, 1}, published)
+	require.Equal(t, []uint64{0, 0, 1}, resources)
 	controller.Suspend()
 	lgr.Close()
 	manager.Close()
@@ -430,5 +444,5 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	require.NoError(t, restored.recover())
 	require.Equal(t, uint64(1), restored.serving.Sequence())
 	require.Equal(t, []uint64{1}, restoredResources)
-	require.Equal(t, []uint64{0, 1}, resources)
+	require.Equal(t, []uint64{0, 0, 1}, resources)
 }

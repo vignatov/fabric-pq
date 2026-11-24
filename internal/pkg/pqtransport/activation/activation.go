@@ -247,10 +247,17 @@ func (c *Channel) ApplyPeerConfig(block *cb.Block, commit func() error) error {
 	return c.apply(block, Authorization{}, commit, false, true)
 }
 
-func (c *Channel) apply(block *cb.Block, auth Authorization, commit func() error, orderer, stagedPeer bool) error {
+func (c *Channel) apply(block *cb.Block, auth Authorization, commit func() error, orderer, stagedPeer bool) (err error) {
 	s := c.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		// Validation may already have advanced a peer's private candidate.
+		// No failure may leave the serving gate open until recovery resets it.
+		if stagedPeer && err != nil {
+			c.Gate.close()
+		}
+	}()
 	if err := c.checkQuarantine(); err != nil {
 		c.Gate.close()
 		return err

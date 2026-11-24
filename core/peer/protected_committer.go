@@ -26,12 +26,14 @@ func (c *protectedCommitter) CommitLegacy(data *ledger.BlockAndPvtData, opts *le
 		return errors.New("protected peer commit requires a controller, ledger and block")
 	}
 	if err := c.controller.ValidateBlockShape(data.Block); err != nil {
+		c.controller.Suspend()
 		return err
 	}
 	if protoutil.IsConfigBlock(data.Block) {
-		return c.controller.ApplyPeerConfig(data.Block, func() error {
+		err := c.controller.ApplyPeerConfig(data.Block, func() error {
 			return c.Committer.CommitLegacy(data, opts)
 		})
+		return err
 	}
 	_, generation, release, ok := c.controller.Gate.Acquire()
 	if !ok {

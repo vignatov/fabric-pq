@@ -42,6 +42,11 @@ func (p *Peer) newProtectedLifecycle(controller *activation.Channel, l ledger.Pe
 		if err := p.publishProtectedResources(bundle); err != nil {
 			return err
 		}
+		// Validation may have applied a candidate that did not commit. Reset
+		// it to the authenticated ledger bundle before serving can reopen.
+		validation.applyLock.Lock()
+		validation.bundleSource.Update(bundle)
+		validation.applyLock.Unlock()
 		if serving.bundleSource == nil {
 			serving.bundleSource = channelconfig.NewBundleSource(bundle, callbacks...)
 		} else {
