@@ -156,8 +156,9 @@ API or retain a generation lease through its completion report. Cancellation
 also cannot retract work already handed to the consensus queue.
 The stream additionally offers a generation-bound send that rejects a stale
 generation and holds its own lease until a queued or in-flight send stops.
-Closing that generation cancels the channel-scoped stream. A Linux race test
-checks queued-send drainage and rejection after the gate reopens. Cluster RPC
+Closing that generation cancels the channel-scoped stream. Linux race tests
+check queued-send drainage, in-flight transport drainage and rejection after
+the gate reopens. Cluster RPC
 can carry that generation through a submit send without allowing a stale caller
 to evict a current stream. This path is not connected to broadcast or Raft and
 does not establish end-to-end safety.
@@ -221,3 +222,9 @@ isolated Linux runner with Docker integration is needed for that matrix.
 After explicit user approval, the development checkpoint was uploaded as draft
 PR 12 for hosted Linux CI. The results must be checked against the exact tested
 commit and do not replace the missing protected service-path integration.
+On commit `dbf930a`, Verify Build and all nine integration matrix jobs passed.
+On commit `1182150`, PQ3 isolated acceptance, Basic Checks, unit tests, all
+PQ4-focused jobs and eight integration matrix jobs passed. The gossip matrix
+job failed in a state-transfer test while a peer expected block 6 but received
+block 11; the cause is unconfirmed and a hosted rerun was requested. Neither
+run establishes protected process readiness.

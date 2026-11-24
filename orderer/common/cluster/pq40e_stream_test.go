@@ -31,7 +31,8 @@ func pq40eStream(capacity int) (*Stream, chan struct{}) {
 	}, abort
 }
 
-func TestPQ40EGenerationSendDrainsAndRejectsOldGeneration(t *testing.T) {
+func pq40eController(t *testing.T) *activation.Channel {
+	t.Helper()
 	fixture := testfixture.New(t)
 	genesis := testfixture.Genesis(t)
 	store, err := activation.OpenStore(t.TempDir(), nil)
@@ -49,6 +50,11 @@ func TestPQ40EGenerationSendDrainsAndRejectsOldGeneration(t *testing.T) {
 		Sync:   func() error { return nil },
 	})
 	require.NoError(t, controller.Recover(true))
+	return &controller
+}
+
+func TestPQ40EGenerationSendDrainsAndRejectsOldGeneration(t *testing.T) {
+	controller := pq40eController(t)
 	_, generation, release, ok := controller.Gate.Acquire()
 	require.True(t, ok)
 	release()
@@ -93,6 +99,83 @@ func TestPQ40EGenerationSendDrainsAndRejectsOldGeneration(t *testing.T) {
 	require.Error(t, rpc.SendSubmitWithGeneration(context.Background(), controller.Gate, generation, 1, &orderer.SubmitRequest{}, func(error) { t.Error("stale RPC reported completion") }))
 	require.Same(t, other, rpc.getStream(1, SubmitOperation), "a stale caller must not evict the current stream")
 	controller.Suspend()
+}
+
+type pq40eBlockingStep struct {
+	started chan struct{}
+	abort   <-chan struct{}
+	finish  <-chan struct{}
+}
+
+func (s *pq40eBlockingStep) Send(*orderer.StepRequest) error {
+	close(s.started)
+	<-s.abort
+	<-s.finish
+	return context.Canceled
+}
+
+func (*pq40eBlockingStep) Recv() (*orderer.StepResponse, error) { return nil, nil }
+func (*pq40eBlockingStep) Auth() error                          { return nil }
+func (*pq40eBlockingStep) Context() context.Context             { return context.Background() }
+
+func TestPQ40EGenerationSendWaitsForInFlightTransport(t *testing.T) {
+	controller := pq40eController(t)
+	_, generation, release, ok := controller.Gate.Acquire()
+	require.True(t, ok)
+	release()
+	stream, abort := pq40eStream(1)
+	var once sync.Once
+	stream.Cancel = func(error) { once.Do(func() { atomic.StoreUint32(stream.canceled, 1); close(abort) }) }
+	stream.Timeout = 30 * time.Second
+	stream.expCheck = &certificateExpirationCheck{}
+	finish := make(chan struct{})
+	step := &pq40eBlockingStep{started: make(chan struct{}), abort: abort, finish: finish}
+	stream.StepClient = step
+	reported := make(chan error, 1)
+	rpc := &RPC{Logger: flogging.MustGetLogger("pq40e.rpc"), StreamsByType: NewStreamsByType()}
+	rpc.StreamsByType[SubmitOperation][1] = stream
+	workerDone := make(chan struct{})
+	go func() { stream.serviceStream(); close(workerDone) }()
+	require.NoError(t, rpc.SendSubmitWithGeneration(context.Background(), controller.Gate, generation, 1, &orderer.SubmitRequest{}, func(err error) { reported <- err }))
+	select {
+	case <-step.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("send did not start")
+	}
+	drained := make(chan struct{})
+	go func() { controller.Suspend(); close(drained) }()
+	select {
+	case <-abort:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream was not canceled")
+	}
+	select {
+	case <-drained:
+		t.Fatal("lease released before transport stopped")
+	default:
+	}
+	select {
+	case <-reported:
+		t.Fatal("send reported before transport stopped")
+	default:
+	}
+	close(finish)
+	select {
+	case err := <-reported:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("send did not report")
+	}
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("generation did not drain")
+	}
+	select {
+	case <-workerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream did not stop")
+	}
 }
 
 func TestPQ40EStreamShutdownReportsQueuedRequests(t *testing.T) {
