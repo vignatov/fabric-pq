@@ -130,9 +130,10 @@ publication failure, recovery and reconstruction with new peer
 objects after ledger reopen in the same process. A fresh-process reconstruction
 test is still required. Production channel
 creation does not yet select this assembly or authenticate its controller.
-Peer activation failures close admission while the store is locked, and the
-lifecycle publisher resets the private validation source to the authenticated
-committed bundle before admission can reopen.
+Staged peer configuration failures close admission while the store is locked,
+and the lifecycle publisher resets the private validation source to the
+authenticated committed bundle before admission can reopen. Malformed block
+shape also closes admission in the protected committer.
 
 The peer's endorsement adapter now acquires its identity deserializer from
 the serving generation and holds the generation lease through endorsement
