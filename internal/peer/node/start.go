@@ -905,7 +905,7 @@ func serve(args []string) error {
 		if coreConfig.DiscoveryEnabled {
 			logger.Info("Starting peer with Gateway enabled")
 
-			gatewayServer := gateway.CreateServer(
+			gatewayServer, err := gateway.CreateServer(
 				auth,
 				discoveryService,
 				peerInstance,
@@ -915,6 +915,9 @@ func serve(args []string) error {
 				coreConfig.GatewayOptions,
 				builtinSCCs,
 			)
+			if err != nil {
+				return fmt.Errorf("initialize Gateway protected resources: %w", err)
+			}
 			gatewayprotos.RegisterGatewayServer(peerServer.Server(), gatewayServer)
 		} else {
 			logger.Warning("Discovery service must be enabled for embedded gateway")

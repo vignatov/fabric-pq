@@ -401,10 +401,16 @@ func (c *Channel) finish(record journal, committed configuration, current checkp
 // before installing an active generation. replaySettled describes native
 // orderer application readiness, including any pending committed Raft entry.
 func (c *Channel) Recover(replaySettled bool) error {
-	return c.recover(replaySettled, false)
+	return c.recover(replaySettled, false, false)
 }
 
-func (c *Channel) recover(replaySettled, orderer bool) error {
+// RecoverPeer requires the protected peer publication boundary to be
+// installed before recovery can reopen channel admission.
+func (c *Channel) RecoverPeer() error {
+	return c.recover(true, false, true)
+}
+
+func (c *Channel) recover(replaySettled, orderer, requirePublisher bool) error {
 	if c.BootstrapError != nil {
 		return c.BootstrapError
 	}
@@ -416,6 +422,9 @@ func (c *Channel) recover(replaySettled, orderer bool) error {
 	}
 	s.gates[c.ID] = c.Gate
 	c.Gate.close()
+	if requirePublisher && c.Publish == nil {
+		return errors.New("protected peer publisher is not installed")
+	}
 	if err := c.checkQuarantine(); err != nil {
 		return err
 	}

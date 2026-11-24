@@ -63,7 +63,7 @@ func CreateServer(
 	localMSPID string,
 	options config.Options,
 	systemChaincodes scc.BuiltinSCCs,
-) *Server {
+) (*Server, error) {
 	adapter := &ledger.PeerAdapter{
 		Peer: peerInstance,
 	}
@@ -86,10 +86,12 @@ func CreateServer(
 		peerInstance.GetChannelConfig,
 	)
 
+	if err := peerInstance.AddProtectedConfigStage(server.registry.prepareProtectedConfigUpdate); err != nil {
+		return nil, err
+	}
 	peerInstance.AddConfigCallbacks(server.registry.configUpdate)
-	peerInstance.AddProtectedConfigStage(server.registry.prepareProtectedConfigUpdate)
 
-	return server
+	return server, nil
 }
 
 func newServer(localEndorser peerproto.EndorserClient,

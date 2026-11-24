@@ -120,12 +120,23 @@ func (p *Peer) publishTrustedRoots(snapshot *comm.TrustedRootsSnapshot) error {
 type ProtectedConfigStage func(*channelconfig.Bundle) (func() error, error)
 
 // AddProtectedConfigStage registers an activation-owned resource publisher.
-// A caller registering after channel recovery must rebuild each protected
-// channel's candidate before allowing the new consumer to serve requests.
-func (p *Peer) AddProtectedConfigStage(stage ProtectedConfigStage) {
+// Existing protected channels must be closed and reconstructed before the new
+// consumer serves traffic. Channel creation must be serialized with this call.
+func (p *Peer) AddProtectedConfigStage(stage ProtectedConfigStage) error {
+	if stage == nil {
+		return errors.New("protected resource stage is required")
+	}
 	p.protectedStagesLock.Lock()
 	defer p.protectedStagesLock.Unlock()
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	for id, channel := range p.channels {
+		if channel.activation != nil && channel.activation.Ready() {
+			return errors.Errorf("protected channel %s must be closed before registering a resource stage", id)
+		}
+	}
 	p.protectedConfigStages = append(p.protectedConfigStages, stage)
+	return nil
 }
 
 // publishProtectedResources is called by an authenticated activation owner

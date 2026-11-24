@@ -22,6 +22,11 @@ type protectedLifecycle struct {
 	committer  committer.Committer
 }
 
+// recover installs the committed resources before opening the serving gate.
+func (l *protectedLifecycle) recover() error {
+	return l.serving.activation.RecoverPeer()
+}
+
 func (p *Peer) newProtectedLifecycle(controller *activation.Channel, l ledger.PeerLedger, initial *channelconfig.Bundle, native committer.Committer, actors ...channelconfig.BundleActor) (*protectedLifecycle, error) {
 	if controller == nil || controller.Store == nil || controller.Gate == nil || l == nil || initial == nil || native == nil {
 		return nil, errors.New("protected peer lifecycle requires controller, ledger, bundle and committer")

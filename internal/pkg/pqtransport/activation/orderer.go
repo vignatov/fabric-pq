@@ -125,13 +125,13 @@ func (c *Channel) ValidateBlockShape(block *cb.Block) error {
 // RecoverOrdererLedger authenticates the ledger and repairs an interrupted
 // checkpoint write without opening admission or discarding a prepared block.
 func (c *Channel) RecoverOrdererLedger() error {
-	return c.recover(false, true)
+	return c.recover(false, true, false)
 }
 
 // CompleteOrdererReplay is called by the Raft application owner after it has
 // reconciled the persisted log and a quorum read barrier.
 func (c *Channel) CompleteOrdererReplay() error {
-	return c.recover(true, true)
+	return c.recover(true, true, false)
 }
 
 func (c *Channel) Ready() bool {

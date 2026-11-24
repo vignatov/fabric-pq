@@ -123,7 +123,8 @@ publication must be integrated first.
 The peer now has a protected lifecycle assembly that binds separate private
 validation and serving channels, the guarded committer and the staged resource
 publisher to one controller. Publisher installation is serialized with
-controller recovery. A real-ledger component test exercises candidate
+controller recovery, and the lifecycle's peer recovery refuses to open the
+gate without a publisher. A real-ledger component test exercises candidate
 validation, publication failure, recovery and reconstruction with new peer
 objects after ledger reopen in the same process. A fresh-process reconstruction
 test is still required. Production channel
@@ -162,8 +163,10 @@ committer; ordinary callbacks still publish baseline resources.
 Gateway is created after existing peer channels are initialized. Protected
 startup must therefore rebuild and publish each existing channel's Gateway
 candidate under closed admission before Gateway can serve; registering the
-stage alone does not reconstruct those caches. Registration and publication
-are serialized, but this late-registration recovery path is not yet wired.
+stage alone does not reconstruct those caches. Registration now rejects an
+already-serving protected channel and is serialized with publication, but
+channel creation must also be serialized and the late-registration recovery
+path is not yet wired.
 
 Gateway orderer endpoints can now be prepared without publishing them. Its
 connection cache is scoped by channel, MSP and TLS roots; publishing a changed

@@ -107,7 +107,7 @@ func TestPQ40CPeerActivation(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = server.Listener().Close() })
 				tlsPeer = &Peer{ServerConfig: config, CredentialSupport: comm.NewCredentialSupport(), server: server}
-				tlsPeer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
+				require.NoError(t, tlsPeer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
 					return func() error {
 						if failPublish && bundle.ConfigtxValidator().Sequence() == 1 {
 							failPublish = false
@@ -116,7 +116,7 @@ func TestPQ40CPeerActivation(t *testing.T) {
 						tlsPublished = append(tlsPublished, bundle.ConfigtxValidator().Sequence())
 						return nil
 					}, nil
-				})
+				}))
 			}
 			var serving *channelconfig.BundleSource
 			callback := func(bundle *channelconfig.Bundle) {
@@ -269,6 +269,10 @@ func TestPQ40EProtectedPeerCommitDrainsGeneration(t *testing.T) {
 	})
 	require.NoError(t, controller.Recover(true))
 	channel := &Channel{activation: &controller}
+	peer := &Peer{channels: map[string]*Channel{testfixture.ChannelID: channel}}
+	stage := func(*channelconfig.Bundle) (func() error, error) { return func() error { return nil }, nil }
+	require.ErrorContains(t, peer.AddProtectedConfigStage(stage), "must be closed")
+	require.Empty(t, peer.protectedConfigStages)
 	deserializer, generation, release, admitted := channel.AcquireEndorsement()
 	require.True(t, admitted)
 	require.NotNil(t, deserializer)
@@ -310,6 +314,7 @@ func TestPQ40EProtectedPeerCommitDrainsGeneration(t *testing.T) {
 	}
 	_, _, _, admitted = channel.AcquireEndorsement()
 	require.False(t, admitted)
+	require.NoError(t, peer.AddProtectedConfigStage(stage))
 	require.ErrorContains(t, guarded.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{}), "admission is closed")
 }
 
@@ -342,12 +347,14 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 			return activation.SyncDirectory(filepath.Join(kvledger.BlockStorePath(root), "chains", testfixture.ChannelID))
 		},
 	})
+	require.ErrorContains(t, controller.RecoverPeer(), "publisher is not installed")
+	require.False(t, controller.Ready())
 	initial, err := channelconfig.NewBundle(testfixture.ChannelID, base, fixture.Crypto)
 	require.NoError(t, err)
 	peer := &Peer{CryptoProvider: fixture.Crypto}
 	var resources []uint64
 	failPublication := true
-	peer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
+	require.NoError(t, peer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
 		return func() error {
 			if failPublication && bundle.ConfigtxValidator().Sequence() == 1 {
 				failPublication = false
@@ -356,7 +363,7 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 			resources = append(resources, bundle.ConfigtxValidator().Sequence())
 			return nil
 		}, nil
-	})
+	}))
 	var lifecycle *protectedLifecycle
 	native := committer.NewLedgerCommitter(lgr, func(*cb.Block) {
 		require.Equal(t, uint64(0), lifecycle.serving.Sequence())
@@ -372,7 +379,7 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	require.NoError(t, err)
 	require.Nil(t, lifecycle.serving.Resources())
 	require.Empty(t, resources)
-	require.NoError(t, controller.Recover(true))
+	require.NoError(t, lifecycle.recover())
 	require.Equal(t, []uint64{0}, published)
 	require.ErrorContains(t, controller.InstallPublisher(func(*channelconfig.Bundle) error { return nil }), "before admission opens")
 	validator := &validatorv20.TxValidator{
@@ -392,7 +399,7 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	require.False(t, controller.Ready())
 	require.Equal(t, uint64(0), lifecycle.serving.Sequence())
 	require.Equal(t, []uint64{0}, resources)
-	require.NoError(t, controller.Recover(true))
+	require.NoError(t, lifecycle.recover())
 	require.Equal(t, uint64(1), lifecycle.serving.Sequence())
 	require.Equal(t, []uint64{0, 1}, published)
 	require.Equal(t, []uint64{0, 1}, resources)
@@ -411,16 +418,16 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	require.NoError(t, err)
 	restoredPeer := &Peer{CryptoProvider: fixture.Crypto}
 	var restoredResources []uint64
-	restoredPeer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
+	require.NoError(t, restoredPeer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
 		return func() error {
 			restoredResources = append(restoredResources, bundle.ConfigtxValidator().Sequence())
 			return nil
 		}, nil
-	})
+	}))
 	restored, err := restoredPeer.newProtectedLifecycle(&controller, lgr, restoredBundle, committer.NewLedgerCommitter(lgr, nil))
 	require.NoError(t, err)
 	require.Nil(t, restored.serving.Resources())
-	require.NoError(t, controller.Recover(true))
+	require.NoError(t, restored.recover())
 	require.Equal(t, uint64(1), restored.serving.Sequence())
 	require.Equal(t, []uint64{1}, restoredResources)
 	require.Equal(t, []uint64{0, 1}, resources)

@@ -52,9 +52,9 @@ func TestPQ40EProtectedStageRegistrationWaitsForPublication(t *testing.T) {
 	p := &Peer{}
 	started := make(chan struct{})
 	finish := make(chan struct{})
-	p.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
+	require.NoError(t, p.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
 		return func() error { close(started); <-finish; return nil }, nil
-	})
+	}))
 	published := make(chan error, 1)
 	go func() { published <- p.publishProtectedResources(nil) }()
 	select {
@@ -62,15 +62,15 @@ func TestPQ40EProtectedStageRegistrationWaitsForPublication(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("publication did not start")
 	}
-	registered := make(chan struct{})
+	registered := make(chan error, 1)
 	go func() {
-		p.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
+		registered <- p.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
 			return func() error { return nil }, nil
 		})
-		close(registered)
 	}()
 	select {
-	case <-registered:
+	case err := <-registered:
+		require.NoError(t, err)
 		t.Fatal("registration completed during an active publication")
 	default:
 	}
@@ -82,7 +82,8 @@ func TestPQ40EProtectedStageRegistrationWaitsForPublication(t *testing.T) {
 		t.Fatal("publication did not finish")
 	}
 	select {
-	case <-registered:
+	case err := <-registered:
+		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("registration did not resume")
 	}
