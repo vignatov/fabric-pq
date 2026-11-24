@@ -82,7 +82,7 @@ arguments on Linux. Other platforms fail closed.
 | Fixed managed systemd unit and installer | Provided; VM installation and verification incomplete |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Incomplete: protected service installation and provisioning lifecycle required |
 | Authenticated onboarding and non-genesis join provenance | Incomplete |
-| Peer bootstrap and endorsement, Gateway and background admission | Incomplete |
+| Peer bootstrap and endorsement, Gateway and background admission | Endorsement dispatch has a generation-lease hook; controller installation and other admission remain incomplete |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; not selected by peer startup |
 | Orderer service, stream and follower integration under strict transport | Incomplete |
 | Orderer broadcast validation generation lease | Validation lease and cancellation-aware Raft readiness implemented; end-to-end handoff remains incomplete |
@@ -118,6 +118,14 @@ drain until the native operation stops. Peer channel creation does not yet
 construct this adapter: the private validator source, controller bootstrap,
 protected service admission and activation-controlled TLS and Gateway
 publication must be integrated first.
+
+The peer's endorsement adapter now acquires its identity deserializer from
+the serving generation and holds the generation lease through endorsement
+work. A closed generation rejects the result, and closed admission rejects
+dispatch. Peer channel creation does not yet install the controller, so these
+checks are not evidence of protected process admission. The lease ends when
+the handler returns; the unary gRPC response-send boundary has not yet been
+integrated or proven.
 
 `comm.PrepareTrustedRootsForChain` now builds an isolated per-channel TLS-root
 snapshot and `PublishTrustedRootsForChain` installs it explicitly. Preparation

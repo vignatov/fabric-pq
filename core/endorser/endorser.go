@@ -91,6 +91,7 @@ type ChannelFetcher interface {
 
 type Channel struct {
 	IdentityDeserializer msp.IdentityDeserializer
+	AcquireEndorsement   func() (msp.IdentityDeserializer, context.Context, func(), bool)
 }
 
 // Endorser provides the Endorser service ProcessProposal
@@ -301,7 +302,7 @@ func (e *Endorser) preProcess(up *UnpackedProposal, channel *Channel) error {
 // Errors related to the proposal itself are returned with an error that results in a grpc error.
 // Errors related to proposal processing (either infrastructure errors or chaincode errors) are returned with a nil error,
 // clients are expected to look at the ProposalResponse response status code (e.g. 500) and message.
-func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedProposal) (*pb.ProposalResponse, error) {
+func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedProposal) (response *pb.ProposalResponse, responseErr error) {
 	// start time for computing elapsed time metric for successfully endorsed proposals
 	startTime := time.Now()
 	e.Metrics.ProposalsReceived.Add(1)
@@ -324,6 +325,22 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 		channel = e.ChannelFetcher.Channel(up.ChannelID())
 		if channel == nil {
 			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("channel '%s' not found", up.ChannelHeader.GetChannelId())}}, nil
+		}
+		if channel.AcquireEndorsement != nil {
+			deserializer, generation, release, admitted := channel.AcquireEndorsement()
+			if !admitted {
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected channel admission is closed"}}, nil
+			}
+			privateChannel := *channel
+			privateChannel.IdentityDeserializer = deserializer
+			channel = &privateChannel
+			defer func() {
+				if generation.Err() != nil {
+					response = &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected channel generation closed"}}
+					responseErr = nil
+				}
+				release()
+			}()
 		}
 	} else {
 		channel = &Channel{

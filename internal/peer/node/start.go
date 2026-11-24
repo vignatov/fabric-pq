@@ -169,7 +169,7 @@ type endorserChannelAdapter struct {
 func (e endorserChannelAdapter) Channel(channelID string) *endorser.Channel {
 	if peerChannel := e.peer.Channel(channelID); peerChannel != nil {
 		return &endorser.Channel{
-			IdentityDeserializer: peerChannel.MSPManager(),
+			AcquireEndorsement: peerChannel.AcquireEndorsement,
 		}
 	}
 

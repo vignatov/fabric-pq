@@ -268,6 +268,12 @@ func TestPQ40EProtectedPeerCommitDrainsGeneration(t *testing.T) {
 		Sync:   func() error { return nil },
 	})
 	require.NoError(t, controller.Recover(true))
+	channel := &Channel{activation: &controller}
+	deserializer, generation, release, admitted := channel.AcquireEndorsement()
+	require.True(t, admitted)
+	require.NotNil(t, deserializer)
+	require.NoError(t, generation.Err())
+	release()
 	envelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_ENDORSER_TRANSACTION, testfixture.ChannelID, nil, &cb.Config{}, 0, 0)
 	require.NoError(t, err)
 	block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
@@ -302,5 +308,7 @@ func TestPQ40EProtectedPeerCommitDrainsGeneration(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("generation did not drain")
 	}
+	_, _, _, admitted = channel.AcquireEndorsement()
+	require.False(t, admitted)
 	require.ErrorContains(t, guarded.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{}), "admission is closed")
 }
