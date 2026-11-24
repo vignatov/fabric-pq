@@ -114,9 +114,17 @@ func (s *pq40eBlockingStep) Send(*orderer.StepRequest) error {
 	return context.Canceled
 }
 
-func (*pq40eBlockingStep) Recv() (*orderer.StepResponse, error) { return nil, nil }
-func (*pq40eBlockingStep) Auth() error                          { return nil }
-func (*pq40eBlockingStep) Context() context.Context             { return context.Background() }
+func (*pq40eBlockingStep) Recv() (*orderer.StepResponse, error) {
+	return nil, nil
+}
+
+func (*pq40eBlockingStep) Auth() error {
+	return nil
+}
+
+func (*pq40eBlockingStep) Context() context.Context {
+	return context.Background()
+}
 
 func TestPQ40EGenerationSendWaitsForInFlightTransport(t *testing.T) {
 	controller := pq40eController(t)
