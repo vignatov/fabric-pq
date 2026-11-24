@@ -272,3 +272,11 @@ authorization error. The failure remained fail-closed. The handler now reports
 the failure after quarantine but before stopping Raft; a deterministic
 race test and repeated native snapshot regression passed locally. Final-head
 hosted CI is still required.
+
+On commit `96fe597`, the unit job failed in `TestStoreFilterPurgedKeys` after
+the block-zero background purge ran during the filter-only assertions. The
+test now holds the purge lock through those assertions and waits for the
+scheduled purge before cleanup. Ten isolated race-enabled repetitions and the
+private-data storage package race suite passed locally. A separate hosted
+integration job failed during setup because `softhsm2` was unavailable; its
+tests did not execute in that job. Final-head hosted CI remains required.

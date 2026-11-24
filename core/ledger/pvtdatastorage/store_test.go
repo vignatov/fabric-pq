@@ -893,6 +893,13 @@ func TestStoreFilterPurgedKeys(t *testing.T) {
 	env := NewTestStoreEnv(t, ledgerid, btlPolicy, conf)
 	defer env.Cleanup()
 	s := env.TestStore
+	// Block the purge scheduled by block zero until this filter-only test has
+	// checked all markers. A large interval still schedules a purge at zero.
+	s.purgerLock.Lock()
+	defer func() {
+		s.purgerLock.Unlock()
+		testWaitForPurgerRoutineToFinish(s)
+	}()
 
 	verifyRetrievedPvtData := func(expectedPvtData *rwsetutil.TxPvtRwSet, retrievedPvtData *rwset.TxPvtReadWriteSet) {
 		expectedPvtDataProto, err := expectedPvtData.ToProtoMsg()
