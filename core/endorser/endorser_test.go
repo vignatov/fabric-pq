@@ -290,6 +290,7 @@ var _ = Describe("Endorser", func() {
 		})
 		rpcStats := &comm.ServerStatsHandler{}
 		rpcContext := rpcStats.TagRPC(context.Background(), &stats.RPCTagInfo{})
+		rpcStats.HandleRPC(rpcContext, &stats.Begin{})
 		response, err := e.ProcessProposal(rpcContext, signedProposal)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(response.GetResponse().GetStatus()).To(Equal(int32(503)))
@@ -310,6 +311,7 @@ var _ = Describe("Endorser", func() {
 		})
 		rpcStats := &comm.ServerStatsHandler{}
 		rpcContext := rpcStats.TagRPC(context.Background(), &stats.RPCTagInfo{})
+		rpcStats.HandleRPC(rpcContext, &stats.Begin{})
 		response, err := e.ProcessProposal(rpcContext, signedProposal)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(response.GetEndorsement()).NotTo(BeNil())

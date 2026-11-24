@@ -23,12 +23,13 @@ type responseLeaseKey struct{}
 
 type responseLeaseScope struct {
 	mu       sync.Mutex
+	unary    bool
 	ended    bool
 	releases []func()
 }
 
-// RetainUntilRPCEnd transfers a lease to the gRPC response lifecycle. It
-// returns false without taking ownership when no live server scope is present.
+// RetainUntilRPCEnd transfers a lease to a unary gRPC response lifecycle. It
+// returns false without taking ownership for streams or absent server scopes.
 func RetainUntilRPCEnd(ctx context.Context, release func()) bool {
 	scope, ok := ctx.Value(responseLeaseKey{}).(*responseLeaseScope)
 	if !ok || release == nil {
@@ -36,7 +37,7 @@ func RetainUntilRPCEnd(ctx context.Context, release func()) bool {
 	}
 	scope.mu.Lock()
 	defer scope.mu.Unlock()
-	if scope.ended {
+	if !scope.unary || scope.ended {
 		return false
 	}
 	scope.releases = append(scope.releases, sync.OnceFunc(release))
@@ -48,11 +49,19 @@ func (h *ServerStatsHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo)
 }
 
 func (h *ServerStatsHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
-	if _, ok := s.(*stats.End); !ok {
-		return
-	}
 	scope, ok := ctx.Value(responseLeaseKey{}).(*responseLeaseScope)
 	if !ok {
+		return
+	}
+	if begin, ok := s.(*stats.Begin); ok {
+		scope.mu.Lock()
+		if !scope.ended {
+			scope.unary = !begin.IsClientStream && !begin.IsServerStream
+		}
+		scope.mu.Unlock()
+		return
+	}
+	if _, ok := s.(*stats.End); !ok {
 		return
 	}
 	scope.mu.Lock()

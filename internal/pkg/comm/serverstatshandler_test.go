@@ -124,6 +124,8 @@ func TestPQ40EResponseLeaseScopeEndsOnce(t *testing.T) {
 	handler := &comm.ServerStatsHandler{}
 	ctx := handler.TagRPC(context.Background(), &stats.RPCTagInfo{})
 	count := 0
+	require.False(t, comm.RetainUntilRPCEnd(ctx, func() {}))
+	handler.HandleRPC(ctx, &stats.Begin{})
 	require.True(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
 	require.True(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
 	handler.HandleRPC(ctx, &stats.OutPayload{})
@@ -133,6 +135,16 @@ func TestPQ40EResponseLeaseScopeEndsOnce(t *testing.T) {
 	require.Equal(t, 2, count)
 	require.False(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
 	require.False(t, comm.RetainUntilRPCEnd(context.Background(), func() {}))
+}
+
+func TestPQ40EResponseLeaseRejectsStreams(t *testing.T) {
+	handler := &comm.ServerStatsHandler{}
+	for _, begin := range []*stats.Begin{{IsClientStream: true}, {IsServerStream: true}} {
+		ctx := handler.TagRPC(context.Background(), &stats.RPCTagInfo{})
+		handler.HandleRPC(ctx, begin)
+		require.False(t, comm.RetainUntilRPCEnd(ctx, func() { t.Error("stream retained a unary lease") }))
+		handler.HandleRPC(ctx, &stats.End{})
+	}
 }
 
 type blockingResponseCodec struct {
