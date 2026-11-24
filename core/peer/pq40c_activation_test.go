@@ -404,7 +404,24 @@ func TestPQ40EProtectedLifecycleUsesPrivateValidationAndPublishedResources(t *te
 	lgr, err = manager.OpenLedger(testfixture.ChannelID)
 	require.NoError(t, err)
 	controller.Gate = &activation.Gate{}
+	controller.Publish = nil
+	restoredConfig, err := RetrievePersistedChannelConfig(lgr)
+	require.NoError(t, err)
+	restoredBundle, err := channelconfig.NewBundle(testfixture.ChannelID, restoredConfig, fixture.Crypto)
+	require.NoError(t, err)
+	restoredPeer := &Peer{CryptoProvider: fixture.Crypto}
+	var restoredResources []uint64
+	restoredPeer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
+		return func() error {
+			restoredResources = append(restoredResources, bundle.ConfigtxValidator().Sequence())
+			return nil
+		}, nil
+	})
+	restored, err := restoredPeer.newProtectedLifecycle(&controller, lgr, restoredBundle, committer.NewLedgerCommitter(lgr, nil))
+	require.NoError(t, err)
+	require.Nil(t, restored.serving.Resources())
 	require.NoError(t, controller.Recover(true))
-	require.Equal(t, uint64(1), lifecycle.serving.Sequence())
-	require.Equal(t, []uint64{0, 1, 1}, resources)
+	require.Equal(t, uint64(1), restored.serving.Sequence())
+	require.Equal(t, []uint64{1}, restoredResources)
+	require.Equal(t, []uint64{0, 1}, resources)
 }

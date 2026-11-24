@@ -124,7 +124,9 @@ The peer now has a protected lifecycle assembly that binds separate private
 validation and serving channels, the guarded committer and the staged resource
 publisher to one controller. Publisher installation is serialized with
 controller recovery. A real-ledger component test exercises candidate
-validation, publication failure, recovery and restart. Production channel
+validation, publication failure, recovery and reconstruction with new peer
+objects after ledger reopen in the same process. A fresh-process reconstruction
+test is still required. Production channel
 creation does not yet select this assembly or authenticate its controller.
 
 The peer's endorsement adapter now acquires its identity deserializer from
