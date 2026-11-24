@@ -64,9 +64,18 @@ type stagedConfig struct {
 func (s stagedConfig) ApplicationConfig() (channelconfig.Application, bool) {
 	return stagedApplication{}, true
 }
-func (s stagedConfig) OrdererConfig() (channelconfig.Orderer, bool) { return nil, false }
-func (s stagedConfig) MSPManager() msp.MSPManager                   { return stagedMSPManager{root: s.root, err: s.err} }
-func (s stagedConfig) ConfigtxValidator() configtx.Validator        { return stagedValidator{id: s.id} }
+
+func (s stagedConfig) OrdererConfig() (channelconfig.Orderer, bool) {
+	return nil, false
+}
+
+func (s stagedConfig) MSPManager() msp.MSPManager {
+	return stagedMSPManager{root: s.root, err: s.err}
+}
+
+func (s stagedConfig) ConfigtxValidator() configtx.Validator {
+	return stagedValidator{id: s.id}
+}
 
 func TestPQ40ETrustedRootsStaging(t *testing.T) {
 	oldCA, err := tlsgen.NewCA()
