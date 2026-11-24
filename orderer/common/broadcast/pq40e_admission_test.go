@@ -19,6 +19,15 @@ type guardedBroadcastSupport struct {
 	acquire func() (context.Context, func(), bool)
 }
 
+type generationReadySupport struct {
+	*guardedBroadcastSupport
+	wait func(context.Context) error
+}
+
+func (s *generationReadySupport) WaitReadyWithGeneration(ctx context.Context) error {
+	return s.wait(ctx)
+}
+
 func (s *guardedBroadcastSupport) AcquireBroadcastAdmission() (context.Context, func(), bool) {
 	return s.acquire()
 }
@@ -85,4 +94,32 @@ func TestPQ40EBroadcastRejectsClosedGeneration(t *testing.T) {
 	response := handler.ProcessMessage(&cb.Envelope{}, "client")
 	require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, response.GetStatus())
 	require.Zero(t, support.ProcessNormalMsgCallCount())
+}
+
+func TestPQ40EBroadcastCancelsGenerationReadiness(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	base := &guardedBroadcastSupport{ChannelSupport: &mock.ChannelSupport{}}
+	base.acquire = func() (context.Context, func(), bool) { return ctx, func() {}, true }
+	base.ProcessNormalMsgReturns(1, nil)
+	support := &generationReadySupport{guardedBroadcastSupport: base}
+	support.wait = func(generation context.Context) error {
+		require.Same(t, ctx, generation)
+		cancel()
+		return generation.Err()
+	}
+	registrar := &mock.ChannelSupportRegistrar{}
+	registrar.BroadcastChannelSupportReturns(&cb.ChannelHeader{ChannelId: "channel"}, false, support, nil)
+	validate := &mock.MetricsHistogram{}
+	validate.WithReturns(validate)
+	enqueue := &mock.MetricsHistogram{}
+	enqueue.WithReturns(enqueue)
+	counter := &mock.MetricsCounter{}
+	counter.WithReturns(counter)
+	handler := &broadcast.Handler{SupportRegistrar: registrar, Metrics: &broadcast.Metrics{
+		ValidateDuration: validate, EnqueueDuration: enqueue, ProcessedCount: counter,
+	}}
+	response := handler.ProcessMessage(&cb.Envelope{}, "client")
+	require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, response.GetStatus())
+	require.Zero(t, support.OrderCallCount())
 }

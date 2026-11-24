@@ -477,6 +477,15 @@ func (c *Chain) Configure(env *common.Envelope, configSeq uint64) error {
 //
 // In any other case, it returns right away.
 func (c *Chain) WaitReady() error {
+	return c.WaitReadyWithGeneration(context.Background())
+}
+
+// WaitReadyWithGeneration cancels a blocked readiness handoff when the
+// generation that validated the request stops admitting work.
+func (c *Chain) WaitReadyWithGeneration(generation context.Context) error {
+	if err := generation.Err(); err != nil {
+		return err
+	}
 	if err := c.isRunning(); err != nil {
 		return err
 	}
@@ -488,6 +497,11 @@ func (c *Chain) WaitReady() error {
 	case c.submitC <- nil:
 	case <-c.doneC:
 		return errors.Errorf("chain is stopped")
+	case <-generation.Done():
+		return generation.Err()
+	}
+	if err := generation.Err(); err != nil {
+		return err
 	}
 	if c.activation != nil && !c.activation.Ready() {
 		return errors.New("protected channel admission is closed")

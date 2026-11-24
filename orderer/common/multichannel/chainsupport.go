@@ -63,6 +63,18 @@ func (cs *ChainSupport) AcquireBroadcastAdmission() (context.Context, func(), bo
 	return ctx, release, ok
 }
 
+// WaitReadyWithGeneration prevents protected readiness waits from spanning a
+// generation transition. Protected consenters must implement this boundary.
+func (cs *ChainSupport) WaitReadyWithGeneration(generation context.Context) error {
+	if guarded, ok := cs.Chain.(interface{ WaitReadyWithGeneration(context.Context) error }); ok {
+		return guarded.WaitReadyWithGeneration(generation)
+	}
+	if cs.activation != nil {
+		return errors.New("consenter does not support protected readiness")
+	}
+	return cs.Chain.WaitReady()
+}
+
 func (cs *ChainSupport) RequiredDeliveryAdmission() <-chan struct{} {
 	if cs.activation == nil {
 		return nil

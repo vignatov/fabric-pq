@@ -115,6 +115,52 @@ func (p *Peer) publishTrustedRoots(snapshot *comm.TrustedRootsSnapshot) error {
 	return p.CredentialSupport.PublishTrustedRootsForChain(snapshot)
 }
 
+// ProtectedConfigStage prepares a private resource candidate. The returned
+// function publishes it and must return an error if retirement is incomplete.
+type ProtectedConfigStage func(*channelconfig.Bundle) (func() error, error)
+
+// AddProtectedConfigStage registers an activation-owned resource publisher.
+// Registration must finish before peer channel initialization begins.
+func (p *Peer) AddProtectedConfigStage(stage ProtectedConfigStage) {
+	p.protectedConfigStages = append(p.protectedConfigStages, stage)
+}
+
+// publishProtectedResources is called by an authenticated activation owner
+// after durable commit, while channel admission is closed. On any error the
+// owner must leave admission closed and retry publication during recovery.
+func (p *Peer) publishProtectedResources(bundle *channelconfig.Bundle) error {
+	var roots *comm.TrustedRootsSnapshot
+	var err error
+	if p.ServerConfig.SecOpts.UseTLS {
+		roots, err = comm.PrepareTrustedRootsForChain(bundle)
+		if err != nil {
+			return err
+		}
+	}
+	staged := make([]func() error, 0, len(p.protectedConfigStages))
+	for _, stage := range p.protectedConfigStages {
+		publish, err := stage(bundle)
+		if err != nil {
+			return err
+		}
+		if publish == nil {
+			return errors.New("protected resource stage returned no publisher")
+		}
+		staged = append(staged, publish)
+	}
+	if roots != nil {
+		if err := p.publishTrustedRoots(roots); err != nil {
+			return err
+		}
+	}
+	for _, publish := range staged {
+		if err := publish(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 //
 //  Deliver service support structs for the peer
 //
@@ -170,7 +216,8 @@ type Peer struct {
 	channels     map[string]*Channel
 	tlsRootsLock sync.Mutex
 
-	configCallbacks []channelconfig.BundleActor
+	configCallbacks       []channelconfig.BundleActor
+	protectedConfigStages []ProtectedConfigStage
 }
 
 // AddConfigCallbacks adds one or more BundleActor functions to list of callbacks that

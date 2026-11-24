@@ -35,7 +35,7 @@ import (
 )
 
 func TestPQ40CPeerActivation(t *testing.T) {
-	for _, scenario := range []string{"authorized", "staged authorized", "staged missing operator", "missing operator", "missing Fabric signature", "committed without preparation", "mismatching join"} {
+	for _, scenario := range []string{"authorized", "staged authorized", "staged publish retry", "staged missing operator", "missing operator", "missing Fabric signature", "committed without preparation", "mismatching join"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := testfixture.New(t)
 			genesis := testfixture.Genesis(t)
@@ -96,7 +96,8 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			var published []uint64
 			var tlsPublished []uint64
 			var tlsPeer *Peer
-			if scenario == "staged authorized" {
+			failPublish := scenario == "staged publish retry"
+			if scenario == "staged authorized" || failPublish {
 				ca, err := tlsgen.NewCA()
 				require.NoError(t, err)
 				pair, err := ca.NewServerCertKeyPair("127.0.0.1")
@@ -106,6 +107,16 @@ func TestPQ40CPeerActivation(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = server.Listener().Close() })
 				tlsPeer = &Peer{ServerConfig: config, CredentialSupport: comm.NewCredentialSupport(), server: server}
+				tlsPeer.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
+					return func() error {
+						if failPublish && bundle.ConfigtxValidator().Sequence() == 1 {
+							failPublish = false
+							return errors.New("injected cache retirement failure")
+						}
+						tlsPublished = append(tlsPublished, bundle.ConfigtxValidator().Sequence())
+						return nil
+					}, nil
+				})
 			}
 			var serving *channelconfig.BundleSource
 			callback := func(bundle *channelconfig.Bundle) {
@@ -115,14 +126,9 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			}
 			controller.Publish = func(bundle *channelconfig.Bundle) error {
 				if tlsPeer != nil {
-					candidate, err := comm.PrepareTrustedRootsForChain(bundle)
-					if err != nil {
+					if err := tlsPeer.publishProtectedResources(bundle); err != nil {
 						return err
 					}
-					if err := tlsPeer.publishTrustedRoots(candidate); err != nil {
-						return err
-					}
-					tlsPublished = append(tlsPublished, bundle.ConfigtxValidator().Sequence())
 				}
 				if serving == nil {
 					serving = channelconfig.NewBundleSource(bundle, callback, func(bundle *channelconfig.Bundle) {
@@ -165,8 +171,8 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			case "authorized":
 				require.NoError(t, controller.Apply(block, auth, commit))
 				require.Equal(t, []uint64{0, 1}, published)
-			case "staged authorized", "staged missing operator":
-				if scenario == "staged authorized" {
+			case "staged authorized", "staged publish retry", "staged missing operator":
+				if scenario != "staged missing operator" {
 					encoded, err := json.Marshal(auth)
 					require.NoError(t, err)
 					id := sha256.Sum256([]byte(testfixture.ChannelID))
@@ -174,10 +180,23 @@ func TestPQ40CPeerActivation(t *testing.T) {
 				}
 				native := committer.NewLedgerCommitter(lgr, func(*cb.Block) {
 					require.Equal(t, uint64(0), serving.ConfigtxValidator().Sequence())
+					if tlsPeer != nil {
+						require.Equal(t, []uint64{0}, tlsPublished, "TLS and cache changed before native commit completed")
+					}
 				})
 				guarded := &protectedCommitter{Committer: native, controller: &controller}
 				err := guarded.CommitLegacy(&ledger.BlockAndPvtData{Block: block}, &ledger.CommitOptions{})
-				if scenario == "staged authorized" {
+				if scenario == "staged publish retry" {
+					require.ErrorContains(t, err, "injected cache retirement failure")
+					require.False(t, controller.Ready())
+					require.Equal(t, []uint64{0}, published)
+					require.Equal(t, []uint64{0}, tlsPublished)
+					require.NoError(t, controller.Recover(true))
+				}
+				if scenario != "staged missing operator" {
+					if scenario == "staged publish retry" {
+						err = nil
+					}
 					require.NoError(t, err)
 					require.Equal(t, []uint64{0, 1}, published)
 					require.Equal(t, []uint64{0, 1}, tlsPublished)
@@ -211,7 +230,7 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			require.True(t, admitted)
 			defer release()
 			want := uint64(0)
-			if scenario == "authorized" || scenario == "staged authorized" {
+			if scenario == "authorized" || scenario == "staged authorized" || scenario == "staged publish retry" {
 				want = 1
 			}
 			require.Equal(t, want, bundle.ConfigtxValidator().Sequence())

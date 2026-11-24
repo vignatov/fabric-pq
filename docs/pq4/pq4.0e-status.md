@@ -85,7 +85,7 @@ arguments on Linux. Other platforms fail closed.
 | Peer bootstrap and endorsement, Gateway and background admission | Incomplete |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; not selected by peer startup |
 | Orderer service, stream and follower integration under strict transport | Incomplete |
-| Orderer broadcast validation generation lease | Implemented with cancellation check before enqueue; end-to-end handoff remains incomplete |
+| Orderer broadcast validation generation lease | Validation lease and cancellation-aware Raft readiness implemented; end-to-end handoff remains incomplete |
 | Cluster send cancellation and shutdown reporting | Component race tests passed; protected handoff and lease ownership remain incomplete |
 | End-to-end orderer generation lease | Incomplete; a generation-bound stream send exists but is not wired into broadcast or Raft |
 | Protected Raft membership retry | Implemented; focused race and repeated promotion tests passed |
@@ -130,6 +130,14 @@ publishes immediately. Protected activation has not been wired to this API;
 server TLS credentials and Gateway connection caches are not yet published by
 an authenticated peer activation controller.
 
+The Gateway now registers a protected staging function with the peer. An
+activation publication hook prepares TLS and registered cache candidates
+before publishing them and propagates publication or retirement errors. A
+real-ledger component test exercises a failed cache publication, closed
+admission and successful recovery retry. Production channel creation does not
+yet install this hook on an authenticated controller or select the protected
+committer; ordinary callbacks still publish baseline resources.
+
 Gateway orderer endpoints can now be prepared without publishing them. Its
 connection cache is scoped by channel, MSP and TLS roots; publishing a changed
 snapshot retires stale connections, reports retirement errors for retry, and
@@ -156,7 +164,9 @@ focused callback test does not prove atomic TLS-root and cached-connection
 publication. Broadcast holds an authenticated serving generation during
 validation, releases it before the potentially blocking Raft handoff, and
 checks that generation again before enqueue. It does not hold a serving
-generation for the whole operation. A proposed Raft submission cancellation
+generation for the whole operation. Protected Raft readiness waits now observe
+the validation generation and return when it closes, but submit and forwarding
+do not yet carry that generation. A proposed Raft submission cancellation
 change was removed after a native participation-promotion regression failed.
 The failure also reproduced later with that change absent, so its cause has
 not been established.

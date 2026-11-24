@@ -87,6 +87,7 @@ func CreateServer(
 	)
 
 	peerInstance.AddConfigCallbacks(server.registry.configUpdate)
+	peerInstance.AddProtectedConfigStage(server.registry.prepareProtectedConfigUpdate)
 
 	return server
 }

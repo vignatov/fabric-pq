@@ -529,6 +529,16 @@ func (reg *registry) configUpdate(bundle *channelconfig.Bundle) {
 	}
 }
 
+// prepareProtectedConfigUpdate stages the cache candidate without publishing
+// it. The activation owner invokes the returned function after durable commit.
+func (reg *registry) prepareProtectedConfigUpdate(bundle *channelconfig.Bundle) (func() error, error) {
+	channel, orderers := stageOrdererConfig(bundle)
+	if channel == "" {
+		return nil, errors.New("protected Gateway configuration has no orderer section")
+	}
+	return func() error { return reg.publishOrdererConfig(channel, orderers) }, nil
+}
+
 // stageOrdererConfig derives a private candidate without changing the shared
 // Gateway connection cache. Protected callers must publish it only after the
 // corresponding activation is durable.

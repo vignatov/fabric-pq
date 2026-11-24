@@ -102,6 +102,15 @@ type MetricsTracker struct {
 	Metrics           *Metrics
 }
 
+func waitReady(processor ChannelSupport, generation context.Context) error {
+	if generation != nil {
+		if guarded, ok := processor.(interface{ WaitReadyWithGeneration(context.Context) error }); ok {
+			return guarded.WaitReadyWithGeneration(generation)
+		}
+	}
+	return processor.WaitReady()
+}
+
 func (mt *MetricsTracker) Record(resp *ab.BroadcastResponse) {
 	labels := []string{
 		"status", resp.GetStatus().String(),
@@ -186,7 +195,7 @@ func (bh *Handler) ProcessMessage(msg *cb.Envelope, addr string) (resp *ab.Broad
 		tracker.EndValidate()
 
 		tracker.BeginEnqueue()
-		if err = processor.WaitReady(); err != nil {
+		if err = waitReady(processor, admission); err != nil {
 			logger.Warningf("[channel: %s] Rejecting broadcast of message from %s with SERVICE_UNAVAILABLE: rejected by Consenter: %s", chdr.GetChannelId(), addr, err)
 			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: err.Error()}
 		}
@@ -213,7 +222,7 @@ func (bh *Handler) ProcessMessage(msg *cb.Envelope, addr string) (resp *ab.Broad
 		tracker.EndValidate()
 
 		tracker.BeginEnqueue()
-		if err = processor.WaitReady(); err != nil {
+		if err = waitReady(processor, admission); err != nil {
 			logger.Warningf("[channel: %s] Rejecting broadcast of message from %s with SERVICE_UNAVAILABLE: rejected by Consenter: %s", chdr.GetChannelId(), addr, err)
 			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: err.Error()}
 		}
