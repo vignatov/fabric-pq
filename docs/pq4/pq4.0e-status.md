@@ -126,8 +126,9 @@ dispatch. Peer channel creation does not yet install the controller, so these
 checks are not evidence of protected process admission. For protected calls,
 the peer gRPC stats handler retains the lease through the server RPC end after
 the unary send; a missing response scope fails closed. A real gRPC component
-test holds response serialization open after the handler returns and checks the
-lease is retained. Endorsement tests exercise the handoff. A protected
+test holds response serialization open after the handler returns and checks an
+authenticated activation gate cannot drain until the send stops. Endorsement
+tests exercise the handoff. A protected
 process-level response and interrupted-transition test remains required.
 
 `comm.PrepareTrustedRootsForChain` now builds an isolated per-channel TLS-root

@@ -8,6 +8,7 @@ package comm_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -16,8 +17,11 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/metrics"
 	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
 	"github.com/hyperledger/fabric-lib-go/common/metrics/metricsfakes"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/comm/testpb"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -50,13 +54,23 @@ func TestConnectionCounters(t *testing.T) {
 
 type responseLeaseServer struct {
 	testpb.UnimplementedEmptyServiceServer
+	gate     *activation.Gate
 	acquired chan struct{}
 	finish   chan struct{}
 	released chan struct{}
 }
 
 func (s *responseLeaseServer) EmptyCall(ctx context.Context, _ *testpb.Empty) (*testpb.Empty, error) {
-	if !comm.RetainUntilRPCEnd(ctx, func() { close(s.released) }) {
+	release := func() {}
+	if s.gate != nil {
+		var ok bool
+		_, _, release, ok = s.gate.Acquire()
+		if !ok {
+			return nil, context.Canceled
+		}
+	}
+	if !comm.RetainUntilRPCEnd(ctx, func() { release(); close(s.released) }) {
+		release()
 		return nil, context.Canceled
 	}
 	close(s.acquired)
@@ -139,11 +153,28 @@ func (c *blockingResponseCodec) Unmarshal(data []byte, v any) error {
 }
 
 func TestPQ40EResponseLeaseSurvivesBlockedSend(t *testing.T) {
+	fixture := testfixture.New(t)
+	genesis := testfixture.Genesis(t)
+	store, err := activation.OpenStore(t.TempDir(), nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, testfixture.Config(t, genesis))
+	controller := fixture.Channel(store, activation.Ledger{
+		LatestConfig: func() (*cb.Block, error) { return genesis, nil },
+		Block: func(number uint64) (*cb.Block, error) {
+			if number != 0 {
+				return nil, errors.New("missing block")
+			}
+			return genesis, nil
+		},
+		Height: func() (uint64, error) { return 1, nil },
+		Sync:   func() error { return nil },
+	})
+	require.NoError(t, controller.Recover(true))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	codec := &blockingResponseCodec{started: make(chan struct{}), finish: make(chan struct{})}
 	server := grpc.NewServer(grpc.StatsHandler(comm.NewServerStatsHandler(&disabled.Provider{})), grpc.ForceServerCodec(codec))
-	service := &responseLeaseServer{acquired: make(chan struct{}), finish: make(chan struct{}), released: make(chan struct{})}
+	service := &responseLeaseServer{gate: controller.Gate, acquired: make(chan struct{}), finish: make(chan struct{}), released: make(chan struct{})}
 	testpb.RegisterEmptyServiceServer(server, service)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
@@ -170,6 +201,18 @@ func TestPQ40EResponseLeaseSurvivesBlockedSend(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("response did not enter serialization")
 	}
+	drained := make(chan struct{})
+	go func() { controller.Suspend(); close(drained) }()
+	select {
+	case <-controller.Gate.Errored():
+	case <-ctx.Done():
+		t.Fatal("generation did not close")
+	}
+	select {
+	case <-drained:
+		t.Fatal("generation drained while response send was blocked")
+	default:
+	}
 	select {
 	case <-service.released:
 		t.Fatal("lease released while response send was blocked")
@@ -186,6 +229,11 @@ func TestPQ40EResponseLeaseSurvivesBlockedSend(t *testing.T) {
 	case <-service.released:
 	case <-ctx.Done():
 		t.Fatal("lease did not release after RPC completion")
+	}
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		t.Fatal("generation did not drain after the response")
 	}
 }
 
