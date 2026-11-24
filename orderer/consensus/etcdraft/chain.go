@@ -1074,7 +1074,12 @@ func (c *Chain) run() {
 			c.propose(propC, bc, batch) // we are certain this is normal block, no need to block
 
 		case request := <-c.snapshotRequests:
-			request.result <- c.stepProtectedSnapshot(request.message)
+			err, fatal := c.stepProtectedSnapshot(request.message)
+			if fatal {
+				c.failProtectedAndNotify(err, func() { request.result <- err })
+			} else {
+				request.result <- err
+			}
 
 		case sn := <-c.snapC:
 			if c.activation != nil {

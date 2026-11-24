@@ -94,16 +94,8 @@ func (c *Chain) authorizeIncomingSnapshot(message *raftpb.Message) error {
 	case err := <-req.result:
 		return err
 	case <-c.doneC:
-		// An accepted request is handled synchronously by the application
-		// loop. Quarantine can stop the Raft node before that loop reports
-		// the actual authorization error, so wait for its report or exit.
-		if c.applicationDone != nil {
-			select {
-			case err := <-req.result:
-				return err
-			case <-c.applicationDone:
-			}
-		}
+		// Prefer a result already reported before the node stopped, without
+		// waiting for a possibly blocked application loop on external halt.
 		select {
 		case err := <-req.result:
 			return err
@@ -113,26 +105,23 @@ func (c *Chain) authorizeIncomingSnapshot(message *raftpb.Message) error {
 	}
 }
 
-func (c *Chain) stepProtectedSnapshot(message *raftpb.Message) error {
+func (c *Chain) stepProtectedSnapshot(message *raftpb.Message) (error, bool) {
 	status := c.Node.Status()
 	snapshot := message.GetSnapshot()
 	if raft.IsEmptySnap(snapshot) {
-		return errSnapshotEvidence
+		return errSnapshotEvidence, false
 	}
 	if message.GetTerm() < status.GetTerm() || snapshot.GetMetadata().GetIndex() <= status.GetCommit() {
-		return nil
+		return nil, false
 	}
 	c.activation.Suspend()
 	c.snapshotPending = max(c.snapshotPending, snapshot.GetMetadata().GetIndex())
 	blocks, err := c.protectedSnapshotBlocks(snapshot, false)
 	if err != nil {
-		if !errors.Is(err, errSnapshotEvidence) {
-			c.failProtected(err)
-		}
-		return err
+		return err, !errors.Is(err, errSnapshotEvidence)
 	}
 	c.stagedSnapshot = &verifiedSnapshot{snapshot: snapshot, blocks: blocks}
-	return c.Node.Step(context.Background(), message)
+	return c.Node.Step(context.Background(), message), false
 }
 
 // protectedSnapshotBlocks authenticates the snapshot against durable local

@@ -260,7 +260,7 @@ run establishes protected process readiness.
 
 On commit `c99417e`, the hosted unit suite failed because snapshot quarantine
 could close the Raft node before its accepted request returned the specific
-authorization error. The failure remained fail-closed. The request now waits
-for the application loop's response or exit after shutdown; a deterministic
+authorization error. The failure remained fail-closed. The handler now reports
+the failure after quarantine but before stopping Raft; a deterministic
 race test and repeated native snapshot regression passed locally. Final-head
 hosted CI is still required.

@@ -35,13 +35,13 @@ func TestPQ40EReadinessWaitStopsWithGeneration(t *testing.T) {
 	}
 }
 
-func TestPQ40ESnapshotReportsAuthorizationErrorAfterShutdown(t *testing.T) {
+func TestPQ40ESnapshotReportsAuthorizationErrorBeforeShutdown(t *testing.T) {
 	chain := &Chain{snapshotRequests: make(chan snapshotRequest), doneC: make(chan struct{}), applicationDone: make(chan struct{})}
 	expected := errors.New("snapshot authorization failed")
 	go func() {
 		request := <-chain.snapshotRequests
-		close(chain.doneC)
 		request.result <- expected
+		close(chain.doneC)
 		close(chain.applicationDone)
 	}()
 	require.ErrorIs(t, chain.authorizeIncomingSnapshot(&raftpb.Message{}), expected)
