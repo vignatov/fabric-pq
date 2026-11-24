@@ -690,6 +690,9 @@ func (c *Chain) Submit(req *orderer.SubmitRequest, sender uint64) error {
 
 func (c *Chain) forwardToLeader(lead uint64, req *orderer.SubmitRequest) error {
 	c.logger.Infof("Forwarding transaction to the leader %d", lead)
+	if c.activation != nil {
+		return c.forwardProtectedToLeader(lead, req)
+	}
 	timer := time.NewTimer(c.opts.RPCTimeout)
 	defer timer.Stop()
 
@@ -725,6 +728,44 @@ func (c *Chain) forwardToLeader(lead uint64, req *orderer.SubmitRequest) error {
 		return errors.New(atomicErr.Load().(string))
 	}
 	return nil
+}
+
+// forwardProtectedToLeader binds the remote send to the current protected
+// generation. The stream owns a lease until an accepted send has stopped, even
+// when this caller times out or the channel closes. This does not yet bind the
+// original broadcast validation and local Raft queue to that generation.
+func (c *Chain) forwardProtectedToLeader(lead uint64, req *orderer.SubmitRequest) error {
+	sender, ok := c.rpc.(interface {
+		SendSubmitWithGeneration(context.Context, *activation.Gate, context.Context, uint64, *orderer.SubmitRequest, func(error)) error
+	})
+	if !ok {
+		return errors.New("cluster transport does not support protected generation sends")
+	}
+	_, generation, release, ok := c.activation.Gate.Acquire()
+	if !ok {
+		return errors.New("protected channel admission is closed")
+	}
+	// No work is handed to the stream under this lease. The stream reacquires
+	// the same generation after potentially blocking connection setup.
+	release()
+	ctx, cancel := context.WithTimeout(generation, c.opts.RPCTimeout)
+	defer cancel()
+	reported := make(chan error, 1)
+	if err := sender.SendSubmitWithGeneration(ctx, c.activation.Gate, generation, lead, req, func(err error) { reported <- err }); err != nil {
+		c.Metrics.ProposalFailures.Add(1)
+		return err
+	}
+	select {
+	case err := <-reported:
+		if err != nil {
+			c.Metrics.ProposalFailures.Add(1)
+		}
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.doneC:
+		return errors.New("chain is stopped")
+	}
 }
 
 type apply struct {

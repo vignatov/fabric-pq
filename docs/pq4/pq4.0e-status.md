@@ -87,7 +87,7 @@ arguments on Linux. Other platforms fail closed.
 | Orderer service, stream and follower integration under strict transport | Incomplete |
 | Orderer broadcast validation generation lease | Validation lease and cancellation-aware Raft readiness implemented; end-to-end handoff remains incomplete |
 | Cluster send cancellation and shutdown reporting | Component race tests passed; protected handoff and lease ownership remain incomplete |
-| End-to-end orderer generation lease | Incomplete; a generation-bound stream send exists but is not wired into broadcast or Raft |
+| End-to-end orderer generation lease | Incomplete; protected Raft forwarding uses a generation-bound stream, but validation and local submission are not continuously leased |
 | Protected Raft membership retry | Implemented; focused race and repeated promotion tests passed |
 | Staged shared TLS resources and crash/restart reconstruction | Incomplete |
 | Peer credential roots preparation and publication failure | Component race tests passed; protected lifecycle integration remains incomplete |
@@ -165,9 +165,11 @@ publication. Broadcast holds an authenticated serving generation during
 validation, releases it before the potentially blocking Raft handoff, and
 checks that generation again before enqueue. It does not hold a serving
 generation for the whole operation. Protected Raft readiness waits now observe
-the validation generation and return when it closes, but submit and forwarding
-do not yet carry that generation. A proposed Raft submission cancellation
-change was removed after a native participation-promotion regression failed.
+the validation generation and return when it closes. Forwarding acquires the
+then-current generation and uses the generation-bound stream send, which holds
+its own lease until the accepted send stops. Validation and local submission
+do not yet carry a single generation through to forwarding. A proposed Raft
+submission cancellation change was removed after a native participation-promotion regression failed.
 The failure also reproduced later with that change absent, so its cause has
 not been established.
 The cluster stream has a context-aware enqueue, checks queued work for

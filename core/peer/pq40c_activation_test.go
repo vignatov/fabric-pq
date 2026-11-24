@@ -272,7 +272,7 @@ func TestPQ40EProtectedPeerCommitDrainsGeneration(t *testing.T) {
 	require.NoError(t, err)
 	block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
 	block.Data.Data = [][]byte{protoutil.MarshalOrPanic(envelope)}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 	native := &blockingPeerCommitter{started: make(chan struct{}), finish: make(chan struct{})}
 	guarded := &protectedCommitter{Committer: native, controller: &controller}
 	done := make(chan error, 1)

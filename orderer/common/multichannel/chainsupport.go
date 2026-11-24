@@ -72,7 +72,7 @@ func (cs *ChainSupport) WaitReadyWithGeneration(generation context.Context) erro
 	if cs.activation != nil {
 		return errors.New("consenter does not support protected readiness")
 	}
-	return cs.Chain.WaitReady()
+	return cs.WaitReady()
 }
 
 func (cs *ChainSupport) RequiredDeliveryAdmission() <-chan struct{} {
