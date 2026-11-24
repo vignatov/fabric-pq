@@ -86,24 +86,33 @@ func (p *Peer) updateTrustedRoots(cm channelconfig.Resources) {
 	if !p.ServerConfig.SecOpts.UseTLS {
 		return
 	}
-
-	// this is triggered on per channel basis so first update the roots for the channel
 	peerLogger.Debugf("Updating trusted root authorities for channel %s", cm.ConfigtxValidator().ChannelID())
-
-	p.CredentialSupport.BuildTrustedRootsForChain(cm)
-
-	trustedRoots := p.CredentialSupport.AppRootCAsByChain()
-
-	trustedRoots = append(trustedRoots, p.ServerConfig.SecOpts.ClientRootCAs...)
-	trustedRoots = append(trustedRoots, p.ServerConfig.SecOpts.ServerRootCAs...)
-
-	// now update the client roots for the peerServer
-	err := p.server.SetClientRootCAs(trustedRoots)
+	snapshot, err := comm.PrepareTrustedRootsForChain(cm)
+	if err == nil {
+		err = p.publishTrustedRoots(snapshot)
+	}
 	if err != nil {
 		msg := "Failed to update trusted roots from latest config block. " +
 			"This peer may not be able to communicate with members of channel %s (%s)"
 		peerLogger.Warningf(msg, cm.ConfigtxValidator().ChannelID(), err)
 	}
+}
+
+// publishTrustedRoots installs a prepared candidate. Protected channel owners
+// must call it only after the corresponding checkpoint is durable.
+func (p *Peer) publishTrustedRoots(snapshot *comm.TrustedRootsSnapshot) error {
+	p.tlsRootsLock.Lock()
+	defer p.tlsRootsLock.Unlock()
+	trustedRoots, err := p.CredentialSupport.PreviewTrustedRootsForChain(snapshot)
+	if err != nil {
+		return err
+	}
+	trustedRoots = append(trustedRoots, p.ServerConfig.SecOpts.ClientRootCAs...)
+	trustedRoots = append(trustedRoots, p.ServerConfig.SecOpts.ServerRootCAs...)
+	if err := p.server.SetClientRootCAs(trustedRoots); err != nil {
+		return err
+	}
+	return p.CredentialSupport.PublishTrustedRootsForChain(snapshot)
 }
 
 //
@@ -157,8 +166,9 @@ type Peer struct {
 	channelInitializer func(cid string)
 
 	// channels is a map of channelID to channel
-	mutex    sync.RWMutex
-	channels map[string]*Channel
+	mutex        sync.RWMutex
+	channels     map[string]*Channel
+	tlsRootsLock sync.Mutex
 
 	configCallbacks []channelconfig.BundleActor
 }

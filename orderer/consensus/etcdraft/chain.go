@@ -758,6 +758,14 @@ func (c *Chain) run() {
 
 	var propC chan<- *common.Block
 	var cancelProp context.CancelFunc
+	var leaderContext context.Context
+	var retryInFlight atomic.Bool
+	var retryTicks <-chan time.Time
+	if c.activation != nil {
+		retryTicker := time.NewTicker(time.Second)
+		defer retryTicker.Stop()
+		retryTicks = retryTicker.C
+	}
 	cancelProp = func() {} // no-op as initial value
 
 	becomeLeader := func() (chan<- *common.Block, context.CancelFunc) {
@@ -786,6 +794,7 @@ func (c *Chain) run() {
 		// if node is leaderless (this can happen when leader steps down in a heavily
 		// loaded network). We need to make sure applyC can still be consumed properly.
 		ctx, cancel := context.WithCancel(context.Background())
+		leaderContext = ctx
 		go func(ctx context.Context, ch <-chan *common.Block) {
 			for {
 				select {
@@ -809,6 +818,7 @@ func (c *Chain) run() {
 
 	becomeFollower := func() {
 		cancelProp()
+		leaderContext = nil
 		c.blockInflight = 0
 		if c.activation != nil && c.confChangeInProgress == nil {
 			c.configInflight = false
@@ -822,6 +832,23 @@ func (c *Chain) run() {
 
 	for {
 		select {
+		case <-retryTicks:
+			// Raft can silently ignore a membership proposal while an older
+			// configuration entry is not yet applied. Retry only the change
+			// already derived from the committed, authorized config block;
+			// keep admission closed until Raft applies it normally.
+			if soft.Lead != c.raftID || leaderContext == nil || c.confChangeInProgress == nil || !retryInFlight.CompareAndSwap(false, true) {
+				continue
+			}
+			change := proto.CloneOf(c.confChangeInProgress)
+			ctx := leaderContext
+			c.logger.Infof("Retrying committed membership change for node %d", change.GetNodeId())
+			go func() {
+				defer retryInFlight.Store(false)
+				if err := c.Node.ProposeConfChange(ctx, change); err != nil && ctx.Err() == nil {
+					c.logger.Warnf("Failed to retry authorized configuration update: %s", err)
+				}
+			}()
 		case s := <-submitC:
 			if s == nil {
 				// polled by `WaitReady`

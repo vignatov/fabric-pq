@@ -1,5 +1,9 @@
 # PQ4.0 transport-policy enforcement review
 
+Configured protected orderer startup is blocked pending strict transport
+integration; see [PQ4.0E status](pq4.0e-status.md) for the missing enrollment
+boundary.
+
 Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. PQ4.0D adds the local
 orderer configuration authorization boundary. Strict service endpoint and
 shared-listener enforcement still require integration evidence.

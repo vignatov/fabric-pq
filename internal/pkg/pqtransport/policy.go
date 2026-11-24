@@ -134,6 +134,19 @@ func (p *Policy) Channel(channel string) (ChannelBinding, bool) {
 	return binding, ok
 }
 
+// Channels returns a copy of the bindings in an authenticated policy.
+// Mutating the result cannot alter the policy or its security decisions.
+func (p *Policy) Channels() (map[string]ChannelBinding, error) {
+	if err := p.Check(); err != nil {
+		return nil, err
+	}
+	channels := make(map[string]ChannelBinding, len(p.document.Channels))
+	for id, binding := range p.document.Channels {
+		channels[id] = binding
+	}
+	return channels, nil
+}
+
 // Checkpoint returns the checkpoint corresponding to the authenticated policy.
 func (p *Policy) Checkpoint() (Checkpoint, error) {
 	if err := p.Check(); err != nil {

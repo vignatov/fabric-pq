@@ -119,6 +119,9 @@ func NewRegistrar(
 
 	var err error
 	r.protected = newProtectedChannels(config.General.PQActivation)
+	if r.protected.err != nil {
+		logger.Panicf("Cannot authenticate protected channel registry: %s", r.protected.err)
+	}
 	r.joinBlockFileRepo, err = InitJoinBlockFileRepo(&r.config)
 	if err != nil {
 		logger.Panicf("Error initializing joinblock file repo: %s", err)

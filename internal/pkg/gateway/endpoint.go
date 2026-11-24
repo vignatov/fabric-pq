@@ -99,9 +99,15 @@ func (ef *endpointFactory) newOrderer(address, mspid string, tlsRootCerts [][]by
 	if connectOrderer == nil {
 		connectOrderer = ab.NewAtomicBroadcastClient
 	}
+	close := func() error {
+		if conn == nil || conn.GetState() == connectivity.Shutdown {
+			return nil
+		}
+		return conn.Close()
+	}
 	return &orderer{
 		client:          connectOrderer(conn),
-		closeConnection: conn.Close,
+		closeConnection: close,
 		endpointConfig:  &endpointConfig{address: address, logAddress: logAddess, mspid: mspid, tlsRootCerts: tlsRootCerts},
 	}, nil
 }

@@ -7,12 +7,14 @@ package activation
 
 import (
 	"bytes"
+	"crypto/mldsa"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
@@ -21,6 +23,74 @@ import (
 type signedDocument struct {
 	Payload   []byte
 	Signature []byte
+}
+
+// AuthenticateRegistry reads the active checkpoint and validates its policy
+// before returning channel membership. It does not reconcile the ledger or
+// open admission; each channel must still complete its normal recovery.
+func (s *Store) AuthenticateRegistry(signer *mldsa.PublicKey, network, node string) (*pqtransport.Policy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, err := readRecord[checkpoint](s.dir, "checkpoint")
+	if err != nil {
+		return nil, fmt.Errorf("read protected checkpoint: %w", err)
+	}
+	policy, err := pqtransport.Authenticate(current.Policy.Payload, current.Policy.Signature, signer, &current.Checkpoint, network, node)
+	if err != nil {
+		return nil, fmt.Errorf("authenticate protected checkpoint: %w", err)
+	}
+	channels, err := policy.Channels()
+	if err != nil {
+		return nil, err
+	}
+	for id := range current.Blocks {
+		if _, ok := channels[id]; !ok {
+			return nil, fmt.Errorf("checkpoint contains unbound channel %q", id)
+		}
+	}
+	journal, err := s.readJournal()
+	if err != nil {
+		return nil, fmt.Errorf("read activation journal: %w", err)
+	}
+	if journal.Channel != "" {
+		if _, ok := channels[journal.Channel]; !ok {
+			return nil, errors.New("activation journal contains an unbound channel")
+		}
+	}
+	if _, err := readRecord[string](s.dir, nodeQuarantine); err == nil {
+		return nil, errors.New("protected node is quarantined")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read node quarantine: %w", err)
+	}
+	// Durable channel records use hashed names. Reject any record that no
+	// longer corresponds to an authenticated binding, including quarantines.
+	known := make(map[string]bool, len(channels))
+	for id := range channels {
+		known[digest([]byte(id))] = true
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		var hash string
+		switch {
+		case strings.HasPrefix(name, "genesis-"):
+			hash = strings.TrimSuffix(strings.TrimPrefix(name, "genesis-"), ".block")
+		case strings.HasPrefix(name, "quarantine-") && name != nodeQuarantine:
+			hash = strings.TrimPrefix(name, "quarantine-")
+		case strings.HasPrefix(name, "approval-"):
+			hash, _, _ = strings.Cut(strings.TrimPrefix(name, "approval-"), "-")
+		default:
+			continue
+		}
+		if !known[hash] {
+			return nil, fmt.Errorf("protected state %q has no authenticated channel binding", name)
+		}
+	}
+	return policy, nil
 }
 
 type checkpoint struct {

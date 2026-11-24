@@ -1,5 +1,8 @@
 # ADR: PQ transport policy and Fabric configuration activation
 
+The partial PQ4.0E registry and its missing trusted-enrollment boundary are
+described in [PQ4.0E status](pq4.0e-status.md).
+
 **Status: proposed for architecture review. PQ4.0B enforcement remains INCOMPLETE.**
 
 ## Decision and alternatives

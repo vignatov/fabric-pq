@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
-	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
@@ -80,14 +79,11 @@ func (rc *RemoteContext) NewStream(timeout time.Duration) (*Stream, error) {
 	stepLogger := logger.WithOptions(zap.AddCallerSkip(1))
 
 	s := &Stream{
-		Channel:     rc.Channel,
-		metrics:     rc.Metrics,
-		abortReason: abortReason,
-		abortChan:   abortChan,
-		sendBuff: make(chan struct {
-			request *orderer.StepRequest
-			report  func(error)
-		}, rc.SendBuffSize),
+		Channel:      rc.Channel,
+		metrics:      rc.Metrics,
+		abortReason:  abortReason,
+		abortChan:    abortChan,
+		sendBuff:     make(chan queuedStep, rc.SendBuffSize),
 		commShutdown: rc.shutdownSignal,
 		NodeName:     nodeName,
 		Logger:       stepLogger,

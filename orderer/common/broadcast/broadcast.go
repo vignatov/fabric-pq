@@ -7,8 +7,10 @@ SPDX-License-Identifier: Apache-2.0
 package broadcast
 
 import (
+	"context"
 	errors2 "errors"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
@@ -156,11 +158,27 @@ func (bh *Handler) ProcessMessage(msg *cb.Envelope, addr string) (resp *ab.Broad
 		logger.Warningf("[channel: %s] Could not get message processor for serving %s: %s", tracker.ChannelID, addr, err)
 		return &ab.BroadcastResponse{Status: cb.Status_BAD_REQUEST, Info: err.Error()}
 	}
+	var admission context.Context
+	var release func()
+	if guarded, ok := processor.(interface {
+		AcquireBroadcastAdmission() (context.Context, func(), bool)
+	}); ok {
+		var admitted bool
+		admission, release, admitted = guarded.AcquireBroadcastAdmission()
+		if !admitted {
+			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: "protected channel admission is closed"}
+		}
+		release = sync.OnceFunc(release)
+		defer release()
+	}
 
 	if !isConfig {
 		logger.Debugf("[channel: %s] Broadcast is processing normal message from %s with txid '%s' of type %s", chdr.GetChannelId(), addr, chdr.GetTxId(), cb.HeaderType_name[chdr.GetType()])
 
 		configSeq, err := processor.ProcessNormalMsg(msg)
+		if release != nil {
+			release()
+		}
 		if err != nil {
 			logger.Warningf("[channel: %s] Rejecting broadcast of normal message from %s because of error: %s", chdr.GetChannelId(), addr, err)
 			return &ab.BroadcastResponse{Status: ClassifyError(err), Info: err.Error()}
@@ -172,6 +190,9 @@ func (bh *Handler) ProcessMessage(msg *cb.Envelope, addr string) (resp *ab.Broad
 			logger.Warningf("[channel: %s] Rejecting broadcast of message from %s with SERVICE_UNAVAILABLE: rejected by Consenter: %s", chdr.GetChannelId(), addr, err)
 			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: err.Error()}
 		}
+		if admission != nil && admission.Err() != nil {
+			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: "protected channel admission is closed"}
+		}
 
 		err = processor.Order(msg, configSeq)
 		if err != nil {
@@ -182,6 +203,9 @@ func (bh *Handler) ProcessMessage(msg *cb.Envelope, addr string) (resp *ab.Broad
 		logger.Debugf("[channel: %s] Broadcast is processing config update message from %s", chdr.GetChannelId(), addr)
 
 		config, configSeq, err := processor.ProcessConfigUpdateMsg(msg)
+		if release != nil {
+			release()
+		}
 		if err != nil {
 			logger.Warningf("[channel: %s] Rejecting broadcast of config message from %s because of error: %s", chdr.GetChannelId(), addr, err)
 			return &ab.BroadcastResponse{Status: ClassifyError(err), Info: err.Error()}
@@ -192,6 +216,9 @@ func (bh *Handler) ProcessMessage(msg *cb.Envelope, addr string) (resp *ab.Broad
 		if err = processor.WaitReady(); err != nil {
 			logger.Warningf("[channel: %s] Rejecting broadcast of message from %s with SERVICE_UNAVAILABLE: rejected by Consenter: %s", chdr.GetChannelId(), addr, err)
 			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: err.Error()}
+		}
+		if admission != nil && admission.Err() != nil {
+			return &ab.BroadcastResponse{Status: cb.Status_SERVICE_UNAVAILABLE, Info: "protected channel admission is closed"}
 		}
 
 		err = processor.Configure(config, configSeq)

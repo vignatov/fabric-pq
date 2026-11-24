@@ -33,7 +33,7 @@ func newProtectedChannels(config localconfig.PQActivation) protectedChannels {
 	for _, id := range config.Channels {
 		p.channels[id] = nil
 	}
-	if len(p.channels) == 0 {
+	if len(p.channels) == 0 && config.StateDir == "" && config.TrustAnchor == "" && config.Network == "" && config.Node == "" {
 		return p
 	}
 	if config.StateDir == "" || config.TrustAnchor == "" || config.Network == "" || config.Node == "" {
@@ -49,7 +49,43 @@ func newProtectedChannels(config localconfig.PQActivation) protectedChannels {
 		return p
 	}
 	p.store, p.err = activation.OpenStore(config.StateDir, nil)
+	if p.err != nil {
+		return p
+	}
+	policy, err := p.store.AuthenticateRegistry(p.key, config.Network, config.Node)
+	if err != nil {
+		p.err = err
+		return p
+	}
+	bindings, err := policy.Channels()
+	if err != nil {
+		p.err = err
+		return p
+	}
+	for id := range p.channels {
+		if _, ok := bindings[id]; !ok {
+			p.err = fmt.Errorf("configured protected channel %s has no authenticated binding", id)
+			return p
+		}
+	}
+	for id := range bindings {
+		p.channels[id] = nil
+	}
 	return p
+}
+
+// CheckProtectedStartup authenticates configured protected state before any
+// orderer listener is created. Protected transport is not yet wired through
+// every required orderer endpoint, so production startup must fail closed.
+func CheckProtectedStartup(config localconfig.PQActivation) error {
+	p := newProtectedChannels(config)
+	if p.err != nil {
+		return p.err
+	}
+	if p.store != nil {
+		return errors.New("protected orderer startup requires strict transport integration on all required endpoints")
+	}
+	return nil
 }
 
 func (p *protectedChannels) contains(id string) bool {

@@ -7,6 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 package multichannel
 
 import (
+	"context"
+
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
@@ -48,6 +50,17 @@ func (cs *ChainSupport) OrdererActivation() *activation.Channel {
 
 func (cs *ChainSupport) AdmissionReady() bool {
 	return cs.activation == nil || cs.activation.Ready()
+}
+
+// AcquireBroadcastAdmission binds validation to the currently approved
+// generation. Callers must release it before entering the blocking Raft
+// handoff; the handoff is not yet generation-leased.
+func (cs *ChainSupport) AcquireBroadcastAdmission() (context.Context, func(), bool) {
+	if cs.activation == nil {
+		return context.Background(), func() {}, true
+	}
+	_, ctx, release, ok := cs.activation.Gate.Acquire()
+	return ctx, release, ok
 }
 
 func (cs *ChainSupport) RequiredDeliveryAdmission() <-chan struct{} {

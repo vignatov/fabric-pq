@@ -82,6 +82,9 @@ func Main() {
 		os.Exit(1)
 	}
 	initializeLogging()
+	if err := multichannel.CheckProtectedStartup(conf.General.PQActivation); err != nil {
+		logger.Panicf("Protected startup rejected before listener initialization: %s", err)
+	}
 
 	prettyPrintStruct(conf)
 
