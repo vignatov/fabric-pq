@@ -285,3 +285,11 @@ private-data storage package race suite passed locally. A separate hosted
 integration job failed during setup because `softhsm2` was unavailable; its
 tests did not execute in that job. The setup script now refreshes package
 indexes before installation. Final-head hosted CI remains required.
+
+On commit `212ab45`, the hosted Raft integration job failed after a restarted
+orderer tried to snapshot ledger index 11 while its in-memory Raft log ended at
+index 7. Replayed blocks alone triggered snapshot scheduling before the Raft
+log caught up. The scheduler now requires a newly applied block while preserving
+the replayed-byte snapshot interval, with a focused regression test. This is a
+baseline Raft fix as well as a protected-path regression; hosted integration
+must rerun on the final head.

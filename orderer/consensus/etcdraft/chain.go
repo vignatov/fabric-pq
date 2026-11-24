@@ -1449,14 +1449,13 @@ func (c *Chain) apply(ents []*raftpb.Entry) error {
 	}
 
 	var position int
+	var snapshotCandidate bool
 	for i := range ents {
 		switch ents[i].GetType() {
 		case raftpb.EntryNormal:
 			if len(ents[i].GetData()) == 0 {
 				break
 			}
-
-			position = i
 			if c.activation == nil {
 				c.accDataSize += uint32(len(ents[i].GetData()))
 			}
@@ -1489,6 +1488,8 @@ func (c *Chain) apply(ents []*raftpb.Entry) error {
 			if err := c.writeBlock(block, ents[i].GetIndex()); err != nil {
 				return err
 			}
+			position = i
+			snapshotCandidate = true
 			if c.activation != nil {
 				c.accDataSize += uint32(len(ents[i].GetData()))
 			}
@@ -1563,9 +1564,9 @@ func (c *Chain) apply(ents []*raftpb.Entry) error {
 		}
 	}
 
-	// at position==0, ents[position].Type is ambiguous, it can be either of {raftpb.EntryNormal, raftpb.EntryConfChange}
-	// take a snapshot only for ents[position].Type == raftpb.EntryNormal
-	if c.accDataSize >= c.sizeLimit && ents[position].GetType() == raftpb.EntryNormal && len(ents[position].GetData()) > 0 {
+	// Only a newly applied Fabric block can supply snapshot data. A replayed
+	// block may precede the ledger's applied index and the in-memory Raft tip.
+	if snapshotCandidate && c.accDataSize >= c.sizeLimit {
 		b := protoutil.UnmarshalBlockOrPanic(ents[position].GetData())
 		if c.activation != nil {
 			if syncer, ok := c.support.(interface{ WaitForBlockCommit() uint64 }); ok {
