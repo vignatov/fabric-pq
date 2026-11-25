@@ -433,7 +433,7 @@ func (h *Handler) sendAsync(msg *pb.ChaincodeMessage, admission shimResponseAdmi
 		if admission.generation != nil {
 			err = h.sendMessage(msg, admission.generation)
 			admission.release()
-			if err == errProtectedShimResponseRevoked {
+			if errors.Is(err, errProtectedShimResponseRevoked) {
 				// The queued payload was discarded. Only a generic error may
 				// follow, even if this stream is still serving other channels.
 				err = h.serialSend(&pb.ChaincodeMessage{
