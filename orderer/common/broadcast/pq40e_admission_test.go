@@ -143,8 +143,7 @@ func TestPQ40EBroadcastRequiresGenerationHandoff(t *testing.T) {
 	for _, config := range []bool{false, true} {
 		for _, supported := range []bool{false, true} {
 			t.Run(fmt.Sprintf("config=%t/supported=%t", config, supported), func(t *testing.T) {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
+				ctx := t.Context()
 				base := &guardedBroadcastSupport{ChannelSupport: &mock.ChannelSupport{}}
 				base.acquire = func() (context.Context, func(), bool) { return ctx, func() {}, true }
 				base.ProcessNormalMsgReturns(7, nil)
