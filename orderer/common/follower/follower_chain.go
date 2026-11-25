@@ -411,6 +411,12 @@ func (c *Chain) pull() error {
 func (c *Chain) pullUpToJoin() error {
 	targetHeight := c.joinBlock.GetHeader().GetNumber() + 1
 	if c.ledgerResources.Height() >= targetHeight {
+		if c.options.Activation != nil {
+			block := c.ledgerResources.Block(targetHeight - 1)
+			if !proto.Equal(block.GetHeader(), c.joinBlock.GetHeader()) {
+				return errors.New("recovered protected ledger conflicts with the anchored join block")
+			}
+		}
 		c.logger.Infof("Target height according to join block (%d) is <= to our ledger height (%d), no need to pull up to join block",
 			targetHeight, c.ledgerResources.Height())
 		return nil

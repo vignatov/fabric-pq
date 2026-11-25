@@ -33,7 +33,7 @@ import (
 
 const (
 	SnapshotSignableMetadataFileName   = "_snapshot_signable_metadata.json"
-	snapshotAdditionalMetadataFileName = "_snapshot_additional_metadata.json"
+	SnapshotAdditionalMetadataFileName = "_snapshot_additional_metadata.json"
 	jsonFileIndent                     = "    "
 	simpleKeyValueDB                   = "SimpleKeyValueDB"
 )
@@ -215,7 +215,7 @@ func (l *kvLedger) generateSnapshotMetadataFiles(
 	if err != nil {
 		return errors.Wrap(err, "error while marshalling snapshot additional metadata to JSON")
 	}
-	return fileutil.CreateAndSyncFile(filepath.Join(dir, snapshotAdditionalMetadataFileName), additionalMetadataBytes, 0o444)
+	return fileutil.CreateAndSyncFile(filepath.Join(dir, SnapshotAdditionalMetadataFileName), additionalMetadataBytes, 0o444)
 }
 
 // CreateFromSnapshot implements the corresponding method from interface ledger.PeerLedgerProvider
@@ -356,7 +356,7 @@ func loadSnapshotMetadataJSONs(snapshotDir string) (*SnapshotMetadataJSONs, erro
 	if err != nil {
 		return nil, err
 	}
-	additionalMetadataFilePath := filepath.Join(snapshotDir, snapshotAdditionalMetadataFileName)
+	additionalMetadataFilePath := filepath.Join(snapshotDir, SnapshotAdditionalMetadataFileName)
 	additionalMetadataBytes, err := os.ReadFile(additionalMetadataFilePath)
 	if err != nil {
 		return nil, err
@@ -365,6 +365,20 @@ func loadSnapshotMetadataJSONs(snapshotDir string) (*SnapshotMetadataJSONs, erro
 		signableMetadata:   string(signableMetadataBytes),
 		additionalMetadata: string(additionalMetadataBytes),
 	}, nil
+}
+
+// BootstrapSnapshotMetadata returns the exact metadata used by the native
+// import. The caller can authenticate it independently on restart.
+func (p *Provider) BootstrapSnapshotMetadata(id string) (signable, additional []byte, err error) {
+	metadata, err := p.idStore.getLedgerMetadata(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshot := metadata.GetBootSnapshotMetadata()
+	if snapshot == nil {
+		return nil, nil, errors.New("ledger has no bootstrap snapshot metadata")
+	}
+	return []byte(snapshot.GetSingableMetadata()), []byte(snapshot.GetAdditionalMetadata()), nil
 }
 
 func verifySnapshot(snapshotDir string, snapshotMetadata *SnapshotMetadata, hashProvider ledger.HashProvider) error {

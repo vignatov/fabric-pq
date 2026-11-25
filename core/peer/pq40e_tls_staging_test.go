@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package peer
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -41,6 +42,25 @@ func TestPQ40EPeerTLSRootsPublicationFailure(t *testing.T) {
 	require.Error(t, peer.publishTrustedRoots(candidate))
 	require.Empty(t, peer.CredentialSupport.AppRootCAsByChain(), "failed server update must not publish candidate roots")
 	peer.ServerConfig.SecOpts.ClientRootCAs = nil
+	failRetirement := true
+	published := false
+	require.NoError(t, peer.AddProtectedConfigStage(func(*channelconfig.Bundle) (ProtectedConfigPublication, error) {
+		return ProtectedConfigPublication{
+			Retire: func() error {
+				if failRetirement {
+					return errors.New("cache retirement failed")
+				}
+				return nil
+			},
+			Publish: func() { published = true },
+		}, nil
+	}))
+	require.ErrorContains(t, peer.publishProtectedResources(bundle), "cache retirement failed")
+	require.Empty(t, peer.CredentialSupport.AppRootCAsByChain(), "failed retirement must not publish TLS roots")
+	require.False(t, published)
+	failRetirement = false
+	require.NoError(t, peer.publishProtectedResources(bundle))
+	require.True(t, published)
 	require.NoError(t, peer.publishTrustedRoots(candidate))
 	preview, err := peer.CredentialSupport.PreviewTrustedRootsForChain(candidate)
 	require.NoError(t, err)
@@ -52,8 +72,8 @@ func TestPQ40EProtectedStageRegistrationWaitsForPublication(t *testing.T) {
 	p := &Peer{}
 	started := make(chan struct{})
 	finish := make(chan struct{})
-	require.NoError(t, p.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
-		return func() error { close(started); <-finish; return nil }, nil
+	require.NoError(t, p.AddProtectedConfigStage(func(*channelconfig.Bundle) (ProtectedConfigPublication, error) {
+		return ProtectedConfigPublication{Publish: func() { close(started); <-finish }}, nil
 	}))
 	published := make(chan error, 1)
 	go func() { published <- p.publishProtectedResources(nil) }()
@@ -64,8 +84,8 @@ func TestPQ40EProtectedStageRegistrationWaitsForPublication(t *testing.T) {
 	}
 	registered := make(chan error, 1)
 	go func() {
-		registered <- p.AddProtectedConfigStage(func(*channelconfig.Bundle) (func() error, error) {
-			return func() error { return nil }, nil
+		registered <- p.AddProtectedConfigStage(func(*channelconfig.Bundle) (ProtectedConfigPublication, error) {
+			return ProtectedConfigPublication{Publish: func() {}}, nil
 		})
 	}()
 	select {

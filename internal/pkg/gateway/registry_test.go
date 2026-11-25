@@ -149,7 +149,14 @@ func TestPQ40EGatewayOrdererStaging(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, old, 2)
 	closed := false
-	old[0].closeConnection = func() error { closed = true; return nil }
+	failRetirement := true
+	old[0].closeConnection = func() error {
+		if failRetirement {
+			return errors.New("injected retirement failure")
+		}
+		closed = true
+		return nil
+	}
 
 	otherBundle, err := createChannelConfigBundle("other-channel", []string{"other:7050"})
 	require.NoError(t, err)
@@ -165,14 +172,20 @@ func TestPQ40EGatewayOrdererStaging(t *testing.T) {
 	channel, candidate := stageOrdererConfig(candidateBundle)
 	require.Equal(t, channelName, channel)
 	require.Len(t, candidate, 1)
-	publish, err := registry.prepareProtectedConfigUpdate(candidateBundle)
+	publication, err := registry.prepareProtectedConfigUpdate(candidateBundle)
 	require.NoError(t, err)
 	before, _, err := registry.orderers(channelName)
 	require.NoError(t, err)
 	require.Equal(t, old, before)
 	require.False(t, closed, "preparation must not close an active connection")
 
-	require.NoError(t, publish())
+	previous, _ := registry.channelOrderers.Load(channelName)
+	require.ErrorContains(t, publication.Retire(), "injected retirement failure")
+	current, _ := registry.channelOrderers.Load(channelName)
+	require.Equal(t, previous, current, "failed retirement must keep the candidate private")
+	failRetirement = false
+	require.NoError(t, publication.Retire())
+	publication.Publish()
 	after, _, err := registry.orderers(channelName)
 	require.NoError(t, err)
 	require.Len(t, after, 1)

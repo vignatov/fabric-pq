@@ -25,7 +25,9 @@ remove *all* activation settings when Fabric is started directly. The new
 Linux launcher verifies signed enrollment and history and rejects invalid
 protected startup evidence. Non-bypassability depends on the trusted VM
 provisioner and service manager controlling every authorized node launch.
-The fixed systemd unit has yet to be installed and verified on a managed VM.
+The hosted VM test exercises the fixed systemd unit with a native orderer and
+test enrollment. Production VM provisioning and network exposure require
+deployment-specific verification.
 
 ## Managed launcher contract
 
@@ -86,9 +88,9 @@ without a protected handoff. Linux is the supported managed platform.
 | Registry derives membership from authenticated checkpoint | Native managed peer and orderer select enrolled channels from the signed policy and checkpoint |
 | Reject unmanaged protected configuration before serving | Unmanaged protected orderer config rejects startup; managed nodes authenticate before listener setup |
 | Signed manifest, protected history and Linux launcher | Linux race and subprocess tests passed; managed deployment incomplete |
-| Fixed managed systemd unit and installer | Provided; VM installation and verification incomplete |
-| Non-bypassable managed VM deployment and protected-to-baseline prohibition | Incomplete: protected service installation and provisioning lifecycle required |
-| Authenticated onboarding and non-genesis join provenance | Incomplete |
+| Fixed managed systemd unit and installer | Disposable systemd VM test installs and inspects the real unit |
+| Non-bypassable managed VM deployment and protected-to-baseline prohibition | Disposable VM test covers the trusted service-manager boundary; production validation pending |
+| Authenticated onboarding and non-genesis join provenance | Signed orderer participation target and peer snapshot at an authenticated configuration block |
 | Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
@@ -98,15 +100,61 @@ without a protected handoff. Linux is the supported managed platform.
 | Orderer Raft generation lease | Local submission transfers admission through the pending batch and proposal queue to the Raft proposal call |
 | Protected Raft membership retry | Implemented; focused race and repeated promotion tests passed |
 | Staged shared TLS resources and crash/restart reconstruction | Incomplete |
-| Peer credential roots preparation and publication failure | Component race tests passed; protected lifecycle integration remains incomplete |
+| Peer credential roots preparation and publication failure | Fallible cache retirement precedes TLS and endpoint installation while protected admission is closed |
 | Gateway cache publication and admission | Protected unary admission, strict routed transport and revocable event streams wired |
-| Orderer protected bundle callbacks | Focused Linux race test passed; TLS and cache publication proof incomplete |
+| Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
 | Full service-path and shared-resource inventory | Incomplete |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | All hosted jobs passed at `ca69d0b`; later changes require their own exact-commit runs |
+| Full regression, integration and final-head CI evidence | All hosted jobs passed at `090e1e3`; later changes require their own exact-commit runs |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
+
+## Authenticated non-genesis onboarding
+
+The policy signer pinned by the managed manifest signs a canonical
+enrollment envelope for each channel's join target. The envelope contains the
+network, node, strict transport profile, channel ID, genesis header hash,
+target block number and header hash, and configuration sequence and digest.
+The configuration digest is SHA-256 over deterministic protobuf bytes.
+Provision `genesis-<sha256(channel-id)>` and its `.block` file as for a
+genesis join. The join envelope independently binds the same genesis hash.
+
+For an orderer, provision `join-orderer-<sha256(channel-id)>` under the
+activation state directory. Sign the payload with domain
+`fabric-pq/orderer-join/v1` and a NUL separator. The registrar verifies the
+anchor before creating the ledger or trusting a pending join block on
+restart. The follower pulls from the signed genesis and verifies Fabric
+history and staged operator approvals before promotion. A recovered ledger
+that already reached the target must contain the anchored block header.
+The orderer still reconciles native Raft replay before opening admission.
+
+For a peer, provision `join-peer-<sha256(channel-id)>` and its `.block`
+file containing the target configuration block. Sign the payload with
+domain `fabric-pq/peer-snapshot/v1` and a NUL separator. The payload also
+includes `signable_metadata_hash` and `additional_metadata_hash`, the raw
+SHA-256 digests of both native snapshot metadata files. This authenticates
+the exact state-transfer boundary and checks the current checkpoint binding
+before asynchronous import. The peer copies and verifies the approved files
+in a private directory. Snapshot height and hash must match the target
+configuration block. Recovery re-authenticates the metadata retained by the
+native ledger and checks the ledger linkage and persisted world-state
+configuration before admission can open.
+
+The bounded snapshot path covers a snapshot taken at a configuration block.
+Snapshot targets between configuration blocks require an additional signed
+state-transfer contract and remain unsupported.
+
+## Disposable VM test
+
+The hosted Ubuntu test installs the repository systemd unit, real launcher
+and native orderer on a fresh VM. It checks ownership, all trusted path
+ancestors, ACLs, the systemd service account and mount permissions. It verifies
+loopback strict mTLS operations and participation admin, then checks that
+deleted enrollment, mismatched history, a signed baseline declaration after
+protected enrollment and insecure operations configuration all fail closed.
+It also tests whether the service account can register a competing system
+unit. This runs only on an explicitly opted-in disposable VM.
 
 ## Admission and publication dependencies
 
@@ -199,11 +247,14 @@ orderers reject an enabled Go profiling listener during startup. Network
 exposure and the full endpoint inventory still require deployment validation.
 
 Gateway prepares orderer endpoints separately from publication. Its orderer
-cache is scoped by channel, MSP and TLS roots. Publication retires stale
-connections, reports retirement errors for retry, and rejects a connection
-created against a superseded configuration. Strict Gateway endorser
-connections are scoped by channel and retired during protected publication,
-so subsequent calls reconnect with the approved TLS roots.
+cache is scoped by channel, MSP and TLS roots. Protected publication parses
+the TLS candidate and retires stale orderer and endorser connections while
+the old endpoints and TLS roots are still published and channel admission
+is closed. A failed retirement leaves the candidate private. Retry closes
+remaining stale connections and publishes the prepared roots and endpoints
+before the gate reopens. Shared root aggregation and the per-channel cache
+keys preserve resources for unrelated channels. Managed orderers prepare
+all listener pools and validate dialer roots before installing either.
 
 Gateway component race tests also cover publication of an empty endpoint
 snapshot without falling back to discovery, and ensure a failed connection
@@ -236,6 +287,12 @@ reloads the protected channel after restart. These tests run as subprocesses
 without installing or starting the systemd service on a VM.
 
 ## Hosted CI evidence
+
+On `090e1e32518ee8216095d589e1ebb4b0242a730c`, [Verify
+Build](https://github.com/vignatov/fabric-pq/actions/runs/45591052388) passed all
+16 jobs and [PQ3 isolated acceptance](https://github.com/vignatov/fabric-pq/actions/runs/45591052391)
+passed. All four gossip specs passed in the discovery, gossip, devmode and
+pluggable integration group.
 
 On `ca69d0bfa9fadabf665fc9c1e3de51881fdbe289`, [Verify
 Build](https://github.com/vignatov/fabric-pq/actions/runs/45538028549) passed all

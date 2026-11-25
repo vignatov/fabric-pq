@@ -26,6 +26,7 @@ import (
 	"github.com/hyperledger/fabric/internal/configtxlator/update"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
@@ -179,4 +180,27 @@ func (f Fixture) sign(t *testing.T, document any) ([]byte, []byte) {
 	signature, err := f.key.Sign(rand.Reader, payload, nil)
 	require.NoError(t, err)
 	return payload, signature
+}
+
+func (f Fixture) JoinAnchor(t *testing.T, genesis, block *cb.Block) enrollment.JoinAnchor {
+	t.Helper()
+	conf := Config(t, block)
+	return enrollment.JoinAnchor{
+		Network: Network, Node: Node, Profile: pqtransport.ProfileV1, Channel: ChannelID,
+		GenesisHash: hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())),
+		BlockNumber: block.GetHeader().GetNumber(),
+		BlockHash:   hex.EncodeToString(protoutil.BlockHeaderHash(block.GetHeader())),
+		Config:      document(t, 1, conf).Channels[ChannelID],
+	}
+}
+
+func (f Fixture) SignedJoinAnchor(t *testing.T, domain string, anchor any) []byte {
+	t.Helper()
+	payload, err := json.Marshal(anchor)
+	require.NoError(t, err)
+	signature, err := f.key.Sign(rand.Reader, append([]byte(domain), payload...), nil)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(enrollment.Envelope{Payload: payload, Signature: signature})
+	require.NoError(t, err)
+	return encoded
 }

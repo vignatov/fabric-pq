@@ -105,21 +105,45 @@ func (p *Peer) updateTrustedRoots(cm channelconfig.Resources) {
 func (p *Peer) publishTrustedRoots(snapshot *comm.TrustedRootsSnapshot) error {
 	p.tlsRootsLock.Lock()
 	defer p.tlsRootsLock.Unlock()
-	trustedRoots, err := p.CredentialSupport.PreviewTrustedRootsForChain(snapshot)
+	publish, err := p.prepareTrustedRootsLocked(snapshot)
 	if err != nil {
 		return err
 	}
-	trustedRoots = append(trustedRoots, p.ServerConfig.SecOpts.ClientRootCAs...)
-	trustedRoots = append(trustedRoots, p.ServerConfig.SecOpts.ServerRootCAs...)
-	if err := p.server.SetClientRootCAs(trustedRoots); err != nil {
-		return err
-	}
-	return p.CredentialSupport.PublishTrustedRootsForChain(snapshot)
+	publish()
+	return nil
 }
 
-// ProtectedConfigStage prepares a private resource candidate. The returned
-// function publishes it and must return an error if retirement is incomplete.
-type ProtectedConfigStage func(*channelconfig.Bundle) (func() error, error)
+func (p *Peer) prepareTrustedRootsLocked(snapshot *comm.TrustedRootsSnapshot) (func(), error) {
+	trustedRoots, err := p.CredentialSupport.PreviewTrustedRootsForChain(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	trustedRoots = append(trustedRoots, p.ServerConfig.SecOpts.ClientRootCAs...)
+	trustedRoots = append(trustedRoots, p.ServerConfig.SecOpts.ServerRootCAs...)
+	publishServer, err := p.server.PrepareClientRootCAs(trustedRoots)
+	if err != nil {
+		return nil, err
+	}
+	publishClient, err := p.CredentialSupport.PrepareTrustedRootsPublication(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		publishServer()
+		publishClient()
+	}, nil
+}
+
+// ProtectedConfigPublication separates fallible retirement of old resources
+// from installing the candidate. Retirement must be safe to retry and leave
+// candidate state private. Publish must not fail.
+type ProtectedConfigPublication struct {
+	Retire  func() error
+	Publish func()
+}
+
+// ProtectedConfigStage prepares a private resource candidate.
+type ProtectedConfigStage func(*channelconfig.Bundle) (ProtectedConfigPublication, error)
 
 // AddProtectedConfigStage registers an activation-owned resource publisher.
 // Register stages before opening channels. Existing protected channels must be
@@ -168,34 +192,42 @@ func (p *Peer) beginProtectedPublication(bundle *channelconfig.Bundle) (func(), 
 }
 
 func (p *Peer) publishProtectedResourcesLocked(bundle *channelconfig.Bundle) error {
-	var roots *comm.TrustedRootsSnapshot
-	var err error
+	var publishRoots func()
 	if p.ServerConfig.SecOpts.UseTLS {
-		roots, err = comm.PrepareTrustedRootsForChain(bundle)
+		roots, err := comm.PrepareTrustedRootsForChain(bundle)
+		if err != nil {
+			return err
+		}
+		p.tlsRootsLock.Lock()
+		defer p.tlsRootsLock.Unlock()
+		publishRoots, err = p.prepareTrustedRootsLocked(roots)
 		if err != nil {
 			return err
 		}
 	}
-	staged := make([]func() error, 0, len(p.protectedConfigStages))
+	staged := make([]ProtectedConfigPublication, 0, len(p.protectedConfigStages))
 	for _, stage := range p.protectedConfigStages {
 		publish, err := stage(bundle)
 		if err != nil {
 			return err
 		}
-		if publish == nil {
+		if publish.Publish == nil {
 			return errors.New("protected resource stage returned no publisher")
 		}
 		staged = append(staged, publish)
 	}
-	if roots != nil {
-		if err := p.publishTrustedRoots(roots); err != nil {
-			return err
+	for _, candidate := range staged {
+		if candidate.Retire != nil {
+			if err := candidate.Retire(); err != nil {
+				return err
+			}
 		}
 	}
-	for _, publish := range staged {
-		if err := publish(); err != nil {
-			return err
-		}
+	if publishRoots != nil {
+		publishRoots()
+	}
+	for _, candidate := range staged {
+		candidate.Publish()
 	}
 	return nil
 }
@@ -314,10 +346,20 @@ func (p *Peer) CreateChannelFromSnapshot(
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
 	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
 ) error {
+	var approvedChannel string
+	cleanup := func() {}
 	if p.ProtectedRegistry != nil {
-		return errors.New("snapshot joins require protected enrollment verification before importing the ledger")
+		var err error
+		approvedChannel, snapshotDir, cleanup, err = p.stageProtectedSnapshot(snapshotDir)
+		if err != nil {
+			return errors.Wrap(err, "authenticate protected snapshot")
+		}
 	}
 	channelCallback := func(l ledger.PeerLedger, cid string) {
+		if approvedChannel != "" && cid != approvedChannel {
+			logger.Errorf("snapshot ledger %s conflicts with the authenticated channel %s", cid, approvedChannel)
+			return
+		}
 		if err := p.createChannel(cid, l, deployedCCInfoProvider, legacyLifecycleValidation, newLifecycleValidation); err != nil {
 			logger.Errorf("error creating channel for %s", cid)
 			return
@@ -325,8 +367,9 @@ func (p *Peer) CreateChannelFromSnapshot(
 		p.initChannel(cid)
 	}
 
-	err := p.LedgerMgr.CreateLedgerFromSnapshot(snapshotDir, channelCallback)
+	err := p.LedgerMgr.CreateLedgerFromStagedSnapshot(snapshotDir, channelCallback, cleanup)
 	if err != nil {
+		cleanup()
 		return errors.WithMessagef(err, "cannot create ledger from snapshot %s", snapshotDir)
 	}
 
@@ -351,7 +394,10 @@ func (p *Peer) createChannel(
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
 	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
 ) error {
-	controller := p.protectedController(cid, l)
+	controller, err := p.protectedController(cid, l)
+	if err != nil {
+		return errors.Wrap(err, "verify protected ledger provenance")
+	}
 	if controller != nil {
 		p.mutex.Lock()
 		_, creating := p.protectedCreating[cid]
@@ -369,7 +415,7 @@ func (p *Peer) createChannel(
 			delete(p.protectedCreating, cid)
 			p.mutex.Unlock()
 		}()
-		genesis, err := l.GetBlockByNumber(0)
+		genesis, err := controller.Ledger.Block(0)
 		if err != nil {
 			return errors.Wrap(err, "load protected genesis")
 		}

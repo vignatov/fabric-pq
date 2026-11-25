@@ -310,15 +310,26 @@ func pemToX509Certs(pemCerts []byte) ([]*x509.Certificate, error) {
 // SetClientRootCAs sets the list of authorities used to verify client
 // certificates based on a list of PEM-encoded X509 certificate authorities
 func (gServer *GRPCServer) SetClientRootCAs(clientRoots [][]byte) error {
-	gServer.lock.Lock()
-	defer gServer.lock.Unlock()
+	publish, err := gServer.PrepareClientRootCAs(clientRoots)
+	if err != nil {
+		return err
+	}
+	publish()
+	return nil
+}
 
+// PrepareClientRootCAs builds a private pool and returns its infallible
+// installation operation for an authorized publication.
+func (gServer *GRPCServer) PrepareClientRootCAs(clientRoots [][]byte) (func(), error) {
 	certPool := x509.NewCertPool()
 	for _, clientRoot := range clientRoots {
 		if !certPool.AppendCertsFromPEM(clientRoot) {
-			return errors.New("failed to set client root certificate(s)")
+			return nil, errors.New("failed to set client root certificate(s)")
 		}
 	}
-	gServer.tls.SetClientCAs(certPool)
-	return nil
+	return func() {
+		gServer.lock.Lock()
+		defer gServer.lock.Unlock()
+		gServer.tls.SetClientCAs(certPool)
+	}, nil
 }

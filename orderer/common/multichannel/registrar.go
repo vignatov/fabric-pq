@@ -68,6 +68,7 @@ type Registrar struct {
 
 	joinBlockFileRepo *filerepo.Repo
 	protected         protectedChannels
+	protectedPublish  func(*channelconfig.Bundle) error
 	failedProtected   map[string]types.ChannelInfo
 }
 
@@ -116,10 +117,13 @@ func NewManagedRegistrar(
 	bccsp bccsp.BCCSP,
 	clusterDialer *cluster.PredicateDialer,
 	registry *enrollment.Registry,
+	publish func(*channelconfig.Bundle) error,
 	callbacks ...channelconfig.BundleActor,
 ) *Registrar {
-	return newRegistrar(config, ledgerFactory, signer, metricsProvider, bccsp, clusterDialer,
+	registrar := newRegistrar(config, ledgerFactory, signer, metricsProvider, bccsp, clusterDialer,
 		managedProtectedChannels(registry), callbacks...)
+	registrar.protectedPublish = publish
+	return registrar
 }
 
 func newRegistrar(
@@ -241,6 +245,12 @@ func (r *Registrar) discoverLedgers(channelsWithJoinBlock map[string]*cb.Block) 
 func (r *Registrar) initAppChannels(existingChannels []string, channelsWithJoinBlock map[string]*cb.Block) {
 	// init app channels with join-blocks
 	for channelID, joinBlock := range channelsWithJoinBlock {
+		if err := r.authorizeManagedJoin(channelID, joinBlock); err != nil {
+			if r.recordProtectedFailure(channelID, err) {
+				continue
+			}
+			logger.Panicf("Invalid managed join block for channel %s: %s", channelID, err)
+		}
 		ledgerRes, clusterConsenter, err := r.initLedgerResourcesClusterConsenter(joinBlock)
 		if err != nil {
 			if r.recordProtectedFailure(channelID, err) {
@@ -358,6 +368,28 @@ func (r *Registrar) initAppChannels(existingChannels []string, channelsWithJoinB
 			}
 		}
 	}
+}
+
+func (r *Registrar) authorizeManagedJoin(channelID string, configBlock *cb.Block) error {
+	managed := r.protected.managed
+	if managed == nil {
+		return nil
+	}
+	configEnv, err := protoutil.ExtractEnvelope(configBlock, 0)
+	if err != nil {
+		return err
+	}
+	id, err := channelNameFromConfigTx(configEnv)
+	if err != nil {
+		return err
+	}
+	if id != channelID {
+		return errors.New("join block conflicts with the managed channel ID")
+	}
+	if managed.RequiresProtection(id) && configBlock.GetHeader().GetNumber() != 0 {
+		return managed.VerifyOrdererJoin(id, configBlock, r.bccsp)
+	}
+	return nil
 }
 
 func (r *Registrar) initLedgerResourcesClusterConsenter(configBlock *cb.Block) (*ledgerResources, consensus.ClusterConsenter, error) {
@@ -813,6 +845,9 @@ func (r *Registrar) JoinChannel(channelID string, configBlock *cb.Block) (info t
 		return types.ChannelInfo{}, types.ErrChannelAlreadyExists
 	}
 
+	if err := r.authorizeManagedJoin(channelID, configBlock); err != nil {
+		return types.ChannelInfo{}, err
+	}
 	defer func() {
 		if err != nil && !r.protected.contains(channelID) {
 			if err2 := r.ledgerFactory.Remove(channelID); err2 != nil {

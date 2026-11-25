@@ -211,6 +211,11 @@ func (r *Registrar) activationFor(resources *ledgerResources) *activation.Channe
 		if published != nil && published.ConfigtxValidator().Sequence() == bundle.ConfigtxValidator().Sequence() {
 			return nil
 		}
+		if r.protectedPublish != nil {
+			if err := r.protectedPublish(bundle); err != nil {
+				return err
+			}
+		}
 		for _, callback := range r.callbacks {
 			callback(bundle)
 		}

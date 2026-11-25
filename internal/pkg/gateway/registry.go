@@ -21,6 +21,7 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/gossip"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/channelconfig"
+	corepeer "github.com/hyperledger/fabric/core/peer"
 	"github.com/hyperledger/fabric/core/scc"
 	gossipapi "github.com/hyperledger/fabric/gossip/api"
 	gossipcommon "github.com/hyperledger/fabric/gossip/common"
@@ -543,16 +544,23 @@ func (reg *registry) configUpdate(bundle *channelconfig.Bundle) {
 
 // prepareProtectedConfigUpdate stages the cache candidate without publishing
 // it. The activation owner invokes the returned function after durable commit.
-func (reg *registry) prepareProtectedConfigUpdate(bundle *channelconfig.Bundle) (func() error, error) {
+func (reg *registry) prepareProtectedConfigUpdate(bundle *channelconfig.Bundle) (corepeer.ProtectedConfigPublication, error) {
 	channel, orderers := stageOrdererConfig(bundle)
 	if channel == "" {
-		return nil, errors.New("protected Gateway configuration has no orderer section")
+		return corepeer.ProtectedConfigPublication{}, errors.New("protected Gateway configuration has no orderer section")
 	}
-	return func() error {
-		if err := reg.retireChannelEndorsers(channel); err != nil {
-			return err
-		}
-		return reg.publishOrdererConfig(channel, orderers)
+	return corepeer.ProtectedConfigPublication{
+		Retire: func() error {
+			if err := reg.retireChannelEndorsers(channel); err != nil {
+				return err
+			}
+			return reg.retireStaleOrderers(channel, orderers)
+		},
+		Publish: func() {
+			reg.ordererConfigLock.Lock()
+			reg.channelOrderers.Store(channel, orderers)
+			reg.ordererConfigLock.Unlock()
+		},
 	}, nil
 }
 
@@ -604,6 +612,15 @@ func (reg *registry) publishOrdererConfig(channel string, channelOrderers []*end
 	reg.logger.Infow("Updating orderer config", "channel", channel)
 	reg.ordererConfigLock.Lock()
 	reg.channelOrderers.Store(channel, channelOrderers)
+	reg.ordererConfigLock.Unlock()
+	return reg.retireStaleOrderers(channel, channelOrderers)
+}
+
+func (reg *registry) retireStaleOrderers(channel string, endpoints []*endpointConfig) error {
+	active := make(map[ordererCacheKey]struct{}, len(endpoints))
+	for _, endpoint := range endpoints {
+		active[cacheKey(channel, endpoint)] = struct{}{}
+	}
 	type staleConnection struct {
 		key    ordererCacheKey
 		client *orderer
@@ -611,12 +628,11 @@ func (reg *registry) publishOrdererConfig(channel string, channelOrderers []*end
 	var stale []staleConnection
 	reg.broadcastClients.Range(func(rawKey, value any) bool {
 		key := rawKey.(ordererCacheKey)
-		if key.channel == channel && !reg.ordererKeyCurrent(key) {
+		if _, current := active[key]; key.channel == channel && !current {
 			stale = append(stale, staleConnection{key: key, client: value.(*orderer)})
 		}
 		return true
 	})
-	reg.ordererConfigLock.Unlock()
 	var closeErr error
 	for _, old := range stale {
 		if err := old.client.closeConnection(); err != nil {

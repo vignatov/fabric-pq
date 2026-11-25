@@ -176,6 +176,18 @@ jobs:
           go build -mod=vendor -o "$RUNNER_TEMP/peer" ./cmd/peer
           PQ40E_MANAGED_ORDERER="$RUNNER_TEMP/orderer" PQ40E_MANAGED_PEER="$RUNNER_TEMP/peer" \
             go test -mod=vendor -race -count=1 ./cmd/pq-launcher
+      - name: Verify the managed service on a disposable VM
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          if ! command -v getfacl >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y acl
+          fi
+          go build -mod=vendor -o "$RUNNER_TEMP/pq-launcher" ./cmd/pq-launcher
+          go test -mod=vendor -race -c -o "$RUNNER_TEMP/pq-launcher.test" ./cmd/pq-launcher
+          sha256sum "$RUNNER_TEMP/peer" "$RUNNER_TEMP/orderer" "$RUNNER_TEMP/pq-launcher" "$RUNNER_TEMP/pq-launcher.test"
+          sudo -n env PATH="$PATH" GOFIPS140=off PQ40E_DISPOSABLE_VM=1 PQ40E_VM_ASSETS="$RUNNER_TEMP" \
+            "$RUNNER_TEMP/pq-launcher.test" -test.v -test.timeout=2m -test.run '^TestPQ40EDisposableVMService$'
       - name: Vet affected packages
         run: go vet -mod=vendor ./cmd/pq-launcher ./core/{peer,endorser} ./internal/pkg/{comm,gateway} ./internal/pkg/pqtransport/... ./orderer/common/{broadcast,cluster,localconfig,multichannel,server} ./orderer/consensus/etcdraft
   unit-tests:

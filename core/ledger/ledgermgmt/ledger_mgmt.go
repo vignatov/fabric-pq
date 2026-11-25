@@ -132,6 +132,13 @@ func (m *LedgerMgr) CreateLedger(id string, genesisBlock *common.Block) (ledger.
 // All ledger dbs would be created in an atomic action. The channel id retrieved from the snapshot metadata
 // is treated as a ledger id. It returns an error if another ledger is being created from a snapshot.
 func (m *LedgerMgr) CreateLedgerFromSnapshot(snapshotDir string, channelCallback func(ledger.PeerLedger, string)) error {
+	return m.CreateLedgerFromStagedSnapshot(snapshotDir, channelCallback, func() {})
+}
+
+// CreateLedgerFromStagedSnapshot runs cleanup when the asynchronous import is
+// finished, including on import failure. The caller owns cleanup on error
+// returned directly by this method.
+func (m *LedgerMgr) CreateLedgerFromStagedSnapshot(snapshotDir string, channelCallback func(ledger.PeerLedger, string), cleanup func()) error {
 	// verify snapshotDir exists and is not empty
 	empty, err := fileutil.DirEmpty(snapshotDir)
 	if err != nil {
@@ -147,6 +154,7 @@ func (m *LedgerMgr) CreateLedgerFromSnapshot(snapshotDir string, channelCallback
 
 	go func() {
 		defer m.resetJoinBySnapshotStatus()
+		defer cleanup()
 
 		ledger, cid, err := m.createFromSnapshot(snapshotDir)
 		if err != nil {
@@ -158,6 +166,15 @@ func (m *LedgerMgr) CreateLedgerFromSnapshot(snapshotDir string, channelCallback
 	}()
 
 	return nil
+}
+
+// BootstrapSnapshotMetadata retrieves the native import's durable provenance.
+func (m *LedgerMgr) BootstrapSnapshotMetadata(id string) ([]byte, []byte, error) {
+	provider, ok := m.ledgerProvider.(*kvledger.Provider)
+	if !ok {
+		return nil, nil, errors.New("ledger provider cannot attest a bootstrap snapshot")
+	}
+	return provider.BootstrapSnapshotMetadata(id)
 }
 
 func (m *LedgerMgr) createFromSnapshot(snapshotDir string) (ledger.PeerLedger, string, error) {

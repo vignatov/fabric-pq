@@ -271,8 +271,17 @@ func (c *Channel) AuthorizeGenesis(block *cb.Block) error {
 	if err := c.VerifyGenesis(block); err != nil {
 		return err
 	}
+	return c.AuthorizeBootstrapConfig(block)
+}
+
+// AuthorizeBootstrapConfig checks the signed checkpoint binding for an
+// independently authenticated genesis or snapshot configuration.
+func (c *Channel) AuthorizeBootstrapConfig(block *cb.Block) error {
 	c.Store.mu.Lock()
 	defer c.Store.mu.Unlock()
+	if err := c.checkQuarantine(); err != nil {
+		return err
+	}
 	saved, err := readRecord[checkpoint](c.Store.dir, "checkpoint")
 	if err != nil {
 		return c.quarantineNode(err)
@@ -284,6 +293,11 @@ func (c *Channel) AuthorizeGenesis(block *cb.Block) error {
 	cfg, err := c.config(block)
 	if err != nil {
 		return err
+	}
+	if c.Validate != nil {
+		if err := c.Validate(cfg.bundle); err != nil {
+			return err
+		}
 	}
 	return c.match(policy, cfg)
 }

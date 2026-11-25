@@ -201,15 +201,26 @@ func (cs *CredentialSupport) PreviewTrustedRootsForChain(snapshot *TrustedRootsS
 // PublishTrustedRootsForChain makes a previously prepared snapshot visible.
 // Protected callers must invoke it only at their approved publication point.
 func (cs *CredentialSupport) PublishTrustedRootsForChain(snapshot *TrustedRootsSnapshot) error {
+	publish, err := cs.PrepareTrustedRootsPublication(snapshot)
+	if err != nil {
+		return err
+	}
+	publish()
+	return nil
+}
+
+// PrepareTrustedRootsPublication copies roots before the shared publication.
+func (cs *CredentialSupport) PrepareTrustedRootsPublication(snapshot *TrustedRootsSnapshot) (func(), error) {
 	if snapshot == nil {
-		return errors.New("trusted roots snapshot is required")
+		return nil, errors.New("trusted roots snapshot is required")
 	}
 	roots := make([][]byte, len(snapshot.roots))
 	for i, root := range snapshot.roots {
 		roots[i] = append([]byte(nil), root...)
 	}
-	cs.mutex.Lock()
-	cs.appRootCAsByChain[snapshot.channel] = roots
-	cs.mutex.Unlock()
-	return nil
+	return func() {
+		cs.mutex.Lock()
+		cs.appRootCAsByChain[snapshot.channel] = roots
+		cs.mutex.Unlock()
+	}, nil
 }

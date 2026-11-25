@@ -696,7 +696,7 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 		require.NoError(t, err)
 
 		signableMetadataFile = filepath.Join(snapshotDirForTest, SnapshotSignableMetadataFileName)
-		additionalMetadataFile = filepath.Join(snapshotDirForTest, snapshotAdditionalMetadataFileName)
+		additionalMetadataFile = filepath.Join(snapshotDirForTest, SnapshotAdditionalMetadataFileName)
 
 		provider = testutilNewProvider(conf, t, &mock.DeployedChaincodeInfoProvider{})
 		cleanup = func() {
@@ -743,7 +743,7 @@ func testCreateLedgerFromSnapshotErrorPaths(t *testing.T, originalSnapshotDir st
 		init(t)
 		defer cleanup()
 
-		require.NoError(t, os.Remove(filepath.Join(snapshotDirForTest, snapshotAdditionalMetadataFileName)))
+		require.NoError(t, os.Remove(filepath.Join(snapshotDirForTest, SnapshotAdditionalMetadataFileName)))
 		_, _, err := provider.CreateFromSnapshot(snapshotDirForTest)
 		require.EqualError(
 			t,
@@ -966,7 +966,7 @@ func verifySnapshotOutput(
 
 	// verify the contents of the file snapshot_metadata_hash.json
 	mh := &snapshotAdditionalMetadata{}
-	mhJSON, err := os.ReadFile(filepath.Join(snapshotDir, snapshotAdditionalMetadataFileName))
+	mhJSON, err := os.ReadFile(filepath.Join(snapshotDir, SnapshotAdditionalMetadataFileName))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(mhJSON, mh))
 	require.Equal(

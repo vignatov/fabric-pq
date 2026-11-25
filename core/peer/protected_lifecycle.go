@@ -36,23 +36,63 @@ func validateProtectedPeerConfig(res channelconfig.Resources) error {
 	return validateHybridLocalSigner(res)
 }
 
-func (p *Peer) protectedController(id string, l ledger.PeerLedger) *activation.Channel {
+func (p *Peer) protectedController(id string, l ledger.PeerLedger) (*activation.Channel, error) {
 	if p.ProtectedRegistry == nil {
-		return nil
+		return nil, nil
 	}
 	controller := p.ProtectedRegistry.Controller(id, p.CryptoProvider)
 	if controller == nil {
-		return nil
+		return nil, nil
+	}
+	getBlock := l.GetBlockByNumber
+	info, err := l.GetBlockchainInfo()
+	if err != nil {
+		return nil, err
+	}
+	if info.GetBootstrappingSnapshotInfo() != nil {
+		snapshot, err := p.recoverProtectedSnapshot(id, l, info)
+		if err != nil {
+			return nil, err
+		}
+		getBlock = func(number uint64) (*cb.Block, error) {
+			switch number {
+			case 0:
+				return snapshot.Genesis, nil
+			case snapshot.Configuration.GetHeader().GetNumber():
+				return snapshot.Configuration, nil
+			default:
+				return l.GetBlockByNumber(number)
+			}
+		}
 	}
 	controller.Validate = validateProtectedPeerConfig
 	controller.Ledger = activation.Ledger{
-		Block: l.GetBlockByNumber,
+		Block: getBlock,
 		Height: func() (uint64, error) {
 			info, err := l.GetBlockchainInfo()
 			return info.GetHeight(), err
 		},
 		LatestConfig: func() (*cb.Block, error) {
-			block, err := ConfigBlockFromLedger(l)
+			info, err := l.GetBlockchainInfo()
+			if err != nil {
+				return nil, err
+			}
+			if info.GetHeight() == 0 {
+				return nil, errors.New("protected peer ledger is empty")
+			}
+			tip, err := getBlock(info.GetHeight() - 1)
+			if err != nil {
+				return nil, err
+			}
+			index := tip.GetHeader().GetNumber()
+			snapshot := info.GetBootstrappingSnapshotInfo()
+			if snapshot == nil || index != snapshot.GetLastBlockInSnapshot() {
+				index, err = protoutil.GetLastConfigIndexFromBlock(tip)
+				if err != nil {
+					return nil, err
+				}
+			}
+			block, err := getBlock(index)
 			if err != nil {
 				return nil, err
 			}
@@ -78,7 +118,7 @@ func (p *Peer) protectedController(id string, l ledger.PeerLedger) *activation.C
 			return activation.SyncDirectory(filepath.Join(root, blkstorage.ChainsDir, id))
 		},
 	}
-	return controller
+	return controller, nil
 }
 
 // protectedLifecycle keeps candidate validation resources separate from the

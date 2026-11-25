@@ -152,12 +152,13 @@ func AuthenticateProtected(manifest *Manifest) error {
 // Registry selects channels from the authenticated checkpoint on a protected
 // node. It is constructed from an independently verified enrollment manifest.
 type Registry struct {
-	store   *activation.Store
-	key     *mldsa.PublicKey
-	policy  *pqtransport.Policy
-	network string
-	node    string
-	root    string
+	store    *activation.Store
+	key      *mldsa.PublicKey
+	policy   *pqtransport.Policy
+	network  string
+	node     string
+	root     string
+	stateDir string
 }
 
 // OpenProtectedRegistry validates protection state and retains the store used
@@ -188,7 +189,7 @@ func OpenProtectedRegistry(manifest *Manifest) (*Registry, error) {
 	}
 	return &Registry{
 		store: store, key: key, policy: policy, network: manifest.Network,
-		node: manifest.Node, root: manifest.LedgerDir,
+		node: manifest.Node, root: manifest.LedgerDir, stateDir: manifest.StateDir,
 	}, nil
 }
 
