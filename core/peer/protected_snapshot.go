@@ -7,6 +7,7 @@ package peer
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -100,7 +101,7 @@ func copyProtectedSnapshotFile(source *os.Root, stage, name, digest string) erro
 	if err := errors.Join(copyErr, output.Close()); err != nil {
 		return err
 	}
-	if fmt.Sprintf("%x", hash.Sum(nil)) != digest {
+	if hex.EncodeToString(hash.Sum(nil)) != digest {
 		return fmt.Errorf("protected snapshot payload %q conflicts with its signed digest", name)
 	}
 	return nil

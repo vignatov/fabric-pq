@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -57,7 +58,7 @@ func TestPQ40EDisposableVMService(t *testing.T) {
 		state       = runtimeRoot + "/state"
 		ledger      = runtimeRoot + "/ledger"
 		installRoot = "/usr/local/libexec/fabric-pq"
-		staging     = "/opt/pq40e-systemd-ci"
+		staging     = provision + "/ci-install"
 	)
 	assets := os.Getenv("PQ40E_VM_ASSETS")
 	require.True(t, filepath.IsAbs(assets))
@@ -119,7 +120,7 @@ func TestPQ40EDisposableVMService(t *testing.T) {
 	store, err := activation.OpenStore(state, nil)
 	require.NoError(t, err)
 	fixture.Provision(t, store, testfixture.Config(t, genesis))
-	genesisHash, err := json.Marshal(fmt.Sprintf("%x", protoutil.BlockHeaderHash(genesis.GetHeader())))
+	genesisHash, err := json.Marshal(hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())))
 	require.NoError(t, err)
 	write(fmt.Sprintf("%s/genesis-%x", state, sha256.Sum256([]byte(testfixture.ChannelID))), genesisHash, 0o600)
 	run("chown", "-R", "fabric-pq:fabric-pq", state, ledger)
@@ -161,8 +162,17 @@ func TestPQ40EDisposableVMService(t *testing.T) {
 	require.Contains(t, run("systemctl", "show", unit, "--property=ExecStart", "--value"), installRoot+"/pq-launcher")
 
 	checked := map[string]bool{}
-	for _, path := range []string{unitPath, installRoot + "/pq-launcher", manifest.Executable, evidence + "/authority.pub",
-		evidence + "/policy.pub", evidence + "/manifest.json", evidence + "/history.json", config + "/orderer.yaml", config + "/tls.key"} {
+	for _, path := range []string{
+		unitPath,
+		installRoot + "/pq-launcher",
+		manifest.Executable,
+		evidence + "/authority.pub",
+		evidence + "/policy.pub",
+		evidence + "/manifest.json",
+		evidence + "/history.json",
+		config + "/orderer.yaml",
+		config + "/tls.key",
+	} {
 		require.Equal(t, path, run("realpath", "-e", path))
 		for current := path; !checked[current]; current = filepath.Dir(current) {
 			checked[current] = true
@@ -179,7 +189,7 @@ func TestPQ40EDisposableVMService(t *testing.T) {
 	// system unit. Arbitrary code execution under the service UID is out of scope.
 	output, err := exec.CommandContext(t.Context(), "runuser", "-u", "fabric-pq", "--", "systemd-run",
 		"--system", "--no-ask-password", "--unit=fabric-pq-ci-alternate", "/usr/bin/true").CombinedOutput()
-	require.Error(t, err, "%s", output)
+	require.Error(t, err, "service UID could register a competing system unit")
 	require.Regexp(t, "(?i)(access denied|authentication required|not permitted)", string(output))
 
 	cert, err := tls.X509KeyPair(clientKey.Cert, clientKey.Key)
@@ -233,7 +243,7 @@ func TestPQ40EDisposableVMService(t *testing.T) {
 			if conn != nil {
 				_ = conn.Close()
 			}
-			require.Error(t, err, "rejected startup opened port %s", port)
+			require.Error(t, err, "rejected startup opened port "+port)
 		}
 		stop()
 	}

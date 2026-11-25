@@ -8,6 +8,7 @@ package peer
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,7 +35,7 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	update := fixture.Update(t, testfixture.Config(t, genesis))
 	block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
 	block.Data.Data = [][]byte{protoutil.MarshalOrPanic(fixture.Envelope(t, update))}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 	block.Metadata.Metadata[cb.BlockMetadataIndex_TRANSACTIONS_FILTER] = []byte{byte(pb.TxValidationCode_VALID)}
 	block.Metadata.Metadata[cb.BlockMetadataIndex_LAST_CONFIG] = protoutil.MarshalOrPanic(
 		&cb.Metadata{Value: protoutil.MarshalOrPanic(&cb.LastConfig{Index: 1})},
@@ -68,7 +69,7 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
 	channelDigest := sha256.Sum256([]byte(testfixture.ChannelID))
 	genesisName := filepath.Join(state, fmt.Sprintf("genesis-%x", channelDigest))
-	genesisHash, err := json.Marshal(fmt.Sprintf("%x", protoutil.BlockHeaderHash(genesis.GetHeader())))
+	genesisHash, err := json.Marshal(hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(genesisName, genesisHash, 0o600))
 	require.NoError(t, os.WriteFile(genesisName+".block", protoutil.MarshalOrPanic(genesis), 0o600))
