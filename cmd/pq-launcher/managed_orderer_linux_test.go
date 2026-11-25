@@ -311,6 +311,7 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 		"FABRIC_CFG_PATH="+configtest.GetDevConfigDir(),
 		"CORE_PEER_MSPCONFIGPATH="+configtest.GetDevMspDir(), "CORE_PEER_LOCALMSPID=SampleOrg",
 		"CORE_PEER_FILESYSTEMPATH="+filepath.Dir(ledgerRoot), "CORE_PEER_ADDRESS="+peerAddress,
+		"CORE_LEDGER_SNAPSHOTS_ROOTDIR="+filepath.Join(root, "snapshots"),
 		"CORE_PEER_LISTENADDRESS="+peerAddress, "CORE_PEER_ADDRESSAUTODETECT=false",
 		"CORE_PEER_CHAINCODELISTENADDRESS="+ccAddress, "CORE_PEER_CHAINCODEADDRESS="+ccAddress,
 		"CORE_PEER_TLS_ENABLED=true", "CORE_PEER_TLS_CLIENTAUTHREQUIRED=true",
