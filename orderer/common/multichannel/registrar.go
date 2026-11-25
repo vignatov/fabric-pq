@@ -23,6 +23,7 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/filerepo"
@@ -102,6 +103,35 @@ func NewRegistrar(
 	clusterDialer *cluster.PredicateDialer,
 	callbacks ...channelconfig.BundleActor,
 ) *Registrar {
+	return newRegistrar(config, ledgerFactory, signer, metricsProvider, bccsp, clusterDialer,
+		newProtectedChannels(config.General.PQActivation), callbacks...)
+}
+
+// NewManagedRegistrar selects protected channels exclusively from verified enrollment.
+func NewManagedRegistrar(
+	config localconfig.TopLevel,
+	ledgerFactory blockledger.Factory,
+	signer identity.SignerSerializer,
+	metricsProvider metrics.Provider,
+	bccsp bccsp.BCCSP,
+	clusterDialer *cluster.PredicateDialer,
+	registry *enrollment.Registry,
+	callbacks ...channelconfig.BundleActor,
+) *Registrar {
+	return newRegistrar(config, ledgerFactory, signer, metricsProvider, bccsp, clusterDialer,
+		managedProtectedChannels(registry), callbacks...)
+}
+
+func newRegistrar(
+	config localconfig.TopLevel,
+	ledgerFactory blockledger.Factory,
+	signer identity.SignerSerializer,
+	metricsProvider metrics.Provider,
+	bccsp bccsp.BCCSP,
+	clusterDialer *cluster.PredicateDialer,
+	protected protectedChannels,
+	callbacks ...channelconfig.BundleActor,
+) *Registrar {
 	r := &Registrar{
 		config:                      config,
 		chains:                      make(map[string]*ChainSupport),
@@ -118,7 +148,7 @@ func NewRegistrar(
 	}
 
 	var err error
-	r.protected = newProtectedChannels(config.General.PQActivation)
+	r.protected = protected
 	if r.protected.err != nil {
 		logger.Panicf("Cannot authenticate protected channel registry: %s", r.protected.err)
 	}

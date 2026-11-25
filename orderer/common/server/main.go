@@ -36,6 +36,8 @@ import (
 	"github.com/hyperledger/fabric/core/operations"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/orderer/common/channelparticipation"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
@@ -82,7 +84,23 @@ func Main() {
 		os.Exit(1)
 	}
 	initializeLogging()
-	if err := multichannel.CheckProtectedStartup(conf.General.PQActivation); err != nil {
+	registry, err := enrollment.LoadManaged("orderer")
+	if err != nil {
+		logger.Panicf("Managed orderer enrollment rejected: %s", err)
+	}
+	var transportPolicy *pqtransport.Policy
+	if registry != nil {
+		if err := registry.CheckLedgerRoot(conf.FileLedger.Location); err != nil {
+			logger.Panicf("Managed orderer ledger rejected: %s", err)
+		}
+		if !conf.General.TLS.Enabled || !conf.General.TLS.ClientAuthRequired {
+			logger.Panic("Managed protected orderer requires mutual TLS on its shared listener")
+		}
+		transportPolicy = registry.TransportPolicy()
+		if _, err := adminTLS(conf.Admin, transportPolicy).Config(); err != nil {
+			logger.Panicf("Managed orderer participation admin rejected: %s", err)
+		}
+	} else if err := multichannel.CheckProtectedStartup(conf.General.PQActivation); err != nil {
 		logger.Panicf("Protected startup rejected before listener initialization: %s", err)
 	}
 
@@ -105,6 +123,7 @@ func Main() {
 	flogging.SetObserver(logObserver)
 
 	serverConfig := initializeServerConfig(conf, metricsProvider)
+	serverConfig.SecOpts.TransportPolicy = transportPolicy
 	serverConfig.HealthCheckEnabled = true
 	grpcServer := initializeGrpcServer(conf, serverConfig)
 	caMgr := &caManager{
@@ -142,6 +161,11 @@ func Main() {
 	logger.Infof("Setting up cluster")
 	clusterClientConfig, reuseGrpcListener = initializeClusterClientConfig(conf)
 	clusterClientConfig.SecOpts.TransportPolicy = serverConfig.SecOpts.TransportPolicy
+	if transportPolicy != nil {
+		if _, err := clusterClientConfig.SecOpts.TLSConfig(); err != nil {
+			logger.Panicf("Managed orderer cluster client rejected: %s", err)
+		}
+	}
 	clusterDialer = &cluster.PredicateDialer{
 		Config: clusterClientConfig,
 	}
@@ -186,9 +210,9 @@ func Main() {
 		)
 	}
 
-	manager := initializeMultichannelRegistrar(clusterDialer, clusterServerConfig, clusterGRPCServer, conf, signer, metricsProvider, lf, cryptoProvider, tlsCallback)
+	manager := initializeMultichannelRegistrar(clusterDialer, clusterServerConfig, clusterGRPCServer, conf, signer, metricsProvider, lf, cryptoProvider, registry, tlsCallback)
 
-	adminServer := newAdminServer(conf.Admin)
+	adminServer := newAdminServer(conf.Admin, transportPolicy)
 	adminServer.RegisterHandler(
 		channelparticipation.URLBaseV1,
 		channelparticipation.NewHTTPHandler(conf.ChannelParticipation, manager),
@@ -625,6 +649,7 @@ func initializeMultichannelRegistrar(
 	metricsProvider metrics.Provider,
 	lf blockledger.Factory,
 	bccsp bccsp.BCCSP,
+	registry *enrollment.Registry,
 	callbacks ...channelconfig.BundleActor,
 ) *multichannel.Registrar {
 	dpmr := &DynamicPolicyManagerRegistry{}
@@ -634,7 +659,12 @@ func initializeMultichannelRegistrar(
 	}
 	callbacks = append(callbacks, policyManagerCallback)
 
-	registrar := multichannel.NewRegistrar(*conf, lf, signer, metricsProvider, bccsp, clusterDialer, callbacks...)
+	var registrar *multichannel.Registrar
+	if registry == nil {
+		registrar = multichannel.NewRegistrar(*conf, lf, signer, metricsProvider, bccsp, clusterDialer, callbacks...)
+	} else {
+		registrar = multichannel.NewManagedRegistrar(*conf, lf, signer, metricsProvider, bccsp, clusterDialer, registry, callbacks...)
+	}
 
 	consenters := map[string]consensus.Consenter{}
 
@@ -671,19 +701,24 @@ func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics
 	})
 }
 
-func newAdminServer(admin localconfig.Admin) *fabhttp.Server {
+func newAdminServer(admin localconfig.Admin, policy *pqtransport.Policy) *fabhttp.Server {
 	return fabhttp.NewServer(fabhttp.Options{
 		Logger:        flogging.MustGetLogger("orderer.admin"),
 		ListenAddress: admin.ListenAddress,
-		TLS: fabhttp.TLS{
-			Enabled:            admin.TLS.Enabled,
-			CertFile:           admin.TLS.Certificate,
-			KeyFile:            admin.TLS.PrivateKey,
-			ClientCertRequired: admin.TLS.ClientAuthRequired,
-			ClientCACertFiles:  admin.TLS.ClientRootCAs,
-			TimeShift:          admin.TLS.TLSHandshakeTimeShift,
-		},
+		TLS:           adminTLS(admin, policy),
 	})
+}
+
+func adminTLS(admin localconfig.Admin, policy *pqtransport.Policy) fabhttp.TLS {
+	return fabhttp.TLS{
+		Enabled:            admin.TLS.Enabled,
+		CertFile:           admin.TLS.Certificate,
+		KeyFile:            admin.TLS.PrivateKey,
+		ClientCertRequired: admin.TLS.ClientAuthRequired,
+		ClientCACertFiles:  admin.TLS.ClientRootCAs,
+		TimeShift:          admin.TLS.TLSHandshakeTimeShift,
+		TransportPolicy:    policy,
+	}
 }
 
 // caMgr manages certificate authorities scoped by channel

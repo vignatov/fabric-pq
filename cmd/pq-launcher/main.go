@@ -8,71 +8,32 @@ SPDX-License-Identifier: Apache-2.0
 package main
 
 import (
-	"crypto/mldsa"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 )
 
 func run(authorityPath, manifestPath, historyPath string) error {
-	for _, path := range []string{authorityPath, manifestPath, historyPath} {
-		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-			return errors.New("provisioning paths must be absolute and clean")
-		}
-	}
-	keyBytes, err := os.ReadFile(authorityPath)
-	if err != nil {
-		return fmt.Errorf("read provisioning authority: %w", err)
-	}
-	key, err := mldsa.NewPublicKey(mldsa.MLDSA65(), keyBytes)
-	if err != nil {
-		return fmt.Errorf("parse provisioning authority: %w", err)
-	}
-	manifestBytes, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return fmt.Errorf("read enrollment manifest: %w", err)
-	}
-	historyBytes, err := os.ReadFile(historyPath)
-	if err != nil {
-		return fmt.Errorf("read enrollment history: %w", err)
-	}
-	manifest, err := enrollment.Verify(manifestBytes, historyBytes, key)
+	evidence := enrollment.Evidence{Authority: authorityPath, Manifest: manifestPath, History: historyPath}
+	manifest, err := evidence.Load()
 	if err != nil {
 		return err
 	}
 	if manifest.Mode == enrollment.Protected {
-		for _, directory := range []string{manifest.StateDir, manifest.LedgerDir} {
-			stateDir, err := filepath.EvalSymlinks(directory)
-			if err != nil {
-				return fmt.Errorf("resolve protected state directory: %w", err)
-			}
-			for _, path := range []string{authorityPath, manifestPath, historyPath} {
-				resolved, err := filepath.EvalSymlinks(path)
-				if err != nil {
-					return fmt.Errorf("resolve provisioning evidence: %w", err)
-				}
-				rel, err := filepath.Rel(stateDir, resolved)
-				if err != nil {
-					return err
-				}
-				if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
-					return errors.New("provisioning evidence must be outside runtime security state")
-				}
-			}
-		}
 		if err := enrollment.AuthenticateProtected(manifest); err != nil {
 			return fmt.Errorf("authenticate protected runtime: %w", err)
 		}
-		// The peer and orderer do not yet enforce every required strict
-		// transport and service boundary. Never start either in this mode.
-		return errors.New("protected managed startup is blocked pending strict transport and admission integration")
+		if _, err := manifest.NodeKind(); err != nil {
+			return err
+		}
 	}
-	return execute(manifest.Executable, append([]string{manifest.Executable}, manifest.Arguments...), os.Environ())
+	env, err := evidence.Environment(os.Environ(), manifest.Mode == enrollment.Protected)
+	if err != nil {
+		return err
+	}
+	return execute(manifest.Executable, append([]string{manifest.Executable}, manifest.Arguments...), env)
 }
 
 func main() {

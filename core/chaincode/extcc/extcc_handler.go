@@ -12,6 +12,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/core/container/ccintf"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 )
@@ -23,12 +24,21 @@ type StreamHandler interface {
 	HandleChaincodeStream(stream ccintf.ChaincodeStream) error
 }
 
-type ExternalChaincodeRuntime struct{}
+type ExternalChaincodeRuntime struct {
+	TransportPolicy *pqtransport.Policy
+}
 
 // createConnection - standard grpc client creating using ClientConfig info (surprised there isn't
 // a helper method for this)
 func (i *ExternalChaincodeRuntime) createConnection(ccid string, ccinfo *ccintf.ChaincodeServerInfo) (*grpc.ClientConn, error) {
-	conn, err := ccinfo.ClientConfig.Dial(ccinfo.Address)
+	config := ccinfo.ClientConfig
+	if i.TransportPolicy != nil {
+		if !config.SecOpts.UseTLS || !config.SecOpts.RequireClientCert {
+			return nil, errors.New("protected external chaincode requires mutual TLS")
+		}
+		config.SecOpts.TransportPolicy = i.TransportPolicy
+	}
+	conn, err := config.Dial(ccinfo.Address)
 	if err != nil {
 		return nil, errors.WithMessagef(err, "error creating grpc connection to %s", ccinfo.Address)
 	}

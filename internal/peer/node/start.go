@@ -92,6 +92,7 @@ import (
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/gateway"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/protoutil"
@@ -191,6 +192,10 @@ func (c custodianLauncherAdapter) Stop(ccid string) error {
 }
 
 func serve(args []string) error {
+	registry, err := enrollment.LoadManaged("peer")
+	if err != nil {
+		return fmt.Errorf("authenticate managed peer startup: %w", err)
+	}
 	logger.Infof("Starting %s", version.GetInfo())
 
 	// Info logging for peer config, includes core.yaml settings and environment variable overrides
@@ -229,6 +234,20 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	ledgerConf := ledgerConfig()
+	serverConfig, err := peer.GetServerConfig()
+	if err != nil {
+		return fmt.Errorf("load peer TLS configuration: %w", err)
+	}
+	if registry != nil {
+		if err := registry.CheckLedgerRoot(ledgerConf.RootFSPath); err != nil {
+			return fmt.Errorf("managed peer ledger: %w", err)
+		}
+		if !serverConfig.SecOpts.UseTLS || !serverConfig.SecOpts.RequireClientCert || chaincode.IsDevMode() {
+			return errors.New("managed protected peer requires mutual TLS and authenticated chaincode registration")
+		}
+		serverConfig.SecOpts.TransportPolicy = registry.TransportPolicy()
+	}
 
 	platformRegistry := platforms.NewRegistry(platforms.SupportedPlatforms...)
 
@@ -255,11 +274,6 @@ func serve(args []string) error {
 	}
 
 	listenAddr := coreConfig.ListenAddress
-	serverConfig, err := peer.GetServerConfig()
-	if err != nil {
-		logger.Fatalf("Error loading secure config for peer (%s)", err)
-	}
-
 	serverConfig.Logger = flogging.MustGetLogger("core.comm").With("server", "PeerServer")
 	serverConfig.ServerStatsHandler = comm.NewServerStatsHandler(metricsProvider)
 	serverConfig.UnaryInterceptors = append(
@@ -292,7 +306,6 @@ func serve(args []string) error {
 		cs.SetClientCertificate(clientCert)
 	}
 
-	ledgerConf := ledgerConfig()
 	transientStoreProvider, err := transientstore.NewStoreProvider(
 		filepath.Join(coreconfig.GetPath("peer.fileSystemPath"), "transientstore"),
 		ledgerConf.StateDatabase,
@@ -310,6 +323,7 @@ func serve(args []string) error {
 		StoreProvider:            transientStoreProvider,
 		CryptoProvider:           factory.GetDefault(),
 		OrdererEndpointOverrides: deliverServiceConfig.OrdererEndpointOverrides,
+		ProtectedRegistry:        registry,
 	}
 
 	identityDeserializerFactory := func(channelName string) msp.IdentityDeserializer {
@@ -522,11 +536,15 @@ func serve(args []string) error {
 	pb.RegisterDeliverServer(peerServer.Server(), abServer)
 
 	// Create a self-signed CA for chaincode service
-	ca, err := tlsgen.NewCA()
+	newChaincodeCA := tlsgen.NewCA
+	if registry != nil {
+		newChaincodeCA = tlsgen.NewMLDSA65CA
+	}
+	ca, err := newChaincodeCA()
 	if err != nil {
 		logger.Panic("Failed creating authentication layer:", err)
 	}
-	ccSrv, ccEndpoint, err := createChaincodeServer(coreConfig, ca, peerHost)
+	ccSrv, ccEndpoint, err := createChaincodeServer(coreConfig, ca, peerHost, serverConfig.SecOpts.TransportPolicy)
 	if err != nil {
 		logger.Panicf("Failed to create chaincode server: %s", err)
 	}
@@ -675,7 +693,7 @@ func serve(args []string) error {
 		CertGenerator:     authenticator,
 		CACert:            ca.CertBytes(),
 		PeerAddress:       ccEndpoint,
-		ConnectionHandler: &extcc.ExternalChaincodeRuntime{},
+		ConnectionHandler: &extcc.ExternalChaincodeRuntime{TransportPolicy: serverConfig.SecOpts.TransportPolicy},
 	}
 
 	// Keep TestQueries working
@@ -1030,7 +1048,7 @@ func createDiscoveryService(
 }
 
 // create a CC listener using peer.chaincodeListenAddress (and if that's not set use peer.peerAddress)
-func createChaincodeServer(coreConfig *peer.Config, ca tlsgen.CA, peerHostname string) (srv *comm.GRPCServer, ccEndpoint string, err error) {
+func createChaincodeServer(coreConfig *peer.Config, ca tlsgen.CA, peerHostname string, policy *pqtransport.Policy) (srv *comm.GRPCServer, ccEndpoint string, err error) {
 	// before potentially setting chaincodeListenAddress, compute chaincode endpoint at first
 	ccEndpoint, err = computeChaincodeEndpoint(coreConfig.ChaincodeAddress, coreConfig.ChaincodeListenAddress, peerHostname)
 	if err != nil {
@@ -1087,6 +1105,7 @@ func createChaincodeServer(coreConfig *peer.Config, ca tlsgen.CA, peerHostname s
 			ServerRootCAs: nil,
 		}
 	}
+	config.SecOpts.TransportPolicy = policy
 
 	// Chaincode keepalive options - static for now
 	chaincodeKeepaliveOptions := comm.KeepaliveOptions{

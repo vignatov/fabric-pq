@@ -9,10 +9,12 @@ package fabhttp
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"os"
 	"time"
 
 	"github.com/hyperledger/fabric/internal/pkg/comm"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 )
 
 type TLS struct {
@@ -22,9 +24,13 @@ type TLS struct {
 	ClientCertRequired bool
 	ClientCACertFiles  []string
 	TimeShift          time.Duration
+	TransportPolicy    *pqtransport.Policy
 }
 
 func (t TLS) Config() (*tls.Config, error) {
+	if t.TransportPolicy != nil && (!t.Enabled || !t.ClientCertRequired || len(t.ClientCACertFiles) == 0) {
+		return nil, errors.New("protected participation admin requires TLS, client authentication and client roots")
+	}
 	var tlsConfig *tls.Config
 
 	if t.Enabled {
@@ -38,7 +44,9 @@ func (t TLS) Config() (*tls.Config, error) {
 			if err != nil {
 				return nil, err
 			}
-			caCertPool.AppendCertsFromPEM(caPem)
+			if !caCertPool.AppendCertsFromPEM(caPem) && t.TransportPolicy != nil {
+				return nil, errors.New("invalid protected admin client CA")
+			}
 		}
 		tlsConfig = &tls.Config{
 			MinVersion:   tls.VersionTLS12,
@@ -59,5 +67,8 @@ func (t TLS) Config() (*tls.Config, error) {
 		}
 	}
 
+	if t.TransportPolicy != nil {
+		return pqtransport.ServerTLSConfig(tlsConfig, t.TransportPolicy)
+	}
 	return tlsConfig, nil
 }

@@ -64,7 +64,7 @@ func TestProtectedLauncherBlocksBeforeExecuting(t *testing.T) {
 	require.NoError(t, os.WriteFile(authorityPath, key.Public().(*mldsa.PublicKey).Bytes(), 0o600))
 	require.NoError(t, os.WriteFile(manifestPath, signed(t, key, "fabric-pq/enrollment/v1\x00", manifest), 0o600))
 	require.NoError(t, os.WriteFile(historyPath, signed(t, key, "fabric-pq/enrollment-history/v1\x00", history), 0o600))
-	require.ErrorContains(t, run(authorityPath, manifestPath, historyPath), "blocked pending strict transport")
+	require.ErrorContains(t, run(authorityPath, manifestPath, historyPath), "must start the managed peer or orderer")
 	require.NoError(t, os.Remove(filepath.Join(state, "checkpoint")))
 	require.ErrorContains(t, run(authorityPath, manifestPath, historyPath), "checkpoint")
 }

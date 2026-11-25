@@ -14,6 +14,7 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus/etcdraft"
@@ -26,6 +27,20 @@ type protectedChannels struct {
 	store    *activation.Store
 	key      *mldsa.PublicKey
 	err      error
+	managed  *enrollment.Registry
+}
+
+func managedProtectedChannels(registry *enrollment.Registry) protectedChannels {
+	result := protectedChannels{managed: registry, channels: make(map[string]*activation.Channel)}
+	bindings, err := registry.TransportPolicy().Channels()
+	if err != nil {
+		result.err = err
+		return result
+	}
+	for id := range bindings {
+		result.channels[id] = nil
+	}
+	return result
 }
 
 func newProtectedChannels(config localconfig.PQActivation) protectedChannels {
@@ -152,52 +167,55 @@ func (r *Registrar) activationFor(resources *ledgerResources) *activation.Channe
 		Store:          r.protected.store, Gate: &activation.Gate{},
 		Network: r.protected.config.Network, Node: r.protected.config.Node,
 		ID: id, Signer: r.protected.key, Crypto: r.bccsp,
-		Validate: func(candidate channelconfig.Resources) error {
-			if err := checkResources(candidate); err != nil {
-				return err
+	}
+	if r.protected.managed != nil {
+		controller = r.protected.managed.Controller(id, r.bccsp)
+	}
+	controller.Validate = func(candidate channelconfig.Resources) error {
+		if err := checkResources(candidate); err != nil {
+			return err
+		}
+		conf, _ := candidate.OrdererConfig()
+		if err := etcdraft.ValidateConfigForActivation(conf); err != nil {
+			return err
+		}
+		if candidate.ChannelConfig().Capabilities().PactwayHybridCertificateV1() {
+			return validateHybridOrdererSigner(candidate, r.signer)
+		}
+		return nil
+	}
+	controller.Ledger = activation.Ledger{
+		Block: func(number uint64) (*cb.Block, error) {
+			return blockledger.GetBlockByNumber(ledger, number)
+		},
+		Height: func() (uint64, error) { return ledger.Height(), nil },
+		LatestConfig: func() (*cb.Block, error) {
+			if ledger.Height() == 0 {
+				return nil, errors.New("protected ledger is empty")
 			}
-			conf, _ := candidate.OrdererConfig()
-			if err := etcdraft.ValidateConfigForActivation(conf); err != nil {
-				return err
+			tip, err := blockledger.GetBlockByNumber(ledger, ledger.Height()-1)
+			if err != nil {
+				return nil, err
 			}
-			if candidate.ChannelConfig().Capabilities().PactwayHybridCertificateV1() {
-				return validateHybridOrdererSigner(candidate, r.signer)
+			index, err := protoutil.GetLastConfigIndexFromBlock(tip)
+			if err != nil {
+				return nil, err
 			}
+			return blockledger.GetBlockByNumber(ledger, index)
+		},
+		Sync: func() error {
+			return activation.SyncDirectory(filepath.Join(r.config.FileLedger.Location, blkstorage.ChainsDir, id))
+		},
+	}
+	controller.Publish = func(bundle *channelconfig.Bundle) error {
+		if published != nil && published.ConfigtxValidator().Sequence() == bundle.ConfigtxValidator().Sequence() {
 			return nil
-		},
-		Ledger: activation.Ledger{
-			Block: func(number uint64) (*cb.Block, error) {
-				return blockledger.GetBlockByNumber(ledger, number)
-			},
-			Height: func() (uint64, error) { return ledger.Height(), nil },
-			LatestConfig: func() (*cb.Block, error) {
-				if ledger.Height() == 0 {
-					return nil, errors.New("protected ledger is empty")
-				}
-				tip, err := blockledger.GetBlockByNumber(ledger, ledger.Height()-1)
-				if err != nil {
-					return nil, err
-				}
-				index, err := protoutil.GetLastConfigIndexFromBlock(tip)
-				if err != nil {
-					return nil, err
-				}
-				return blockledger.GetBlockByNumber(ledger, index)
-			},
-			Sync: func() error {
-				return activation.SyncDirectory(filepath.Join(r.config.FileLedger.Location, blkstorage.ChainsDir, id))
-			},
-		},
-		Publish: func(bundle *channelconfig.Bundle) error {
-			if published != nil && published.ConfigtxValidator().Sequence() == bundle.ConfigtxValidator().Sequence() {
-				return nil
-			}
-			for _, callback := range r.callbacks {
-				callback(bundle)
-			}
-			published = bundle
-			return nil
-		},
+		}
+		for _, callback := range r.callbacks {
+			callback(bundle)
+		}
+		published = bundle
+		return nil
 	}
 	r.protected.channels[id] = controller
 	return controller

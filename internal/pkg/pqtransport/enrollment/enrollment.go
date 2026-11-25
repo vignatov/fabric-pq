@@ -197,6 +197,11 @@ func (r *Registry) LedgerRoot() string {
 	return r.root
 }
 
+// TransportPolicy is the authenticated floor applied to shared transports.
+func (r *Registry) TransportPolicy() *pqtransport.Policy {
+	return r.policy
+}
+
 // Controller returns a closed controller for an enrolled channel. A nil result
 // means the authenticated checkpoint has no binding for the channel.
 func (r *Registry) Controller(id string, crypto bccsp.BCCSP) *activation.Channel {

@@ -509,7 +509,7 @@ func TestInitializeMultichannelRegistrar(t *testing.T) {
 		require.NoError(t, err)
 		lf, err := createLedgerFactory(conf, &disabled.Provider{})
 		require.NoError(t, err)
-		registrar := initializeMultichannelRegistrar(&cluster.PredicateDialer{}, comm.ServerConfig{}, srv, conf, signer, &disabled.Provider{}, lf, cryptoProvider)
+		registrar := initializeMultichannelRegistrar(&cluster.PredicateDialer{}, comm.ServerConfig{}, srv, conf, signer, &disabled.Provider{}, lf, cryptoProvider, nil)
 		require.NotNil(t, registrar)
 	})
 }
@@ -624,7 +624,7 @@ func TestUpdateTrustedRoots(t *testing.T) {
 		},
 	}
 
-	r := initializeMultichannelRegistrar(&cluster.PredicateDialer{}, srvConf, grpcServer, conf, signer, &disabled.Provider{}, lf, cryptoProvider, callback)
+	r := initializeMultichannelRegistrar(&cluster.PredicateDialer{}, srvConf, grpcServer, conf, signer, &disabled.Provider{}, lf, cryptoProvider, nil, callback)
 
 	t.Logf("# app CAs: %d", len(caMgr.appRootCAsByChain["testchannelid"]))
 	t.Logf("# orderer CAs: %d", len(caMgr.ordererRootCAsByChain["testchannelid"]))
@@ -676,7 +676,7 @@ func TestUpdateTrustedRoots(t *testing.T) {
 		}
 	}
 
-	r = initializeMultichannelRegistrar(predDialer, srvConf, grpcServer, conf, signer, &disabled.Provider{}, lf, cryptoProvider, callback)
+	r = initializeMultichannelRegistrar(predDialer, srvConf, grpcServer, conf, signer, &disabled.Provider{}, lf, cryptoProvider, nil, callback)
 	t.Logf("# app CAs: %d", len(caMgr.appRootCAsByChain["testchannelid"]))
 	t.Logf("# orderer CAs: %d", len(caMgr.ordererRootCAsByChain["testchannelid"]))
 	// mutual TLS is required so updates should have occurred

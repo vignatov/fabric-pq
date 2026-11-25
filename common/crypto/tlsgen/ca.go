@@ -60,6 +60,16 @@ func NewCA() (CA, error) {
 	return c, nil
 }
 
+// NewMLDSA65CA issues ML-DSA-65 endpoint keys, including client credentials
+// issued to the chaincode shim.
+func NewMLDSA65CA() (CA, error) {
+	pair, err := issueCertKeyPair(true, true, false, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &ca{caCert: pair}, nil
+}
+
 func (c *ca) NewIntermediateCA() (CA, error) {
 	intermediateCA := &ca{}
 	var err error

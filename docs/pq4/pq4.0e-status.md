@@ -66,23 +66,25 @@ drop-ins, and does not enable or start the service. It requires `getfacl` and
 must be run as root on the VM. The unit and installer are deployment artifacts;
 placing it in this repository does not install or enforce it on a VM.
 
-For protected mode, the launcher also verifies the pinned policy signer and
-authenticates the active policy/checkpoint before returning an explicit
-startup error. No protected peer or orderer process is launched yet. For a
-valid baseline declaration it replaces itself with the signed executable and
-arguments on Linux. Other platforms fail closed.
+For protected mode, the launcher verifies the pinned policy signer and
+authenticates the active checkpoint before executing the signed `peer node
+start` or `orderer start` command. The node independently verifies the
+handoff, executable, arguments and ledger directory. Peer channel creation
+and the orderer registrar select protected channels from that registry.
+For a valid baseline declaration the launcher executes the signed command
+without a protected handoff. Linux is the supported managed platform.
 
 ## Remaining work and evidence
 
 | Property | Status |
 | --- | --- |
-| Configured registry derives membership from authenticated checkpoint | Focused Linux race tests passed; managed bootstrap incomplete |
-| Reject configured protected orderer before listener initialization | Focused Linux race tests passed; end-to-end process startup incomplete |
+| Registry derives membership from authenticated checkpoint | Native managed peer and orderer select enrolled channels from the signed policy and checkpoint |
+| Reject unmanaged protected configuration before serving | Unmanaged protected orderer config rejects startup; managed nodes authenticate before listener setup |
 | Signed manifest, protected history and Linux launcher | Linux race and subprocess tests passed; managed deployment incomplete |
 | Fixed managed systemd unit and installer | Provided; VM installation and verification incomplete |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Incomplete: protected service installation and provisioning lifecycle required |
 | Authenticated onboarding and non-genesis join provenance | Incomplete |
-| Peer bootstrap and endorsement, Gateway and background admission | Channel creation selects the controller from an authenticated registry when supplied by trusted startup; managed startup and other admission remain incomplete |
+| Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
 | Orderer service, stream and follower integration under strict transport | Incomplete |
@@ -176,13 +178,12 @@ strict listener with a revocable connection. Generation closure interrupts the
 ledger iterator and closes the underlying connection to unblock an HTTP/2
 flow-controlled send. Multiplexed calls on that connection reconnect.
 
-When startup supplies an authenticated transport policy, the peer's gossip
-and orderer delivery clients inherit it. The orderer's cluster dialer and
-separate cluster listener inherit the general listener's authenticated policy.
-Managed startup still needs to supply that policy and validate the remaining
-required endpoints before listening. The chaincode listener and participation
-admin paths still require integration or explicit exclusion from the protected
-service.
+Managed startup supplies the authenticated policy to the shared listeners,
+peer gossip and delivery clients, and orderer cluster clients and listeners.
+The chaincode listener uses a local ML-DSA-65 CA and mutual TLS, including the
+issued shim credentials. External chaincode clients require strict mutual TLS.
+Protected participation admin requires a strict ML-DSA-65 endpoint and
+verified client certificates.
 
 Gateway prepares orderer endpoints separately from publication. Its orderer
 cache is scoped by channel, MSP and TLS roots. Publication retires stale
@@ -213,7 +214,13 @@ block and retains its active lease until the cancellable Raft proposal call
 returns. Raft can still apply entries it has already accepted. Durable config
 preparation checks the expected generation under the activation store lock,
 and replay still reconciles committed entries before reopening admission.
-Deliver stream coverage and managed strict transport remain incomplete.
+A managed subprocess proof uses a native orderer to submit an approved config
+update over strict TLS, cancel a prior-generation Deliver stream, recover the
+updated ledger after restart, and reject startup with a missing checkpoint.
+The proof also rejects classical key exchange on participation admin.
+A native managed peer joins an enrolled genesis over strict mutual TLS and
+reloads the protected channel after restart. These tests run as subprocesses
+without installing or starting the systemd service on a VM.
 
 ## Focused evidence
 
