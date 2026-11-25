@@ -104,9 +104,9 @@ func TestPQ40EDisposableVMService(t *testing.T) {
 	write(config+"/tls.key", server.Key, 0o640)
 	require.NoError(t, os.Chown(config+"/tls.key", 0, gid))
 	mainPort, adminPort, opsPort := unusedPort(t), unusedPort(t), unusedPort(t)
-	tlsConfig := "    Enabled: true\n    Certificate: tls.crt\n    PrivateKey: tls.key\n    ClientAuthRequired: true\n    ClientRootCAs: [ca.crt]\n"
-	ordinaryConfig := fmt.Sprintf("General:\n  ListenAddress: 127.0.0.1\n  ListenPort: %s\n  BootstrapMethod: none\n  LocalMSPID: SampleOrg\n  LocalMSPDir: msp\n  TLS:\n%s  Cluster:\n    RootCAs: [ca.crt]\nFileLedger:\n  Location: %s\nConsensus:\n  WALDir: %s/wal\n  SnapDir: %s/snap\nAdmin:\n  ListenAddress: 127.0.0.1:%s\n  TLS:\n%sOperations:\n  ListenAddress: 127.0.0.1:%s\n  TLS:\n%s",
-		mainPort, tlsConfig, ledger, ledger, ledger, adminPort, tlsConfig, opsPort, tlsConfig)
+	tlsConfig := fmt.Sprintf("    Enabled: true\n    Certificate: %[1]s/tls.crt\n    PrivateKey: %[1]s/tls.key\n    ClientAuthRequired: true\n    ClientRootCAs: [%[1]s/ca.crt]\n", config)
+	ordinaryConfig := fmt.Sprintf("General:\n  ListenAddress: 127.0.0.1\n  ListenPort: %[1]s\n  BootstrapMethod: none\n  LocalMSPID: SampleOrg\n  LocalMSPDir: %[2]s/msp\n  TLS:\n%[3]s  Cluster:\n    RootCAs: [%[2]s/ca.crt]\nFileLedger:\n  Location: %[4]s\nConsensus:\n  WALDir: %[4]s/wal\n  SnapDir: %[4]s/snap\nAdmin:\n  ListenAddress: 127.0.0.1:%[5]s\n  TLS:\n%[3]sOperations:\n  ListenAddress: 127.0.0.1:%[6]s\n  TLS:\n%[3]s",
+		mainPort, config, tlsConfig, ledger, adminPort, opsPort)
 	write(config+"/orderer.yaml", []byte(ordinaryConfig), 0o644)
 
 	fixture := testfixture.New(t)
