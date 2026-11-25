@@ -116,10 +116,6 @@ func (cs *ChaincodeSupport) HandleChaincodeStream(stream ccintf.ChaincodeStream)
 	var deserializerFactory privdata.IdentityDeserializerFactoryFunc = func(channelID string) msp.IdentityDeserializer {
 		return cs.Peer.Channel(channelID).MSPManager()
 	}
-	var requiresProtection func(string) bool
-	if cs.Peer != nil && cs.Peer.ProtectedRegistry != nil {
-		requiresProtection = cs.Peer.ProtectedRegistry.RequiresProtection
-	}
 	handler := &Handler{
 		Invoker:                cs,
 		Keepalive:              cs.Keepalive,
@@ -140,7 +136,7 @@ func (cs *ChaincodeSupport) HandleChaincodeStream(stream ccintf.ChaincodeStream)
 		MaxSizeWriteBatch:      cs.MaxSizeWriteBatch,
 		UseGetMultipleKeys:     cs.UseGetMultipleKeys,
 		MaxSizeGetMultipleKeys: cs.MaxSizeGetMultipleKeys,
-		RequiresProtection:     requiresProtection,
+		acquireAdmission:       cs.admit,
 	}
 
 	return handler.ProcessStream(stream)

@@ -206,9 +206,13 @@ transport tests cover both queued cancellation and in-flight drain.
 Chaincode execution acquires admission before resolving and launching the
 chaincode. The mixed-channel test exercises an outstanding invocation
 during closure, continued baseline execution, and a rebuilt handler after
-recovery. Cross-channel chaincode invocations into protected channels are
-disabled. Supporting that path requires retaining the target generation
-through the source shim's asynchronous response.
+recovery. Cross-channel calls acquire target admission before checking its
+ACL or opening its ledger simulator and retain it through the asynchronous
+source-shim send. Revocation discards queued payloads and sends a generic
+error. If a write has started, revocation closes the shim connection and
+drains the writer before releasing admission. Calls sharing a disconnected
+shim require a fresh connection. The test reopens the signed checkpoint and
+verifies that a new shim receives protected responses again.
 
 The cluster test uses authenticated strict mTLS, the real Cluster Step
 service, member-certificate mapping and the Raft Submit entry point. It

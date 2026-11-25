@@ -170,7 +170,7 @@ jobs:
           go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./internal/pkg/comm
           go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./internal/pkg/gateway
           go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./core/peer
-          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./core/chaincode ./gossip/comm ./gossip/privdata ./orderer/consensus/etcdraft
+          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./core/chaincode ./core/chaincode/extcc ./gossip/comm ./gossip/privdata ./orderer/consensus/etcdraft
           go test -mod=vendor -race -count=1 ./core/endorser
           go test -mod=vendor -race -count=1 ./internal/pkg/pqtransport/...
           go build -mod=vendor -o "$RUNNER_TEMP/orderer" ./cmd/orderer

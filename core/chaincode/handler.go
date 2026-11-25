@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package chaincode
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strconv"
@@ -25,12 +26,15 @@ import (
 	"github.com/hyperledger/fabric/core/container/ccintf"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/scc"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
 )
 
 var chaincodeLogger = flogging.MustGetLogger("chaincode")
+
+var errProtectedShimResponseRevoked = errors.New("protected chaincode generation closed before shim response")
 
 // An ACLProvider performs access control checks when invoking
 // chaincode.
@@ -139,7 +143,7 @@ type Handler struct {
 	UseGetMultipleKeys bool
 	// MaxSizeGetMultipleKeys maximum size of batches with get multiple keys
 	MaxSizeGetMultipleKeys uint32
-	RequiresProtection     func(string) bool
+	acquireAdmission       func(string) (context.Context, func(), error)
 
 	// stateLock is used to read and set State.
 	stateLock sync.RWMutex
@@ -149,8 +153,9 @@ type Handler struct {
 	// chaincodeID holds the ID of the chaincode that registered with the peer.
 	chaincodeID string
 
-	// serialLock is used to serialize sends across the grpc chat stream.
-	serialLock sync.Mutex
+	// The one-slot send lock can be acquired with a generation's context.
+	sendLockOnce sync.Once
+	sendLock     chan struct{}
 	// chatStream is the bidirectional grpc stream used to communicate with the
 	// chaincode instance.
 	chatStream ccintf.ChaincodeStream
@@ -204,7 +209,7 @@ func (h *Handler) handleMessageReadyState(msg *pb.ChaincodeMessage) error {
 	case pb.ChaincodeMessage_DEL_STATE:
 		go h.HandleTransaction(msg, h.HandleDelState)
 	case pb.ChaincodeMessage_INVOKE_CHAINCODE:
-		go h.HandleTransaction(msg, h.HandleInvokeChaincode)
+		go h.handleInvokeTransaction(msg)
 	case pb.ChaincodeMessage_GET_STATE:
 		go h.HandleTransaction(msg, h.HandleGetState)
 	case pb.ChaincodeMessage_GET_STATE_BY_RANGE:
@@ -242,11 +247,34 @@ type MessageHandler interface {
 
 type handleFunc func(*pb.ChaincodeMessage, *TransactionContext) (*pb.ChaincodeMessage, error)
 
+type shimResponseAdmission struct {
+	generation context.Context
+	release    func()
+}
+
+func (h *Handler) handleInvokeTransaction(msg *pb.ChaincodeMessage) {
+	var admission shimResponseAdmission
+	h.handleTransaction(msg, func(msg *pb.ChaincodeMessage, txContext *TransactionContext) (*pb.ChaincodeMessage, error) {
+		return h.invokeChaincode(msg, txContext, &admission)
+	}, &admission)
+}
+
 // HandleTransaction is a middleware function that obtains and verifies a transaction
 // context prior to forwarding the message to the provided delegate. Response messages
 // returned by the delegate are sent to the chat stream. Any errors returned by the
 // delegate are packaged as chaincode error messages.
 func (h *Handler) HandleTransaction(msg *pb.ChaincodeMessage, delegate handleFunc) {
+	h.handleTransaction(msg, delegate, nil)
+}
+
+func (h *Handler) handleTransaction(msg *pb.ChaincodeMessage, delegate handleFunc, admission *shimResponseAdmission) {
+	if admission != nil {
+		defer func() {
+			if admission.release != nil {
+				admission.release()
+			}
+		}()
+	}
 	startTime := time.Now()
 	meterLabels := []string{
 		"type", msg.GetType().String(),
@@ -305,7 +333,12 @@ func (h *Handler) HandleTransaction(msg *pb.ChaincodeMessage, delegate handleFun
 
 	chaincodeLogger.Debugf("[%s] Completed %s. Sending %s", shorttxid(msg.GetTxid()), msg.GetType(), resp.GetType())
 	h.ActiveTransactions.Remove(msg.GetChannelId(), msg.GetTxid())
-	h.serialSendAsync(resp)
+	if admission != nil && admission.generation != nil {
+		h.sendAsync(resp, *admission)
+		admission.release = nil
+	} else {
+		h.serialSendAsync(resp)
+	}
 
 	meterLabels = append(meterLabels, "success", strconv.FormatBool(resp.GetType() != pb.ChaincodeMessage_ERROR))
 	h.Metrics.ShimRequestDuration.With(meterLabels...).Observe(time.Since(startTime).Seconds())
@@ -339,8 +372,42 @@ func ParseName(ccName string) *sysccprovider.ChaincodeInstance {
 
 // serialSend serializes msgs so gRPC will be happy
 func (h *Handler) serialSend(msg *pb.ChaincodeMessage) error {
-	h.serialLock.Lock()
-	defer h.serialLock.Unlock()
+	return h.sendMessage(msg, context.Background())
+}
+
+func (h *Handler) sendMessage(msg *pb.ChaincodeMessage, generation context.Context) error {
+	h.sendLockOnce.Do(func() { h.sendLock = make(chan struct{}, 1) })
+	select {
+	case <-generation.Done():
+		return errProtectedShimResponseRevoked
+	case h.sendLock <- struct{}{}:
+	}
+	defer func() { <-h.sendLock }()
+
+	if generation.Done() != nil {
+		if generation.Err() != nil {
+			return errProtectedShimResponseRevoked
+		}
+		aborted := make(chan struct{})
+		stop := context.AfterFunc(generation, func() {
+			defer close(aborted)
+			// Interrupt the write on either side of the peer-to-shim RPC.
+			if stream, ok := h.chatStream.(interface{ Abort() }); ok {
+				stream.Abort()
+			} else if stream, ok := h.chatStream.(interface{ Context() context.Context }); ok {
+				comm.AbortProtectedConnection(stream.Context())
+			}
+			h.signalStreamError(errProtectedShimResponseRevoked)
+		})
+		defer func() {
+			if !stop() {
+				<-aborted
+			}
+		}()
+		if generation.Err() != nil {
+			return errProtectedShimResponseRevoked
+		}
+	}
 
 	if err := h.chatStream.Send(msg); err != nil {
 		err = errors.WithMessagef(err, "[%s] error sending %s", shorttxid(msg.GetTxid()), msg.GetType())
@@ -357,8 +424,27 @@ func (h *Handler) serialSend(msg *pb.ChaincodeMessage) error {
 // communication on supplied error channel. A typical use will be a non-blocking or
 // nil channel
 func (h *Handler) serialSendAsync(msg *pb.ChaincodeMessage) {
+	h.sendAsync(msg, shimResponseAdmission{})
+}
+
+func (h *Handler) sendAsync(msg *pb.ChaincodeMessage, admission shimResponseAdmission) {
 	go func() {
-		if err := h.serialSend(msg); err != nil {
+		var err error
+		if admission.generation != nil {
+			err = h.sendMessage(msg, admission.generation)
+			admission.release()
+			if err == errProtectedShimResponseRevoked {
+				// The queued payload was discarded. Only a generic error may
+				// follow, even if this stream is still serving other channels.
+				err = h.serialSend(&pb.ChaincodeMessage{
+					Type: pb.ChaincodeMessage_ERROR, Payload: []byte(err.Error()),
+					Txid: msg.GetTxid(), ChannelId: msg.GetChannelId(),
+				})
+			}
+		} else {
+			err = h.serialSend(msg)
+		}
+		if err != nil {
 			// provide an error response to the caller
 			resp := &pb.ChaincodeMessage{
 				Type:      pb.ChaincodeMessage_ERROR,
@@ -369,9 +455,17 @@ func (h *Handler) serialSendAsync(msg *pb.ChaincodeMessage) {
 			h.Notify(resp)
 
 			// surface send error to stream processing
-			h.errChan <- err
+			h.signalStreamError(err)
 		}
 	}()
+}
+
+func (h *Handler) signalStreamError(err error) {
+	select {
+	case h.errChan <- err:
+	default:
+		// A prior error already requested shutdown.
+	}
 }
 
 // Check if the transactor is allow to call this chaincode on this channel
@@ -1344,6 +1438,10 @@ func (h *Handler) HandleWriteBatch(msg *pb.ChaincodeMessage, txContext *Transact
 
 // Handles requests that modify ledger state
 func (h *Handler) HandleInvokeChaincode(msg *pb.ChaincodeMessage, txContext *TransactionContext) (*pb.ChaincodeMessage, error) {
+	return h.invokeChaincode(msg, txContext, nil)
+}
+
+func (h *Handler) invokeChaincode(msg *pb.ChaincodeMessage, txContext *TransactionContext, admission *shimResponseAdmission) (*pb.ChaincodeMessage, error) {
 	chaincodeLogger.Debugf("[%s] C-call-C", shorttxid(msg.GetTxid()))
 
 	chaincodeSpec := &pb.ChaincodeSpec{}
@@ -1361,9 +1459,18 @@ func (h *Handler) HandleInvokeChaincode(msg *pb.ChaincodeMessage, txContext *Tra
 		// use caller's channel as the called chaincode is in the same channel
 		targetInstance.ChannelID = txContext.ChannelID
 	}
-	if targetInstance.ChannelID != txContext.ChannelID &&
-		h.RequiresProtection != nil && h.RequiresProtection(targetInstance.ChannelID) {
-		return nil, errors.New("cross-channel invocation into a protected channel is disabled")
+	if targetInstance.ChannelID != txContext.ChannelID && h.acquireAdmission != nil {
+		generation, release, err := h.acquireAdmission(targetInstance.ChannelID)
+		if err != nil {
+			return nil, err
+		}
+		if generation != nil {
+			if admission == nil {
+				release()
+				return nil, errors.New("protected cross-channel invocation requires a shim response stream")
+			}
+			*admission = shimResponseAdmission{generation: generation, release: release}
+		}
 	}
 	chaincodeLogger.Debugf("[%s] C-call-C %s on channel %s", shorttxid(msg.GetTxid()), targetInstance.ChaincodeName, targetInstance.ChannelID)
 

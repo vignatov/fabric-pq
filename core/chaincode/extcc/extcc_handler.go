@@ -8,6 +8,7 @@ package extcc
 
 import (
 	"context"
+	"sync"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
@@ -27,6 +28,13 @@ type StreamHandler interface {
 type ExternalChaincodeRuntime struct {
 	TransportPolicy *pqtransport.Policy
 }
+
+type externalStream struct {
+	pb.Chaincode_ConnectClient
+	abort func()
+}
+
+func (s *externalStream) Abort() { s.abort() }
 
 // createConnection - standard grpc client creating using ClientConfig info (surprised there isn't
 // a helper method for this)
@@ -55,7 +63,8 @@ func (i *ExternalChaincodeRuntime) Stream(ccid string, ccinfo *ccintf.ChaincodeS
 		return errors.WithMessagef(err, "error cannot create connection for %s", ccid)
 	}
 
-	defer conn.Close()
+	closeConnection := sync.OnceFunc(func() { _ = conn.Close() })
+	defer closeConnection()
 
 	// create the client and start streaming
 	client := pb.NewChaincodeClient(conn)
@@ -66,7 +75,7 @@ func (i *ExternalChaincodeRuntime) Stream(ccid string, ccinfo *ccintf.ChaincodeS
 	}
 
 	// peer as client has to initiate the stream. Rest of the process is unchanged
-	if err := sHandler.HandleChaincodeStream(stream); err != nil {
+	if err := sHandler.HandleChaincodeStream(&externalStream{Chaincode_ConnectClient: stream, abort: closeConnection}); err != nil {
 		return errors.WithMessagef(err, "error handling chaincode stream for %s", ccid)
 	}
 
