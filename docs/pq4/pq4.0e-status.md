@@ -82,9 +82,9 @@ arguments on Linux. Other platforms fail closed.
 | Fixed managed systemd unit and installer | Provided; VM installation and verification incomplete |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Incomplete: protected service installation and provisioning lifecycle required |
 | Authenticated onboarding and non-genesis join provenance | Incomplete |
-| Peer bootstrap and endorsement, Gateway and background admission | Endorsement dispatch has a generation-lease hook; controller installation and other admission remain incomplete |
-| Peer native commit adapter with staged approval | Real-ledger race tests passed; not selected by peer startup |
-| Protected peer lifecycle assembly | Private validation, serving publication and guarded committer exercised with a real ledger; not selected by peer startup |
+| Peer bootstrap and endorsement, Gateway and background admission | Channel creation selects the controller from an authenticated registry when supplied by trusted startup; managed startup and other admission remain incomplete |
+| Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
+| Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
 | Orderer service, stream and follower integration under strict transport | Incomplete |
 | Orderer broadcast validation generation lease | Validation lease and cancellation-aware Raft readiness implemented; end-to-end handoff remains incomplete |
 | Cluster send cancellation and shutdown reporting | Component race tests passed; protected handoff and lease ownership remain incomplete |
@@ -115,10 +115,9 @@ lock. It retains a generation lease for ordinary native commits and rejects
 malformed or mixed protected blocks. Real-ledger tests exercise authorized
 commit, TLS-root publication after the native commit, and quarantine when
 approval is missing. A blocked-commit test checks that the generation does not
-drain until the native operation stops. Peer channel creation does not yet
-construct this adapter: the private validator source, controller bootstrap,
-protected service admission and activation-controlled TLS and Gateway
-publication must be integrated first.
+drain until the native operation stops. Peer channel creation now attaches
+this adapter and a private validator source when the authenticated registry
+selects the channel.
 
 The peer now has a protected lifecycle assembly that binds separate private
 validation and serving channels, the guarded committer and the staged resource
@@ -127,9 +126,14 @@ controller recovery, and the lifecycle's peer recovery refuses to open the
 gate without a publisher. A real-ledger component test exercises candidate
 validation, rejection of a candidate after private validation advanced,
 publication failure, recovery and reconstruction with new peer
-objects after ledger reopen in the same process. A fresh-process reconstruction
-test is still required. Production channel
-creation does not yet select this assembly or authenticate its controller.
+objects after ledger reopen in the same process. Channel creation checks the
+genesis anchor and reconciles the committed config block against world state
+before exposing the serving channel. The real-ledger join test also checks
+that an unapproved genesis never creates a ledger. Enrolled peers reject
+snapshot imports until their provenance can be checked before import.
+Trusted startup must supply the registry and open the ledger manager at the
+manifest's ledger directory. Managed protected startup and a fresh-process
+reconstruction test remain pending.
 Staged peer configuration failures close admission while the store is locked,
 and the lifecycle publisher resets the private validation source to the
 authenticated committed bundle before admission can reopen. Malformed block
@@ -138,8 +142,7 @@ shape also closes admission in the protected committer.
 The peer's endorsement adapter now acquires its identity deserializer from
 the serving generation and holds the generation lease through endorsement
 work. A closed generation rejects the result, and closed admission rejects
-dispatch. Peer channel creation does not yet install the controller, so these
-checks are not evidence of protected process admission. For protected calls,
+dispatch. For protected calls,
 the peer gRPC stats handler retains the lease through the server RPC end after
 the unary send; a missing or streaming response scope fails closed. A real
 gRPC component test holds response serialization open after the handler returns and checks an
@@ -154,26 +157,21 @@ failure and unrelated-channel behavior. The peer previews the aggregate roots
 and validates the server trust-pool update before publishing the credential
 snapshot; a component test checks that a failed server update leaves the
 snapshot unchanged. The existing baseline callback still prepares and
-publishes immediately. Protected activation has not been wired to this API;
-server TLS credentials and Gateway connection caches are not yet published by
-an authenticated peer activation controller.
+publishes immediately. The protected channel controller uses staged
+publication instead.
 
 The Gateway now registers a protected staging function with the peer. An
 activation publication hook prepares TLS and registered cache candidates
 before publishing them and propagates publication or retirement errors. A
 real-ledger component test exercises a failed cache publication, closed
-admission and successful recovery retry. Production channel creation does not
-yet install this hook on an authenticated controller or select the protected
-committer; ordinary callbacks still publish baseline resources.
-Gateway is created after existing peer channels are initialized. Protected
-startup must therefore rebuild and publish each existing channel's Gateway
-candidate under closed admission before Gateway can serve; registering the
-stage alone does not reconstruct those caches. Registration rejects an
-already-serving protected channel. Protected lifecycle publication now retains
-the registration barrier until the serving generation opens, preventing a
-stage from being inserted between publication and admission. Channel creation
-must also be serialized and the late-registration recovery path is not yet
-wired.
+admission and successful recovery retry. Gateway registers its stage before
+peer channel loading, so protected recovery reconstructs the cache under
+closed admission. Registration rejects both a channel under creation and an
+already-serving protected channel. The publication barrier also prevents a
+stage from being inserted between publication and admission. Gateway
+`CommitStatus` cancels waits on generation closure and holds its lease
+through unary response completion. Other Gateway RPCs and managed strict
+transport integration remain pending.
 
 Gateway orderer endpoints can now be prepared without publishing them. Its
 connection cache is scoped by channel, MSP and TLS roots; publishing a changed

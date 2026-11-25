@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 )
@@ -144,25 +145,72 @@ func Verify(manifestBytes, historyBytes []byte, authority *mldsa.PublicKey) (*Ma
 // AuthenticateProtected validates runtime security state against the signer
 // and identity pinned by the manifest. Channel recovery remains mandatory.
 func AuthenticateProtected(manifest *Manifest) error {
+	_, err := OpenProtectedRegistry(manifest)
+	return err
+}
+
+// Registry selects channels from the authenticated checkpoint on a protected
+// node. It is constructed from an independently verified enrollment manifest.
+type Registry struct {
+	store   *activation.Store
+	key     *mldsa.PublicKey
+	policy  *pqtransport.Policy
+	network string
+	node    string
+	root    string
+}
+
+// OpenProtectedRegistry validates protection state and retains the store used
+// by all controllers on this node. The caller must verify the manifest first.
+func OpenProtectedRegistry(manifest *Manifest) (*Registry, error) {
 	if manifest == nil || manifest.Mode != Protected {
-		return errors.New("protected manifest required")
+		return nil, errors.New("protected manifest required")
 	}
 	raw, err := os.ReadFile(manifest.PolicySigner)
 	if err != nil {
-		return fmt.Errorf("read policy signer: %w", err)
+		return nil, fmt.Errorf("read policy signer: %w", err)
 	}
 	digest := sha256.Sum256(raw)
 	if hex.EncodeToString(digest[:]) != manifest.PolicySignerDigest {
-		return errors.New("policy signer conflicts with manifest")
+		return nil, errors.New("policy signer conflicts with manifest")
 	}
 	key, err := mldsa.NewPublicKey(mldsa.MLDSA65(), raw)
 	if err != nil {
-		return fmt.Errorf("parse policy signer: %w", err)
+		return nil, fmt.Errorf("parse policy signer: %w", err)
 	}
 	store, err := activation.OpenStore(manifest.StateDir, nil)
 	if err != nil {
-		return fmt.Errorf("open protected state: %w", err)
+		return nil, fmt.Errorf("open protected state: %w", err)
 	}
-	_, err = store.AuthenticateRegistry(key, manifest.Network, manifest.Node)
-	return err
+	policy, err := store.AuthenticateRegistry(key, manifest.Network, manifest.Node)
+	if err != nil {
+		return nil, err
+	}
+	return &Registry{
+		store: store, key: key, policy: policy, network: manifest.Network,
+		node: manifest.Node, root: manifest.LedgerDir,
+	}, nil
+}
+
+// LedgerRoot is the ledger directory pinned by the enrollment manifest.
+func (r *Registry) LedgerRoot() string {
+	return r.root
+}
+
+// Controller returns a closed controller for an enrolled channel. A nil result
+// means the authenticated checkpoint has no binding for the channel.
+func (r *Registry) Controller(id string, crypto bccsp.BCCSP) *activation.Channel {
+	if !r.RequiresProtection(id) {
+		return nil
+	}
+	return &activation.Channel{
+		ID: id, Network: r.network, Node: r.node, Signer: r.key,
+		Store: r.store, Gate: &activation.Gate{}, Crypto: crypto,
+	}
+}
+
+// RequiresProtection reports the authenticated channel selection.
+func (r *Registry) RequiresProtection(id string) bool {
+	_, ok := r.policy.Channel(id)
+	return ok
 }

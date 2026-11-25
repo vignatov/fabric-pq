@@ -11,6 +11,7 @@ import (
 
 	gp "github.com/hyperledger/fabric-protos-go-apiv2/gateway"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/protoutil"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,6 +44,30 @@ func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedComm
 		return nil, status.Error(codes.InvalidArgument, "transaction ID should not be empty")
 	}
 
+	var generation context.Context
+	var release func()
+	if gs.acquireAdmission != nil {
+		var admitted bool
+		generation, release, admitted = gs.acquireAdmission(request.GetChannelId())
+		if !admitted {
+			return nil, status.Error(codes.Unavailable, "protected channel admission is closed")
+		}
+	}
+	if generation != nil {
+		if !comm.RetainUntilRPCEnd(ctx, release) {
+			release()
+			return nil, status.Error(codes.Unavailable, "protected commit status requires a unary response scope")
+		}
+		waitCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		stop := context.AfterFunc(generation, cancel)
+		defer stop()
+		ctx = waitCtx
+		if generation.Err() != nil {
+			return nil, status.Error(codes.Unavailable, "protected channel admission is closed")
+		}
+	}
+
 	signedData := &protoutil.SignedData{
 		Data:      signedRequest.GetRequest(),
 		Identity:  request.GetIdentity(),
@@ -53,6 +78,9 @@ func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedComm
 	}
 
 	txStatus, err := gs.commitFinder.TransactionStatus(ctx, request.GetChannelId(), request.GetTransactionId())
+	if generation != nil && generation.Err() != nil {
+		return nil, status.Error(codes.Unavailable, "protected channel admission is closed")
+	}
 	if err != nil {
 		return nil, toRpcError(err, codes.Aborted)
 	}

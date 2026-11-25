@@ -8,6 +8,7 @@ package peer
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,13 +28,72 @@ import (
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/kvledger"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestPQ40ECreateChannelRecoversProtectedResources(t *testing.T) {
+	fixture := testfixture.New(t)
+	genesis := testfixture.Genesis(t)
+	root := t.TempDir()
+	state := t.TempDir()
+	store, err := activation.OpenStore(state, nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, testfixture.Config(t, genesis))
+	controller := fixture.Channel(store, activation.Ledger{})
+	key := controller.Signer.Bytes()
+	keyFile := filepath.Join(state, "policy-key")
+	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
+	channelDigest := sha256.Sum256([]byte(testfixture.ChannelID))
+	anchor, err := json.Marshal(hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(state, "genesis-"+hex.EncodeToString(channelDigest[:])), anchor, 0o600))
+
+	keyDigest := sha256.Sum256(key)
+	registry, err := enrollment.OpenProtectedRegistry(&enrollment.Manifest{
+		Mode: enrollment.Protected, Network: testfixture.Network, Node: testfixture.Node,
+		Profile: pqtransport.ProfileV1, PolicySigner: keyFile, PolicySignerDigest: hex.EncodeToString(keyDigest[:]),
+		StateDir: state, LedgerDir: filepath.Join(root, "ledgersData"),
+	})
+	require.NoError(t, err)
+	p, cleanup := newTestPeer(t, root)
+	t.Cleanup(cleanup)
+	t.Cleanup(p.GossipService.Stop)
+	p.ProtectedRegistry = registry
+	p.Initialize(nil, nil, nil, nil, nil, nil, 1)
+
+	badGenesis := proto.CloneOf(genesis)
+	badGenesis.Header.DataHash = nil
+	require.ErrorContains(t, p.CreateChannel(testfixture.ChannelID, badGenesis, nil, nil, nil), "authorize protected genesis")
+	ids, err := p.LedgerMgr.GetLedgerIDs()
+	require.NoError(t, err)
+	require.Empty(t, ids)
+
+	published := false
+	require.NoError(t, p.AddProtectedConfigStage(func(bundle *channelconfig.Bundle) (func() error, error) {
+		require.Equal(t, testfixture.ChannelID, bundle.ConfigtxValidator().ChannelID())
+		return func() error {
+			require.Nil(t, p.Channel(testfixture.ChannelID))
+			published = true
+			return nil
+		}, nil
+	}))
+	require.NoError(t, p.CreateChannel(testfixture.ChannelID, genesis, nil, nil, nil))
+	require.True(t, published)
+	channel := p.Channel(testfixture.ChannelID)
+	require.NotNil(t, channel)
+	require.NotNil(t, channel.activation)
+	_, generation, release, ok := channel.AcquireEndorsement()
+	require.True(t, ok)
+	defer release()
+	require.NotNil(t, generation.Done())
+}
 
 func TestPQ40CPeerActivation(t *testing.T) {
 	for _, scenario := range []string{"authorized", "staged authorized", "staged publish retry", "staged missing operator", "missing operator", "missing Fabric signature", "committed without preparation", "mismatching join"} {

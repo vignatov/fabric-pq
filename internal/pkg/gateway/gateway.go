@@ -33,6 +33,7 @@ type Server struct {
 	logger           *flogging.FabricLogger
 	ledgerProvider   ledger.Provider
 	getChannelConfig channelConfigGetter
+	acquireAdmission func(string) (context.Context, func(), bool)
 }
 
 type EndorserServerAdapter struct {
@@ -89,6 +90,7 @@ func CreateServer(
 	if err := peerInstance.AddProtectedConfigStage(server.registry.prepareProtectedConfigUpdate); err != nil {
 		return nil, err
 	}
+	server.acquireAdmission = peerInstance.AcquireChannelAdmission
 	peerInstance.AddConfigCallbacks(server.registry.configUpdate)
 
 	return server, nil

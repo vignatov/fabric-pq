@@ -9,16 +9,51 @@ package gateway
 import (
 	"context"
 	"testing"
+	"time"
 
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/gateway"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/gateway/commit"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/stats"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestPQ40ECommitStatusCancelsWaitAndRetainsGeneration(t *testing.T) {
+	test := prepareTest(t, &testDef{})
+	generation, cancelGeneration := context.WithCancel(t.Context())
+	defer cancelGeneration()
+	released := false
+	test.server.acquireAdmission = func(channel string) (context.Context, func(), bool) {
+		require.Equal(t, testChannel, channel)
+		return generation, func() { released = true }, true
+	}
+	rpcCtx, cancelRPC := context.WithTimeout(t.Context(), time.Second)
+	defer cancelRPC()
+	handler := &comm.ServerStatsHandler{}
+	ctx := handler.TagRPC(rpcCtx, &stats.RPCTagInfo{})
+	handler.HandleRPC(ctx, &stats.Begin{})
+	test.finder.TransactionStatusCalls(func(ctx context.Context, _, _ string) (*commit.Status, error) {
+		cancelGeneration()
+		<-ctx.Done()
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+		return nil, ctx.Err()
+	})
+	signed := &pb.SignedCommitStatusRequest{Request: protoutil.MarshalOrPanic(&pb.CommitStatusRequest{
+		ChannelId: testChannel, Identity: []byte("IDENTITY"), TransactionId: "TX_ID",
+	})}
+	response, err := test.server.CommitStatus(ctx, signed)
+	require.Nil(t, response)
+	require.Equal(t, codes.Unavailable, status.Code(err))
+	require.False(t, released)
+	handler.HandleRPC(ctx, &stats.End{})
+	require.True(t, released)
+}
 
 func TestCommitStatus(t *testing.T) {
 	tests := []testDef{

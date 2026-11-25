@@ -791,7 +791,79 @@ func serve(args []string) error {
 		gossipService.UpdateChaincodes(chaincodes.AsChaincodes(), gossipcommon.ChannelID(channel))
 	}))
 
-	// this brings up all the channels
+	var discoveryService *discovery.Service
+	if coreConfig.DiscoveryEnabled {
+		discoveryService = createDiscoveryService(
+			coreConfig,
+			peerInstance,
+			peerServer,
+			policyMgr,
+			lifecycle.NewMetadataProvider(
+				lifecycleCache,
+				legacyMetadataManager,
+				peerInstance,
+			),
+			gossipService,
+		)
+		logger.Info("Discovery service activated")
+		discprotos.RegisterDiscoveryServer(peerServer.Server(), discoveryService)
+	}
+
+	// get a list of ledger IDs and load preResetHeight files for these ledger IDs
+	ledgerIDs, err := peerInstance.LedgerMgr.GetLedgerIDs()
+	if err != nil {
+		return errors.WithMessage(err, "failed to get ledger IDs")
+	}
+
+	// check to see if the peer ledgers have been reset
+	rootFSPath := filepath.Join(coreconfig.GetPath("peer.fileSystemPath"), "ledgersData")
+	preResetHeights, err := kvledger.LoadPreResetHeight(rootFSPath, ledgerIDs)
+	if err != nil {
+		return fmt.Errorf("error loading prereset height: %w", err)
+	}
+
+	for cid, height := range preResetHeights {
+		logger.Infof("Ledger rebuild: channel [%s]: preresetHeight: [%d]", cid, height)
+	}
+
+	var resetFilter *reset
+	if len(preResetHeights) > 0 {
+		logger.Info("Ledger rebuild: Entering loop to check if current ledger heights surpass prereset ledger heights. Endorsement request processing will be disabled.")
+		resetFilter = &reset{
+			reject: true,
+		}
+		authFilters = append(authFilters, resetFilter)
+	}
+
+	// start the peer server
+	auth := authHandler.ChainFilters(serverEndorser, authFilters...)
+	// Register the Endorser server
+	pb.RegisterEndorserServer(peerServer.Server(), auth)
+
+	if coreConfig.GatewayOptions.Enabled {
+		if coreConfig.DiscoveryEnabled {
+			logger.Info("Starting peer with Gateway enabled")
+
+			gatewayServer, err := gateway.CreateServer(
+				auth,
+				discoveryService,
+				peerInstance,
+				&serverConfig.SecOpts,
+				aclProvider,
+				coreConfig.LocalMSPID,
+				coreConfig.GatewayOptions,
+				builtinSCCs,
+			)
+			if err != nil {
+				return fmt.Errorf("initialize Gateway protected resources: %w", err)
+			}
+			gatewayprotos.RegisterGatewayServer(peerServer.Server(), gatewayServer)
+		} else {
+			logger.Warning("Discovery service must be enabled for embedded gateway")
+		}
+	}
+
+	// Open channels after the Gateway has registered its resource publisher.
 	peerInstance.Initialize(
 		func(cid string) {
 			// initialize the metadata for this channel.
@@ -824,22 +896,8 @@ func serve(args []string) error {
 		coreConfig.ValidatorPoolSize,
 	)
 
-	var discoveryService *discovery.Service
-	if coreConfig.DiscoveryEnabled {
-		discoveryService = createDiscoveryService(
-			coreConfig,
-			peerInstance,
-			peerServer,
-			policyMgr,
-			lifecycle.NewMetadataProvider(
-				lifecycleCache,
-				legacyMetadataManager,
-				peerInstance,
-			),
-			gossipService,
-		)
-		logger.Info("Discovery service activated")
-		discprotos.RegisterDiscoveryServer(peerServer.Server(), discoveryService)
+	if resetFilter != nil {
+		go resetLoop(resetFilter, preResetHeights, ledgerIDs, peerInstance.GetLedger, 10*time.Second)
 	}
 
 	logger.Infof("Starting peer with ID=[%s], network ID=[%s], address=[%s]", coreConfig.PeerID, coreConfig.NetworkID, coreConfig.PeerAddress)
@@ -869,60 +927,6 @@ func serve(args []string) error {
 	}))
 
 	logger.Infof("Started peer with ID=[%s], network ID=[%s], address=[%s]", coreConfig.PeerID, coreConfig.NetworkID, coreConfig.PeerAddress)
-
-	// get a list of ledger IDs and load preResetHeight files for these ledger IDs
-	ledgerIDs, err := peerInstance.LedgerMgr.GetLedgerIDs()
-	if err != nil {
-		return errors.WithMessage(err, "failed to get ledger IDs")
-	}
-
-	// check to see if the peer ledgers have been reset
-	rootFSPath := filepath.Join(coreconfig.GetPath("peer.fileSystemPath"), "ledgersData")
-	preResetHeights, err := kvledger.LoadPreResetHeight(rootFSPath, ledgerIDs)
-	if err != nil {
-		return fmt.Errorf("error loading prereset height: %w", err)
-	}
-
-	for cid, height := range preResetHeights {
-		logger.Infof("Ledger rebuild: channel [%s]: preresetHeight: [%d]", cid, height)
-	}
-
-	if len(preResetHeights) > 0 {
-		logger.Info("Ledger rebuild: Entering loop to check if current ledger heights surpass prereset ledger heights. Endorsement request processing will be disabled.")
-		resetFilter := &reset{
-			reject: true,
-		}
-		authFilters = append(authFilters, resetFilter)
-		go resetLoop(resetFilter, preResetHeights, ledgerIDs, peerInstance.GetLedger, 10*time.Second)
-	}
-
-	// start the peer server
-	auth := authHandler.ChainFilters(serverEndorser, authFilters...)
-	// Register the Endorser server
-	pb.RegisterEndorserServer(peerServer.Server(), auth)
-
-	if coreConfig.GatewayOptions.Enabled {
-		if coreConfig.DiscoveryEnabled {
-			logger.Info("Starting peer with Gateway enabled")
-
-			gatewayServer, err := gateway.CreateServer(
-				auth,
-				discoveryService,
-				peerInstance,
-				&serverConfig.SecOpts,
-				aclProvider,
-				coreConfig.LocalMSPID,
-				coreConfig.GatewayOptions,
-				builtinSCCs,
-			)
-			if err != nil {
-				return fmt.Errorf("initialize Gateway protected resources: %w", err)
-			}
-			gatewayprotos.RegisterGatewayServer(peerServer.Server(), gatewayServer)
-		} else {
-			logger.Warning("Discovery service must be enabled for embedded gateway")
-		}
-	}
 
 	// register the snapshot server
 	snapshotSvc := &snapshotgrpc.SnapshotService{LedgerGetter: peerInstance, ACLProvider: aclProvider}

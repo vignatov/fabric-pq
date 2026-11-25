@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package peer
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/hyperledger/fabric/gossip/api"
 	gossipservice "github.com/hyperledger/fabric/gossip/service"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/msp"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/protoutil"
@@ -120,8 +122,8 @@ func (p *Peer) publishTrustedRoots(snapshot *comm.TrustedRootsSnapshot) error {
 type ProtectedConfigStage func(*channelconfig.Bundle) (func() error, error)
 
 // AddProtectedConfigStage registers an activation-owned resource publisher.
-// Existing protected channels must be closed and reconstructed before the new
-// consumer serves traffic. Channel creation must be serialized with this call.
+// Register stages before opening channels. Existing protected channels must be
+// closed and recovered before the new consumer serves traffic.
 func (p *Peer) AddProtectedConfigStage(stage ProtectedConfigStage) error {
 	if stage == nil {
 		return errors.New("protected resource stage is required")
@@ -130,6 +132,9 @@ func (p *Peer) AddProtectedConfigStage(stage ProtectedConfigStage) error {
 	defer p.protectedStagesLock.Unlock()
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
+	if len(p.protectedCreating) != 0 {
+		return errors.New("protected channel creation must finish before registering a resource stage")
+	}
 	for id, channel := range p.channels {
 		if channel.activation != nil && channel.activation.Ready() {
 			return errors.Errorf("protected channel %s must be closed before registering a resource stage", id)
@@ -236,6 +241,9 @@ type Peer struct {
 	LedgerMgr                *ledgermgmt.LedgerMgr
 	OrdererEndpointOverrides map[string]*orderers.Endpoint
 	CryptoProvider           bccsp.BCCSP
+	// ProtectedRegistry must be installed by trusted startup before opening
+	// channels, with the ledger manager using the manifest's ledger directory.
+	ProtectedRegistry *enrollment.Registry
 
 	// validationWorkersSemaphore is used to limit the number of concurrent validation
 	// go routines.
@@ -246,9 +254,10 @@ type Peer struct {
 	channelInitializer func(cid string)
 
 	// channels is a map of channelID to channel
-	mutex        sync.RWMutex
-	channels     map[string]*Channel
-	tlsRootsLock sync.Mutex
+	mutex             sync.RWMutex
+	channels          map[string]*Channel
+	protectedCreating map[string]struct{}
+	tlsRootsLock      sync.Mutex
 
 	configCallbacks       []channelconfig.BundleActor
 	protectedStagesLock   sync.RWMutex
@@ -277,6 +286,14 @@ func (p *Peer) CreateChannel(
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
 	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
 ) error {
+	if p.ProtectedRegistry != nil {
+		if controller := p.ProtectedRegistry.Controller(cid, p.CryptoProvider); controller != nil {
+			controller.Validate = validateProtectedPeerConfig
+			if err := controller.AuthorizeGenesis(cb); err != nil {
+				return errors.Wrapf(err, "authorize protected genesis for %s", cid)
+			}
+		}
+	}
 	l, err := p.LedgerMgr.CreateLedger(cid, cb)
 	if err != nil {
 		return errors.WithMessage(err, "cannot create ledger from genesis block")
@@ -297,6 +314,9 @@ func (p *Peer) CreateChannelFromSnapshot(
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
 	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
 ) error {
+	if p.ProtectedRegistry != nil {
+		return errors.New("snapshot joins require protected enrollment verification before importing the ledger")
+	}
 	channelCallback := func(l ledger.PeerLedger, cid string) {
 		if err := p.createChannel(cid, l, deployedCCInfoProvider, legacyLifecycleValidation, newLifecycleValidation); err != nil {
 			logger.Errorf("error creating channel for %s", cid)
@@ -331,6 +351,32 @@ func (p *Peer) createChannel(
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
 	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
 ) error {
+	controller := p.protectedController(cid, l)
+	if controller != nil {
+		p.mutex.Lock()
+		_, creating := p.protectedCreating[cid]
+		if creating || p.channels[cid] != nil {
+			p.mutex.Unlock()
+			return errors.Errorf("protected channel %s already exists or is being created", cid)
+		}
+		if p.protectedCreating == nil {
+			p.protectedCreating = make(map[string]struct{})
+		}
+		p.protectedCreating[cid] = struct{}{}
+		p.mutex.Unlock()
+		defer func() {
+			p.mutex.Lock()
+			delete(p.protectedCreating, cid)
+			p.mutex.Unlock()
+		}()
+		genesis, err := l.GetBlockByNumber(0)
+		if err != nil {
+			return errors.Wrap(err, "load protected genesis")
+		}
+		if err := controller.VerifyGenesis(genesis); err != nil {
+			return errors.Wrap(err, "verify protected genesis")
+		}
+	}
 	chanConf, err := RetrievePersistedChannelConfig(l)
 	if err != nil {
 		return err
@@ -341,9 +387,14 @@ func (p *Peer) createChannel(
 		return err
 	}
 
-	capabilitiesSupportedOrPanic(bundle)
-	if err := validateHybridLocalSigner(bundle); err != nil {
-		return errors.Wrapf(err, "[channel %s] incompatible local signing identity", cid)
+	if controller == nil {
+		capabilitiesSupportedOrPanic(bundle)
+		err = validateHybridLocalSigner(bundle)
+	} else {
+		err = validateProtectedPeerConfig(bundle)
+	}
+	if err != nil {
+		return errors.Wrapf(err, "[channel %s] incompatible channel configuration", cid)
 	}
 
 	channelconfig.LogSanityChecks(bundle)
@@ -383,43 +434,58 @@ func (p *Peer) createChannel(
 		mspmgmt.XXXSetMSPManager(cid, bundle.MSPManager())
 	}
 
-	channel := &Channel{
-		ledger:         l,
-		resources:      bundle,
-		cryptoProvider: p.CryptoProvider,
+	// Open the transient store before any callbacks publish channel resources.
+	store, err := p.openStore(cid)
+	if err != nil {
+		return errors.Wrapf(err, "[channel %s] failed opening transient store", cid)
 	}
-
-	callbacks := []channelconfig.BundleActor{
-		gossipCallbackWrapper,
-		trustedRootsCallbackWrapper,
-		mspCallback,
-		channel.bundleUpdate,
-	}
-	callbacks = append(callbacks, p.configCallbacks...)
-
-	channel.bundleSource = channelconfig.NewBundleSource(
-		bundle,
-		callbacks...,
-	)
-
-	committer := committer.NewLedgerCommitter(l, func(block *common.Block) {
-		if protoutil.IsConfigBlock(block) {
-			channel.ValidateConfigActivation()
+	var channel, validationChannel *Channel
+	var channelCommitter committer.Committer
+	policyManager := p.GetPolicyManager
+	if controller == nil {
+		channel = &Channel{ledger: l, resources: bundle, cryptoProvider: p.CryptoProvider}
+		callbacks := []channelconfig.BundleActor{
+			gossipCallbackWrapper, trustedRootsCallbackWrapper, mspCallback, channel.bundleUpdate,
 		}
-	})
+		channel.bundleSource = channelconfig.NewBundleSource(bundle, append(callbacks, p.configCallbacks...)...)
+		validationChannel = channel
+		channelCommitter = committer.NewLedgerCommitter(l, func(block *common.Block) {
+			if protoutil.IsConfigBlock(block) {
+				channel.ValidateConfigActivation()
+			}
+		})
+	} else {
+		lifecycle, err := p.newProtectedLifecycle(controller, l, bundle, committer.NewLedgerCommitter(l, nil), mspCallback, gossipCallbackWrapper)
+		if err != nil {
+			return err
+		}
+		if err := lifecycle.recover(); err != nil {
+			return errors.Wrap(err, "recover protected peer channel")
+		}
+		channel, validationChannel, channelCommitter = lifecycle.serving, lifecycle.validation, lifecycle.committer
+		policyManager = func(id string) policies.Manager {
+			if id == cid {
+				return validationChannel.PolicyManager()
+			}
+			return p.GetPolicyManager(id)
+		}
+	}
+	channel.store = store
+	validationChannel.store = store
+
 	validator := &txvalidator.ValidationRouter{
-		CapabilityProvider: channel,
+		CapabilityProvider: validationChannel,
 		V14Validator: validatorv14.NewTxValidator(
 			cid,
 			p.validationWorkersSemaphore,
-			channel,
+			validationChannel,
 			p.pluginMapper,
 			p.CryptoProvider,
 		),
 		V20Validator: validatorv20.NewTxValidator(
 			cid,
 			p.validationWorkersSemaphore,
-			channel,
+			validationChannel,
 			channel.Ledger(),
 			&vir.ValidationInfoRetrieveShim{
 				New:    newLifecycleValidation,
@@ -430,19 +496,15 @@ func (p *Peer) createChannel(
 				ChannelID:                       bundle.ConfigtxValidator().ChannelID(),
 			},
 			p.pluginMapper,
-			policies.PolicyManagerGetterFunc(p.GetPolicyManager),
+			policies.PolicyManagerGetterFunc(policyManager),
 			p.CryptoProvider,
 		),
 	}
 
-	// TODO: does someone need to call Close() on the transientStoreFactory at shutdown of the peer?
-	store, err := p.openStore(bundle.ConfigtxValidator().ChannelID())
-	if err != nil {
-		return errors.Wrapf(err, "[channel %s] failed opening transient store", bundle.ConfigtxValidator().ChannelID())
-	}
-	channel.store = store
-
 	var idDeserializerFactory privdata.IdentityDeserializerFactoryFunc = func(channelID string) msp.IdentityDeserializer {
+		if channelID == cid {
+			return channel.MSPManager()
+		}
 		return p.Channel(channelID).MSPManager()
 	}
 	simpleCollectionStore := privdata.NewSimpleCollectionStore(l, deployedCCInfoProvider, idDeserializerFactory)
@@ -453,7 +515,7 @@ func (p *Peer) createChannel(
 		store,
 		gossipservice.Support{
 			Validator:            validator,
-			Committer:            committer,
+			Committer:            channelCommitter,
 			CollectionStore:      simpleCollectionStore,
 			IdDeserializeFactory: idDeserializerFactory,
 			CapabilityProvider:   channel,
@@ -479,6 +541,20 @@ func (p *Peer) Channel(cid string) *Channel {
 		return c
 	}
 	return nil
+}
+
+// AcquireChannelAdmission distinguishes unprotected channels from protected
+// channels whose recovery has not yet made a serving generation available.
+func (p *Peer) AcquireChannelAdmission(cid string) (context.Context, func(), bool) {
+	if p.ProtectedRegistry == nil || !p.ProtectedRegistry.RequiresProtection(cid) {
+		return nil, nil, true
+	}
+	channel := p.Channel(cid)
+	if channel == nil || channel.activation == nil {
+		return nil, nil, false
+	}
+	_, generation, release, ok := channel.activation.Gate.Acquire()
+	return generation, release, ok
 }
 
 func (p *Peer) StoreForChannel(cid string) *transientstore.Store {
