@@ -58,7 +58,7 @@ func TestPQ40EBroadcastGenerationAdmission(t *testing.T) {
 				return ctx, func() { released++ }, true
 			}
 			support.WaitReadyCalls(func() error {
-				require.Equal(t, 1, released, "validation lease must not span the blocking handoff")
+				t.Fatal("protected admission must not fall back to unguarded readiness")
 				return nil
 			})
 			if config {
@@ -145,7 +145,8 @@ func TestPQ40EBroadcastRequiresGenerationHandoff(t *testing.T) {
 			t.Run(fmt.Sprintf("config=%t/supported=%t", config, supported), func(t *testing.T) {
 				ctx := t.Context()
 				base := &guardedBroadcastSupport{ChannelSupport: &mock.ChannelSupport{}}
-				base.acquire = func() (context.Context, func(), bool) { return ctx, func() {}, true }
+				released := false
+				base.acquire = func() (context.Context, func(), bool) { return ctx, func() { released = true }, true }
 				base.ProcessNormalMsgReturns(7, nil)
 				base.ProcessConfigUpdateMsgReturns(&cb.Envelope{}, 7, nil)
 				ready := &generationReadySupport{guardedBroadcastSupport: base, wait: func(got context.Context) error {
@@ -157,6 +158,7 @@ func TestPQ40EBroadcastRequiresGenerationHandoff(t *testing.T) {
 				if supported {
 					handoff := func(got context.Context, _ *cb.Envelope, seq uint64) error {
 						called = true
+						require.False(t, released)
 						require.Same(t, ctx, got)
 						require.EqualValues(t, 7, seq)
 						return nil
@@ -175,6 +177,7 @@ func TestPQ40EBroadcastRequiresGenerationHandoff(t *testing.T) {
 					ValidateDuration: validate, EnqueueDuration: enqueue, ProcessedCount: counter,
 				}}
 				response := handler.ProcessMessage(&cb.Envelope{}, "client")
+				require.True(t, released)
 				if supported {
 					require.Equal(t, cb.Status_SUCCESS, response.GetStatus())
 					require.True(t, called)

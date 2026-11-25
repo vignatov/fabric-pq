@@ -86,13 +86,13 @@ arguments on Linux. Other platforms fail closed.
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
 | Orderer service, stream and follower integration under strict transport | Incomplete |
-| Orderer broadcast validation generation lease | Validation lease and cancellation-aware Raft readiness implemented; end-to-end handoff remains incomplete |
-| Cluster send cancellation and shutdown reporting | Component race tests passed; protected handoff and lease ownership remain incomplete |
-| End-to-end orderer generation lease | Incomplete; protected Raft forwarding uses a generation-bound stream, but validation and local submission are not continuously leased |
+| Orderer broadcast validation generation lease | Broadcast holds the validated generation through cancellable readiness and submission |
+| Cluster send cancellation and shutdown reporting | Forwarding retains the exact submit generation through the stream handoff |
+| Orderer Raft generation lease | Local submission transfers admission through the pending batch and proposal queue to the Raft proposal call |
 | Protected Raft membership retry | Implemented; focused race and repeated promotion tests passed |
 | Staged shared TLS resources and crash/restart reconstruction | Incomplete |
 | Peer credential roots preparation and publication failure | Component race tests passed; protected lifecycle integration remains incomplete |
-| Gateway orderer cache preparation and TLS-scoped retirement | Component race tests passed; protected publication and dispatch remain incomplete |
+| Gateway cache publication and admission | Protected unary admission and strict routed transport wired; event streaming remains unavailable for protected channels |
 | Orderer protected bundle callbacks | Focused Linux race test passed; TLS and cache publication proof incomplete |
 | Full service-path and shared-resource inventory | Incomplete |
 | Full regression, integration and final-head CI evidence | Incomplete; see focused evidence below |
@@ -168,20 +168,18 @@ admission and successful recovery retry. Gateway registers its stage before
 peer channel loading, so protected recovery reconstructs the cache under
 closed admission. Registration rejects both a channel under creation and an
 already-serving protected channel. The publication barrier also prevents a
-stage from being inserted between publication and admission. Gateway
-`CommitStatus` cancels waits on generation closure and holds its lease
-through unary response completion. Other Gateway RPCs and managed strict
-transport integration remain pending.
+stage from being inserted between publication and admission. Gateway unary
+RPCs cancel admitted work on generation closure, join outstanding workers
+and retain the lease through the response. Routed protected calls require
+an authenticated strict transport policy. Protected event streaming remains
+unavailable until its iterator and send can be drained safely.
 
-Gateway orderer endpoints can now be prepared without publishing them. Its
-connection cache is scoped by channel, MSP and TLS roots; publishing a changed
-snapshot retires stale connections, reports retirement errors for retry, and
-rejects a connection created against a superseded configuration. Focused race
-tests cover those behaviors and unrelated channels. A retirement error can be
-used by an activation owner to keep admission closed, but the ordinary Gateway
-callback still publishes immediately and only logs that error. The protected
-peer activation controller does not yet own that callback. This is not an
-end-to-end protected proof.
+Gateway prepares orderer endpoints separately from publication. Its orderer
+cache is scoped by channel, MSP and TLS roots. Publication retires stale
+connections, reports retirement errors for retry, and rejects a connection
+created against a superseded configuration. Strict Gateway endorser
+connections are scoped by channel and retired during protected publication,
+so subsequent calls reconnect with the approved TLS roots.
 
 Gateway component race tests also cover publication of an empty endpoint
 snapshot without falling back to discovery, and ensure a failed connection
@@ -196,39 +194,16 @@ channels sharing an address now retain separate cached connections.
 The orderer's protected registrar suppresses initial shared callbacks and
 invokes them through the activation controller after authorization. The
 focused callback test does not prove atomic TLS-root and cached-connection
-publication. Broadcast holds an authenticated serving generation during
-validation and releases it before the potentially blocking Raft handoff.
-Protected broadcast now requires a generation-aware readiness and submission
-interface; it rejects the request if the consenter does not implement that
-interface. The Raft consenter does not yet implement generation-aware submission,
-so protected broadcast remains unavailable. This does not hold a serving
-generation for the whole operation. Protected Raft readiness waits now observe
-the validation generation and return when it closes. Forwarding acquires the
-then-current generation and uses the generation-bound stream send, which holds
-its own lease until the accepted send stops. Validation and local submission
-do not yet carry a single generation through to forwarding. A proposed Raft
-submission cancellation change was removed after a native participation-promotion regression failed.
-The failure also reproduced later with that change absent, so its cause has
-not been established.
-The cluster stream has a context-aware enqueue, checks queued work for
-cancellation, and cancels an in-flight send by closing its stream before
-reporting completion. Stream shutdown reports accepted queued work and
-unblocks a full queue. The protected broadcast/Raft path does not yet use this
-API or retain a generation lease through its completion report. Cancellation
-also cannot retract work already handed to the consensus queue.
-The stream additionally offers a generation-bound send that rejects a stale
-generation and holds its own lease until a queued or in-flight send stops.
-Closing that generation cancels the channel-scoped stream. Linux race tests
-check queued-send drainage, in-flight transport drainage and rejection after
-the gate reopens. Cluster RPC
-can carry that generation through a submit send without allowing a stale caller
-to evict a current stream. This path is not connected to broadcast or Raft and
-does not establish end-to-end safety.
-Adding a lease without addressing those boundaries could
-deadlock an activation waiting for old work to drain. Deliver has existing cancellation
-integration, but protected transport, stream-boundary and recovery evidence
-remain incomplete. Managed protected startup must stay blocked until these
-dependencies are addressed.
+publication. Broadcast holds the validated generation through readiness and
+submission. Forwarding passes that generation into the cluster stream.
+Local Raft submission transfers the lease to the pending batch and then to
+the proposal queue. Waiting work releases its lease on generation closure.
+The proposal worker reacquires the same generation before consuming a queued
+block and retains its active lease until the cancellable Raft proposal call
+returns. Raft can still apply entries it has already accepted. Durable config
+preparation checks the expected generation under the activation store lock,
+and replay still reconciles committed entries before reopening admission.
+Deliver stream coverage and managed strict transport remain incomplete.
 
 ## Focused evidence
 

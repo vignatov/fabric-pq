@@ -52,9 +52,8 @@ func (cs *ChainSupport) AdmissionReady() bool {
 	return cs.activation == nil || cs.activation.Ready()
 }
 
-// AcquireBroadcastAdmission binds validation to the currently approved
-// generation. Callers must release it before entering the blocking Raft
-// handoff; the handoff is not yet generation-leased.
+// AcquireBroadcastAdmission binds validation and the cancellable consensus
+// handoff to the currently approved generation.
 func (cs *ChainSupport) AcquireBroadcastAdmission() (context.Context, func(), bool) {
 	if cs.activation == nil {
 		return nil, func() {}, true

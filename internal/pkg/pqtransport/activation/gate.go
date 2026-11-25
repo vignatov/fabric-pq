@@ -14,8 +14,9 @@ import (
 // Gate admits operations to one immutable serving bundle at a time. Its zero
 // value is closed. The controller is its sole publisher.
 type Gate struct {
-	mu      sync.Mutex
-	current *generation
+	mu       sync.Mutex
+	current  *generation
+	draining *generation
 }
 
 type generation struct {
@@ -81,18 +82,21 @@ func (g *Gate) close() {
 
 func (g *Gate) stop() *generation {
 	g.mu.Lock()
-	current := g.current
-	g.current = nil
-	g.mu.Unlock()
-	if current != nil {
-		current.cancel()
+	defer g.mu.Unlock()
+	if g.current != nil {
+		g.draining = g.current
+		g.current = nil
+		g.draining.cancel()
 	}
-	return current
+	// Recovery and shutdown may both close admission. Each must wait for
+	// the same old generation, even after it has stopped taking new work.
+	return g.draining
 }
 
 func (g *Gate) publish(bundle *channelconfig.Bundle) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
+	g.draining = nil
 	g.current = &generation{bundle: bundle, ctx: ctx, cancel: cancel}
 }

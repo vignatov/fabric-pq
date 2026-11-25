@@ -11,7 +11,6 @@ import (
 
 	gp "github.com/hyperledger/fabric-protos-go-apiv2/gateway"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
-	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/protoutil"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -24,7 +23,7 @@ import (
 //
 // If the transaction commit status cannot be returned, for example if the specified channel does not exist, a
 // FailedPrecondition error will be returned.
-func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedCommitStatusRequest) (*gp.CommitStatusResponse, error) {
+func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedCommitStatusRequest) (response *gp.CommitStatusResponse, err error) {
 	if len(signedRequest.GetRequest()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "a commit status request is required")
 	}
@@ -44,29 +43,11 @@ func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedComm
 		return nil, status.Error(codes.InvalidArgument, "transaction ID should not be empty")
 	}
 
-	var generation context.Context
-	var release func()
-	if gs.acquireAdmission != nil {
-		var admitted bool
-		generation, release, admitted = gs.acquireAdmission(request.GetChannelId())
-		if !admitted {
-			return nil, status.Error(codes.Unavailable, "protected channel admission is closed")
-		}
+	ctx, admission, err := gs.admitUnary(ctx, request.GetChannelId(), false)
+	if err != nil {
+		return nil, err
 	}
-	if generation != nil {
-		if !comm.RetainUntilRPCEnd(ctx, release) {
-			release()
-			return nil, status.Error(codes.Unavailable, "protected commit status requires a unary response scope")
-		}
-		waitCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		stop := context.AfterFunc(generation, cancel)
-		defer stop()
-		ctx = waitCtx
-		if generation.Err() != nil {
-			return nil, status.Error(codes.Unavailable, "protected channel admission is closed")
-		}
-	}
+	defer finishUnary(admission, &response, &err)
 
 	signedData := &protoutil.SignedData{
 		Data:      signedRequest.GetRequest(),
@@ -78,14 +59,11 @@ func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedComm
 	}
 
 	txStatus, err := gs.commitFinder.TransactionStatus(ctx, request.GetChannelId(), request.GetTransactionId())
-	if generation != nil && generation.Err() != nil {
-		return nil, status.Error(codes.Unavailable, "protected channel admission is closed")
-	}
 	if err != nil {
 		return nil, toRpcError(err, codes.Aborted)
 	}
 
-	response := &gp.CommitStatusResponse{
+	response = &gp.CommitStatusResponse{
 		Result:      txStatus.Code,
 		BlockNumber: txStatus.BlockNumber,
 	}

@@ -415,7 +415,7 @@ func (reg *registry) lookupEndorser(endpoint string, pkiID gossipcommon.PKIidTyp
 			reg.logger.Warnw("No endpoint for endorser with PKI ID %s", "pkiID", pkiID.String())
 			return nil, false
 		}
-		if e, ok := reg.remoteEndorsers[endpoint]; ok {
+		if e, ok := reg.remoteEndorsers[reg.endorserKey(channel, endpoint)]; ok {
 			logger.Debugw("Found remote endorser", "endpoint", endpoint)
 			return e, false
 		}
@@ -433,6 +433,13 @@ func (reg *registry) lookupEndorser(endpoint string, pkiID gossipcommon.PKIidTyp
 		endorser, _ = lookup() // if it failed to reconnect, this will be nil
 	}
 	return endorser
+}
+
+func (reg *registry) endorserKey(channel, address string) string {
+	if reg.endpointFactory.transportPolicy != nil {
+		return channel + "\x00" + address
+	}
+	return address
 }
 
 // Connect to peers in channel, and add to the registry.  If a reconnection is required, then it must be removed
@@ -465,13 +472,15 @@ func (reg *registry) connectChannelPeers(channel string, force bool) error {
 			pkiID := info.PKIId
 			if address, ok := peers[pkiID.String()]; ok {
 				// add the peer to the peer map - except the local peer, which seems to have an empty address
-				if _, ok := reg.remoteEndorsers[address]; !ok && len(address) > 0 {
+				key := reg.endorserKey(channel, address)
+				if _, ok := reg.remoteEndorsers[key]; !ok && len(address) > 0 {
 					// this peer is new - connect to it and add to the remoteEndorsers registry
 					endorser, err := reg.endpointFactory.newEndorser(pkiID, address, mspid, tlsRootCerts)
 					if err != nil {
 						return err
 					}
-					reg.remoteEndorsers[address] = endorser
+					endorser.channel = channel
+					reg.remoteEndorsers[key] = endorser
 					reg.logger.Infof("Added peer to registry: %s", address)
 				}
 			}
@@ -496,7 +505,10 @@ func (reg *registry) removeEndorser(endorser *endorser) {
 	if err != nil {
 		reg.logger.Errorw("Failed to close connection to endorser", "address", endorser.address, "mspid", endorser.mspid, "err", err)
 	}
-	delete(reg.remoteEndorsers, endorser.address)
+	key := reg.endorserKey(endorser.channel, endorser.address)
+	if reg.remoteEndorsers[key] == endorser {
+		delete(reg.remoteEndorsers, key)
+	}
 }
 
 func (reg *registry) config(channel string) ([]*endpointConfig, error) {
@@ -536,7 +548,28 @@ func (reg *registry) prepareProtectedConfigUpdate(bundle *channelconfig.Bundle) 
 	if channel == "" {
 		return nil, errors.New("protected Gateway configuration has no orderer section")
 	}
-	return func() error { return reg.publishOrdererConfig(channel, orderers) }, nil
+	return func() error {
+		if err := reg.retireChannelEndorsers(channel); err != nil {
+			return err
+		}
+		return reg.publishOrdererConfig(channel, orderers)
+	}, nil
+}
+
+func (reg *registry) retireChannelEndorsers(channel string) error {
+	reg.configLock.Lock()
+	defer reg.configLock.Unlock()
+	delete(reg.channelInitialized, channel)
+	for key, client := range reg.remoteEndorsers {
+		if client.channel != channel {
+			continue
+		}
+		if err := client.closeConnection(); err != nil {
+			return errors.Wrap(err, "retire protected endorser connection")
+		}
+		delete(reg.remoteEndorsers, key)
+	}
+	return nil
 }
 
 // stageOrdererConfig derives a private candidate without changing the shared

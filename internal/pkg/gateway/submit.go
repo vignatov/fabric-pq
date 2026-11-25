@@ -28,7 +28,7 @@ import (
 // Submit will send the signed transaction to the ordering service. The response indicates whether the transaction was
 // successfully received by the orderer. This does not imply successful commit of the transaction, only that is has
 // been delivered to the orderer.
-func (gs *Server) Submit(ctx context.Context, request *gp.SubmitRequest) (*gp.SubmitResponse, error) {
+func (gs *Server) Submit(ctx context.Context, request *gp.SubmitRequest) (result *gp.SubmitResponse, err error) {
 	if request == nil {
 		return nil, status.Error(codes.InvalidArgument, "a submit request is required")
 	}
@@ -39,6 +39,17 @@ func (gs *Server) Submit(ctx context.Context, request *gp.SubmitRequest) (*gp.Su
 	if len(txn.GetSignature()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "prepared transaction must be signed")
 	}
+	if gs.acquireAdmission != nil {
+		channel, err := protoutil.ChannelID(txn)
+		if err != nil || channel != request.GetChannelId() {
+			return nil, status.Error(codes.InvalidArgument, "prepared transaction conflicts with the request channel")
+		}
+	}
+	ctx, admission, err := gs.admitUnary(ctx, request.GetChannelId(), true)
+	if err != nil {
+		return nil, err
+	}
+	defer finishUnary(admission, &result, &err)
 	orderers, clusterSize, err := gs.registry.orderers(request.GetChannelId())
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%s", err)
@@ -50,6 +61,9 @@ func (gs *Server) Submit(ctx context.Context, request *gp.SubmitRequest) (*gp.Su
 
 	logger := logger.With("txID", request.GetTransactionId())
 	config := gs.getChannelConfig(request.GetChannelId())
+	if config == nil {
+		return nil, status.Errorf(codes.NotFound, "channel %q not found", request.GetChannelId())
+	}
 	oc, ok := config.OrdererConfig()
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "failed to create block deliverer for channel `%s`, missing OrdererConfig", request.GetChannelId())
@@ -64,7 +78,7 @@ func (gs *Server) Submit(ctx context.Context, request *gp.SubmitRequest) (*gp.Su
 func (gs *Server) submitBFT(ctx context.Context, orderers []*orderer, txn *common.Envelope, clusterSize int, logger *flogging.FabricLogger) (*gp.SubmitResponse, error) {
 	// For BFT, we send transaction to ALL orderers
 	waitCh := make(chan *gp.ErrorDetail, len(orderers))
-	go gs.broadcastToAll(orderers, txn, waitCh, logger)
+	launchGatewayWork(ctx, func() { gs.broadcastToAll(ctx, orderers, txn, waitCh, logger) })
 
 	quorum, _ := computeBFTQuorum(uint64(clusterSize))
 	successes, failures := 0, 0
@@ -96,14 +110,18 @@ loop:
 	return nil, newRpcError(codes.Unavailable, "insufficient number of orderers could successfully process transaction to satisfy quorum requirement", errDetails...)
 }
 
-func (gs *Server) broadcastToAll(orderers []*orderer, txn *common.Envelope, waitCh chan<- *gp.ErrorDetail, logger *flogging.FabricLogger) {
+func (gs *Server) broadcastToAll(ctx context.Context, orderers []*orderer, txn *common.Envelope, waitCh chan<- *gp.ErrorDetail, logger *flogging.FabricLogger) {
 	everyoneSubmitted := make(chan struct{})
 	var numFinishedSend atomic.Uint32
 
-	broadcastContext, broadcastCancel := context.WithCancel(context.Background())
+	parent := context.Background()
+	if ctx.Value(gatewayWorkKey{}) != nil {
+		parent = ctx
+	}
+	broadcastContext, broadcastCancel := context.WithCancel(parent)
 	defer broadcastCancel()
-	for _, o := range orderers {
-		go func(ord *orderer) {
+	for _, ord := range orderers {
+		launchGatewayWork(broadcastContext, func() {
 			logger.Infow("Sending transaction to orderer", "endpoint", ord.logAddress)
 			ctx, cancel := context.WithCancel(broadcastContext)
 			defer cancel()
@@ -127,7 +145,7 @@ func (gs *Server) broadcastToAll(orderers []*orderer, txn *common.Envelope, wait
 					waitCh <- errorDetail(ord.endpointConfig, fmt.Sprintf("received unsuccessful response from orderer: status=%s, info=%s", common.Status_name[int32(status)], response.GetInfo()))
 				}
 			}
-		}(o)
+		})
 	}
 
 	t1 := time.NewTimer(gs.options.BroadcastTimeout)
@@ -136,6 +154,8 @@ func (gs *Server) broadcastToAll(orderers []*orderer, txn *common.Envelope, wait
 	case <-everyoneSubmitted:
 		return
 	case <-t1.C:
+		return
+	case <-broadcastContext.Done():
 		return
 	}
 }
@@ -171,13 +191,13 @@ func (gs *Server) submitNonBFT(ctx context.Context, orderers []*orderer, txn *co
 		var response *ab.BroadcastResponse
 		var err error
 		done := make(chan struct{})
-		go func() {
+		launchGatewayWork(ctx, func() {
 			defer close(done)
 			ctx, cancel := context.WithTimeout(ctx, gs.options.BroadcastTimeout)
 			defer cancel()
 
 			response, err = gs.broadcast(ctx, orderer, txn)
-		}()
+		})
 		select {
 		case <-done:
 			// Broadcast completed normally

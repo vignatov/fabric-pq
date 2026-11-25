@@ -4,6 +4,7 @@ package activation
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -175,16 +176,21 @@ func (c *Channel) record(previous, next configuration, current checkpoint, auth 
 
 // PrepareOrdererProposal binds approved configuration content to the leader's
 // proposed header. The apply path still checks the actual predecessor block.
-func (c *Channel) PrepareOrdererProposal(block *cb.Block) error {
+func (c *Channel) PrepareOrdererProposal(block *cb.Block, expected context.Context) error {
 	s := c.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := c.checkQuarantine(); err != nil {
 		return err
 	}
-	if !c.Ready() {
+	_, _, release, ok := c.Gate.AcquireMatching(expected)
+	if !ok {
 		return errors.New("protected channel is recovering")
 	}
+	// The store serializes durable preparation and activation. Keep the
+	// queued, cancellable lease outside this lock because corrupt state can
+	// require draining the serving generation before returning.
+	release()
 	previous, err := c.latest()
 	if err != nil {
 		return err

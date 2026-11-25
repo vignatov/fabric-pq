@@ -37,6 +37,17 @@ func (gs *Server) ChaincodeEvents(signedRequest *gp.SignedChaincodeEventsRequest
 		return status.Errorf(codes.InvalidArgument, "invalid chaincode events request: %v", err)
 	}
 
+	if gs.acquireAdmission != nil {
+		generation, release, admitted := gs.acquireAdmission(request.GetChannelId())
+		if !admitted {
+			return status.Error(codes.Unavailable, "protected channel admission is closed")
+		}
+		if generation != nil {
+			release()
+			return status.Error(codes.Unavailable, "protected chaincode event streaming is unavailable")
+		}
+	}
+
 	signedData := &protoutil.SignedData{
 		Data:      signedRequest.GetRequest(),
 		Identity:  request.GetIdentity(),
