@@ -224,6 +224,20 @@ func TestPQ40EDisposableVMService(t *testing.T) {
 		require.Contains(t, namespaceOptions(evidence), "ro")
 		require.Contains(t, namespaceOptions(installRoot), "ro")
 		require.Contains(t, namespaceOptions(ledger), "rw")
+
+		var exposed []string
+		for line := range strings.SplitSeq(run("ss", "-H", "-ltnp"), "\n") {
+			if strings.Contains(line, "pid="+pid+",") {
+				fields := strings.Fields(line)
+				require.GreaterOrEqual(t, len(fields), 5, "socket inventory row")
+				exposed = append(exposed, fields[3])
+			}
+		}
+		require.ElementsMatch(t, []string{
+			"127.0.0.1:" + mainPort,
+			"127.0.0.1:" + adminPort,
+			"127.0.0.1:" + opsPort,
+		}, exposed, "live orderer TCP listeners must match the approved test inventory")
 	}
 	stop := func() {
 		transport.CloseIdleConnections()

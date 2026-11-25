@@ -6,6 +6,12 @@ SPDX-License-Identifier: Apache-2.0
 
 package errors
 
+import "errors"
+
+// ErrProtectedChannelRecovery means block processing stopped on one channel
+// and the durable ledger and activation state require recovery before replay.
+var ErrProtectedChannelRecovery = errors.New("protected channel requires recovery")
+
 // TxValidationError marks that the error is related to
 // validation of a transaction
 type TxValidationError interface {

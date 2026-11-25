@@ -191,6 +191,24 @@ func TestPQ40EGatewayOrdererStaging(t *testing.T) {
 	require.Len(t, after, 1)
 	require.True(t, closed, "publication must retire the removed connection")
 	require.False(t, otherClosed, "publication must preserve unrelated connections")
+
+	// Recovery rebuilds the in-memory cache from the serving bundle even if
+	// discovery still advertises a retired endpoint.
+	restarted := prepareTest(t, &testDef{config: buildConfig(t, []string{"orderer1"})}).server.registry
+	restarted.configUpdate(otherBundle)
+	recovery, err := restarted.prepareProtectedConfigUpdate(candidateBundle)
+	require.NoError(t, err)
+	require.NoError(t, recovery.Retire())
+	recovery.Publish()
+	recovered, _, err := restarted.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, recovered, 1)
+	require.Equal(t, after[0].address, recovered[0].address)
+	require.NotSame(t, after[0], recovered[0])
+	otherRecovered, _, err := restarted.orderers("other-channel")
+	require.NoError(t, err)
+	require.Len(t, otherRecovered, 1)
+	require.Equal(t, other[0].address, otherRecovered[0].address)
 }
 
 func TestPQ40EGatewayRetiresChangedTLSRoots(t *testing.T) {

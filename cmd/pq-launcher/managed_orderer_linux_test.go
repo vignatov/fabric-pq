@@ -84,16 +84,26 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 	channel, err := factory.GetOrCreate(testfixture.ChannelID)
 	require.NoError(t, err)
 	require.NoError(t, channel.Append(genesis))
+	const baseline = "unchanged-baseline"
+	base := testfixture.Config(t, genesis)
+	baselineGenesis := proto.CloneOf(genesis)
+	baselineEnvelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG, baseline, fixture.Fabric, &cb.ConfigEnvelope{Config: base}, 0, 0)
+	require.NoError(t, err)
+	baselineGenesis.Data.Data[0] = protoutil.MarshalOrPanic(baselineEnvelope)
+	baselineGenesis.Header.DataHash = protoutil.ComputeBlockDataHash(baselineGenesis.GetData())
+	baselineLedger, err := factory.GetOrCreate(baseline)
+	require.NoError(t, err)
+	require.NoError(t, baselineLedger.Append(baselineGenesis))
 	factory.Close()
 	store, err := activation.OpenStore(state, nil)
 	require.NoError(t, err)
-	base := testfixture.Config(t, genesis)
 	fixture.Provision(t, store, base)
 	channelHash := sha256.Sum256([]byte(testfixture.ChannelID))
 	anchor, err := json.Marshal(hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())))
 	require.NoError(t, err)
 	write(filepath.Join("state", "genesis-"+hex.EncodeToString(channelHash[:])), anchor)
 	update := fixture.Update(t, base)
+	baselineUpdate := fixture.UpdateChannelTo(t, baseline, base, update.GetConfig())
 	authorization, err := json.Marshal(fixture.Authorize(t, 1, base, update.GetConfig()))
 	require.NoError(t, err)
 	write(filepath.Join("state", "approval-"+hex.EncodeToString(channelHash[:])+"-2"), authorization)
@@ -177,7 +187,8 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 		t.Cleanup(func() { _ = connection.Close() })
 		atomicBroadcast := ab.NewAtomicBroadcastClient(connection)
 		clientHash := sha256.Sum256(cert.Certificate[0])
-		deliver, block := managedDeliver(t, atomicBroadcast, fixture, uint64(run), clientHash[:])
+		deliver, block := managedDeliver(t, atomicBroadcast, fixture, testfixture.ChannelID, uint64(run), clientHash[:])
+		baselineStream, baselineBlock := managedDeliver(t, atomicBroadcast, fixture, baseline, uint64(run), clientHash[:])
 		if run == 0 {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
@@ -190,9 +201,18 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 			revoked, err := deliver.Recv()
 			require.NoError(t, err)
 			require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, revoked.GetStatus(), "old Deliver stream survived generation closure")
-			_, block = managedDeliver(t, atomicBroadcast, fixture, 1, clientHash[:])
+			_, block = managedDeliver(t, atomicBroadcast, fixture, testfixture.ChannelID, 1, clientHash[:])
+			require.NoError(t, broadcast.Send(baselineUpdate.GetLastUpdate()))
+			ack, err = broadcast.Recv()
+			require.NoError(t, err)
+			require.Equal(t, cb.Status_SUCCESS, ack.GetStatus(), ack.GetInfo())
+			response, err := baselineStream.Recv()
+			require.NoError(t, err)
+			baselineBlock = response.GetBlock()
+			require.NotNil(t, baselineBlock, "baseline Deliver must stay active through protected generation closure")
 		}
 		require.EqualValues(t, 1, testfixture.Config(t, block).GetSequence())
+		require.EqualValues(t, 1, testfixture.Config(t, baselineBlock).GetSequence())
 		require.NoError(t, connection.Close())
 		transport.CloseIdleConnections()
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -209,9 +229,9 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 	require.Contains(t, string(output), "checkpoint")
 }
 
-func managedDeliver(t *testing.T, client ab.AtomicBroadcastClient, fixture testfixture.Fixture, start uint64, hash []byte) (ab.AtomicBroadcast_DeliverClient, *cb.Block) {
+func managedDeliver(t *testing.T, client ab.AtomicBroadcastClient, fixture testfixture.Fixture, channel string, start uint64, hash []byte) (ab.AtomicBroadcast_DeliverClient, *cb.Block) {
 	t.Helper()
-	seek, err := protoutil.CreateSignedEnvelopeWithTLSBinding(cb.HeaderType_DELIVER_SEEK_INFO, testfixture.ChannelID, fixture.Fabric,
+	seek, err := protoutil.CreateSignedEnvelopeWithTLSBinding(cb.HeaderType_DELIVER_SEEK_INFO, channel, fixture.Fabric,
 		&ab.SeekInfo{
 			Start:    &ab.SeekPosition{Type: &ab.SeekPosition_Specified{Specified: &ab.SeekSpecified{Number: start}}},
 			Stop:     &ab.SeekPosition{Type: &ab.SeekPosition_Specified{Specified: &ab.SeekSpecified{Number: math.MaxUint64}}},
@@ -234,7 +254,7 @@ func managedDeliver(t *testing.T, client ab.AtomicBroadcastClient, fixture testf
 		require.NoError(t, deliver.CloseSend())
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("managed orderer did not open protected Deliver admission")
+	t.Fatalf("managed orderer did not open Deliver admission for %s", channel)
 	return nil, nil
 }
 

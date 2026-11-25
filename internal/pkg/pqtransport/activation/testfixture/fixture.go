@@ -106,21 +106,27 @@ func (f Fixture) Update(t *testing.T, base *cb.Config) *cb.ConfigEnvelope {
 // UpdateTo signs and validates the difference between two test configurations.
 func (f Fixture) UpdateTo(t *testing.T, base, next *cb.Config) *cb.ConfigEnvelope {
 	t.Helper()
+	return f.UpdateChannelTo(t, ChannelID, base, next)
+}
+
+// UpdateChannelTo signs and validates a configuration update for the given channel.
+func (f Fixture) UpdateChannelTo(t *testing.T, channel string, base, next *cb.Config) *cb.ConfigEnvelope {
+	t.Helper()
 	update, err := update.Compute(base, next)
 	require.NoError(t, err)
-	update.ChannelId = ChannelID
+	update.ChannelId = channel
 	header, err := protoutil.NewSignatureHeader(f.Fabric)
 	require.NoError(t, err)
 	updateBytes := protoutil.MarshalOrPanic(update)
 	signatureHeader := protoutil.MarshalOrPanic(header)
 	signature, err := f.Fabric.Sign(util.ConcatenateBytes(signatureHeader, updateBytes))
 	require.NoError(t, err)
-	envelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG_UPDATE, ChannelID, f.Fabric, &cb.ConfigUpdateEnvelope{
+	envelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG_UPDATE, channel, f.Fabric, &cb.ConfigUpdateEnvelope{
 		ConfigUpdate: updateBytes,
 		Signatures:   []*cb.ConfigSignature{{SignatureHeader: signatureHeader, Signature: signature}},
 	}, 0, 0)
 	require.NoError(t, err)
-	bundle, err := channelconfig.NewBundle(ChannelID, base, f.Crypto)
+	bundle, err := channelconfig.NewBundle(channel, base, f.Crypto)
 	require.NoError(t, err)
 	config, err := bundle.ConfigtxValidator().ProposeConfigUpdate(envelope)
 	require.NoError(t, err)

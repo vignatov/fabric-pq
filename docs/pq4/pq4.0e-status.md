@@ -105,7 +105,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
 | Full service-path and shared-resource inventory | Incomplete |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | All hosted jobs passed at `090e1e3`; later changes require their own exact-commit runs |
+| Full regression, integration and final-head CI evidence | All hosted jobs passed at `1d72a34`; later changes require their own exact-commit runs |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
@@ -155,6 +155,38 @@ deleted enrollment, mismatched history, a signed baseline declaration after
 protected enrollment and insecure operations configuration all fail closed.
 It also tests whether the service account can register a competing system
 unit. This runs only on an explicitly opted-in disposable VM.
+The test inventories live TCP sockets owned by the running orderer and
+compares them with the expected loopback bindings for the shared gRPC,
+operations and participation listeners before and after restart.
+
+Production evidence requires an authoritative node and listener inventory.
+For each deployed peer and orderer, identify the environment and version,
+verify the active system-manager unit, trusted file ownership and mounts,
+and record binary digests and signed enrollment status. Compare the actual
+listeners, bind addresses and TLS requirements with approved access from
+each client, cluster, operations and admin network. Include effective cloud
+and host firewall rules, routing and load balancers. Verify peer chaincode
+listeners separately and confirm that standalone profiling is disabled.
+Use a read-only inspection path. The disposable test's loopback topology
+does not establish the exposure of a production deployment.
+
+## Mixed-channel recovery tests
+
+The managed orderer subprocess test serves a protected channel and a
+baseline channel over one strict listener. It exercises an authorized
+protected transition, verifies that a previous-generation protected
+Deliver stream closes, and commits a baseline update through the existing
+baseline stream. Both ledgers remain available after native restart.
+
+The mixed peer test uses real ledgers, gossip block delivery, the protected
+activation controller and a live gRPC listener with client authentication.
+An injected cache retirement error after a protected configuration commit
+keeps candidate roots and cache contents private. The peer stops that
+channel's gossip block processing, keeps its admission closed and continues
+committing on the baseline channel. Restart reconstructs both ledgers and
+publishes the committed roots. A separate Gateway registry test rebuilds
+orderer endpoints from the recovered bundle while discovery advertises a
+stale endpoint.
 
 ## Admission and publication dependencies
 
@@ -287,6 +319,12 @@ reloads the protected channel after restart. These tests run as subprocesses
 without installing or starting the systemd service on a VM.
 
 ## Hosted CI evidence
+
+On `1d72a346b63b2fbcf16a00d265775f2710133181`, [Verify
+Build](https://github.com/vignatov/fabric-pq/actions/runs/45601768505) passed all
+16 jobs, including the disposable VM proof and all four gossip specs.
+[PQ3 isolated acceptance](https://github.com/vignatov/fabric-pq/actions/runs/45601768488)
+passed.
 
 On `090e1e32518ee8216095d589e1ebb4b0242a730c`, [Verify
 Build](https://github.com/vignatov/fabric-pq/actions/runs/45591052388) passed all

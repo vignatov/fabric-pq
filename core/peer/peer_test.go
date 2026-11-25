@@ -126,7 +126,7 @@ func newTestPeer(t *testing.T, tempdir string) (*Peer, func()) {
 		defaultSecureDialOpts,
 		nil,
 		gossipConfig,
-		&gossipservice.ServiceConfig{},
+		&gossipservice.ServiceConfig{TransientstoreMaxBlockRetention: 1000},
 		&privdata.PrivdataConfig{},
 		&deliverservice.DeliverServiceConfig{
 			ReConnectBackoffThreshold:   deliverservice.DefaultReConnectBackoffThreshold,

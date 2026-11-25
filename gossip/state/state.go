@@ -152,7 +152,8 @@ type GossipStateProviderImpl struct {
 
 	once sync.Once
 
-	stateTransferActive int32
+	stateTransferActive       int32
+	protectedRecoveryRequired atomic.Bool
 
 	stateMetrics *metrics.StateMetrics
 
@@ -419,7 +420,7 @@ func (s *GossipStateProviderImpl) processStateRequests() {
 // handleStateRequest handles state request message, validate batch size, reads current leader state to
 // obtain required blocks, builds response message and send it back
 func (s *GossipStateProviderImpl) handleStateRequest(msg protoext.ReceivedMessage) {
-	if msg == nil {
+	if msg == nil || s.protectedRecoveryRequired.Load() {
 		return
 	}
 	request := msg.GetGossipMessage().GetStateRequest()
@@ -483,6 +484,9 @@ func (s *GossipStateProviderImpl) handleStateRequest(msg protoext.ReceivedMessag
 			Data:        blockBytes,
 			PrivateData: pvtBytes,
 		})
+	}
+	if s.protectedRecoveryRequired.Load() {
+		return
 	}
 	// Sending back response with missing blocks
 	msg.Respond(&proto.GossipMessage{
@@ -570,6 +574,11 @@ func (s *GossipStateProviderImpl) deliverPayloads() {
 					}
 				}
 				if err := s.commitBlock(rawBlock, p); err != nil {
+					if errors2.Is(err, vsccErrors.ErrProtectedChannelRecovery) {
+						s.protectedRecoveryRequired.Store(true)
+						s.logger.Errorf("Stopping block processing for protected channel %s: %v", s.chainID, err)
+						return
+					}
 					if executionErr, isExecutionErr := errors2.AsType[*vsccErrors.VSCCExecutionFailureError](err); isExecutionErr {
 						s.logger.Errorf("Failed executing VSCC due to %v. Aborting chain processing", executionErr)
 						return
@@ -592,6 +601,9 @@ func (s *GossipStateProviderImpl) antiEntropy() {
 		case <-s.stopCh:
 			return
 		case <-time.After(s.config.StateCheckInterval):
+			if s.protectedRecoveryRequired.Load() {
+				return
+			}
 			ourHeight, err := s.ledger.LedgerHeight()
 			if err != nil {
 				// Unable to read from ledger continue to the next round
@@ -752,6 +764,9 @@ func (s *GossipStateProviderImpl) AddPayload(payload *proto.Payload) error {
 // the block is sent into the payloads buffer.
 // Else - it may drop the block, if the payload buffer is too full.
 func (s *GossipStateProviderImpl) addPayload(payload *proto.Payload, blockingMode bool) error {
+	if s.protectedRecoveryRequired.Load() {
+		return vsccErrors.ErrProtectedChannelRecovery
+	}
 	if payload == nil {
 		return errors.New("Given payload is nil")
 	}
@@ -773,6 +788,9 @@ func (s *GossipStateProviderImpl) addPayload(payload *proto.Payload, blockingMod
 	}
 
 	for blockingMode && s.payloads.Size() > s.config.StateBlockBufferSize*2 {
+		if s.protectedRecoveryRequired.Load() {
+			return vsccErrors.ErrProtectedChannelRecovery
+		}
 		time.Sleep(enqueueRetryInterval)
 	}
 
