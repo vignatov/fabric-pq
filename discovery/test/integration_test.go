@@ -473,16 +473,19 @@ func createClientAndService(t *testing.T, testdir string) (*client, *client, *se
 	// Create a server on an ephemeral port
 	gRPCServer, err := comm.NewGRPCServer("127.0.0.1:", comm.ServerConfig{
 		SecOpts: comm.SecureOptions{
-			Key:         serverKeyPair.Key,
-			Certificate: serverKeyPair.Cert,
-			UseTLS:      true,
+			Key:               serverKeyPair.Key,
+			Certificate:       serverKeyPair.Cert,
+			UseTLS:            true,
+			RequireClientCert: true,
+			ClientRootCAs:     [][]byte{ca.CertBytes()},
 		},
 	})
+	require.NoError(t, err)
 
 	l := newLSCCMetadataManager()
 	sup := createSupport(t, testdir, l)
 	svc := discovery.NewService(discovery.Config{
-		TLS:                          gRPCServer.TLSEnabled(),
+		TLS:                          gRPCServer.MutualTLSRequired(),
 		AuthCacheEnabled:             true,
 		AuthCacheMaxSize:             10,
 		AuthCachePurgeRetentionRatio: 0.5,
@@ -490,7 +493,6 @@ func createClientAndService(t *testing.T, testdir string) (*client, *client, *se
 
 	discprotos.RegisterDiscoveryServer(gRPCServer.Server(), svc)
 
-	require.NoError(t, err)
 	go gRPCServer.Start()
 
 	clientKeyPair, err := ca.NewClientCertKeyPair()
@@ -499,10 +501,11 @@ func createClientAndService(t *testing.T, testdir string) (*client, *client, *se
 	cc := comm.ClientConfig{
 		DialTimeout: time.Second * 3,
 		SecOpts: comm.SecureOptions{
-			UseTLS:        true,
-			Certificate:   clientKeyPair.Cert,
-			Key:           clientKeyPair.Key,
-			ServerRootCAs: [][]byte{ca.CertBytes()},
+			UseTLS:            true,
+			RequireClientCert: true,
+			Certificate:       clientKeyPair.Cert,
+			Key:               clientKeyPair.Key,
+			ServerRootCAs:     [][]byte{ca.CertBytes()},
 		},
 	}
 	conn, err := cc.Dial(gRPCServer.Address())

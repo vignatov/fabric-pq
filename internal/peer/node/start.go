@@ -820,7 +820,6 @@ func serve(args []string) error {
 		discoveryService = createDiscoveryService(
 			coreConfig,
 			peerInstance,
-			peerServer,
 			policyMgr,
 			lifecycle.NewMetadataProvider(
 				lifecycleCache,
@@ -1015,7 +1014,6 @@ func createSelfSignedData(sID msp.SigningIdentity) protoutil.SignedData {
 func createDiscoveryService(
 	coreConfig *peer.Config,
 	peerInstance *peer.Peer,
-	peerServer *comm.GRPCServer,
 	polMgr policies.ChannelPolicyManagerGetter,
 	metadataProvider *lifecycle.MetadataProvider,
 	gossipService *gossipservice.GossipService,
@@ -1044,7 +1042,7 @@ func createDiscoveryService(
 	}))
 	support := discsupport.NewDiscoverySupport(acl, gSup, ea, confSup, acl)
 	return discovery.NewService(discovery.Config{
-		TLS:                          peerServer.MutualTLSRequired(),
+		TLS:                          peerInstance.ServerConfig.SecOpts.TransportPolicy != nil,
 		AuthCacheEnabled:             coreConfig.DiscoveryAuthCacheEnabled,
 		AuthCacheMaxSize:             coreConfig.DiscoveryAuthCacheMaxSize,
 		AuthCachePurgeRetentionRatio: coreConfig.DiscoveryAuthCachePurgeRetentionRatio,
