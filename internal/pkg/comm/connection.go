@@ -14,6 +14,7 @@ import (
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric/common/channelconfig"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/msp"
 	"google.golang.org/grpc/credentials"
 )
@@ -61,6 +62,20 @@ func (cs *CredentialSupport) GetClientCertificate() tls.Certificate {
 // GetPeerCredentials returns gRPC transport credentials for use by gRPC
 // clients which communicate with remote peer endpoints.
 func (cs *CredentialSupport) GetPeerCredentials() credentials.TransportCredentials {
+	return credentials.NewTLS(cs.peerTLSConfig())
+}
+
+// GetStrictPeerCredentials uses the current trust snapshot while imposing the
+// authenticated floor used by the shared peer listener.
+func (cs *CredentialSupport) GetStrictPeerCredentials(policy *pqtransport.Policy) (credentials.TransportCredentials, error) {
+	config, err := pqtransport.ClientTLSConfig(cs.peerTLSConfig(), policy)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(config), nil
+}
+
+func (cs *CredentialSupport) peerTLSConfig() *tls.Config {
 	cs.mutex.RLock()
 	defer cs.mutex.RUnlock()
 
@@ -77,10 +92,10 @@ func (cs *CredentialSupport) GetPeerCredentials() credentials.TransportCredentia
 		}
 	}
 
-	return credentials.NewTLS(&tls.Config{
+	return &tls.Config{
 		Certificates: []tls.Certificate{cs.clientCert},
 		RootCAs:      certPool,
-	})
+	}
 }
 
 func (cs *CredentialSupport) AppRootCAsByChain() [][]byte {

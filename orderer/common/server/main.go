@@ -141,6 +141,7 @@ func Main() {
 
 	logger.Infof("Setting up cluster")
 	clusterClientConfig, reuseGrpcListener = initializeClusterClientConfig(conf)
+	clusterClientConfig.SecOpts.TransportPolicy = serverConfig.SecOpts.TransportPolicy
 	clusterDialer = &cluster.PredicateDialer{
 		Config: clusterClientConfig,
 	}
@@ -391,6 +392,7 @@ func configureClusterListener(conf *localconfig.TopLevel, generalConf comm.Serve
 			Certificate:       cert,
 			UseTLS:            true,
 			Key:               key,
+			TransportPolicy:   generalConf.SecOpts.TransportPolicy,
 		},
 	}
 

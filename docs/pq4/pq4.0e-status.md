@@ -92,7 +92,7 @@ arguments on Linux. Other platforms fail closed.
 | Protected Raft membership retry | Implemented; focused race and repeated promotion tests passed |
 | Staged shared TLS resources and crash/restart reconstruction | Incomplete |
 | Peer credential roots preparation and publication failure | Component race tests passed; protected lifecycle integration remains incomplete |
-| Gateway cache publication and admission | Protected unary admission and strict routed transport wired; event streaming remains unavailable for protected channels |
+| Gateway cache publication and admission | Protected unary admission, strict routed transport and revocable event streams wired |
 | Orderer protected bundle callbacks | Focused Linux race test passed; TLS and cache publication proof incomplete |
 | Full service-path and shared-resource inventory | Incomplete |
 | Full regression, integration and final-head CI evidence | Incomplete; see focused evidence below |
@@ -171,8 +171,18 @@ already-serving protected channel. The publication barrier also prevents a
 stage from being inserted between publication and admission. Gateway unary
 RPCs cancel admitted work on generation closure, join outstanding workers
 and retain the lease through the response. Routed protected calls require
-an authenticated strict transport policy. Protected event streaming remains
-unavailable until its iterator and send can be drained safely.
+an authenticated strict transport policy. Protected event streams require a
+strict listener with a revocable connection. Generation closure interrupts the
+ledger iterator and closes the underlying connection to unblock an HTTP/2
+flow-controlled send. Multiplexed calls on that connection reconnect.
+
+When startup supplies an authenticated transport policy, the peer's gossip
+and orderer delivery clients inherit it. The orderer's cluster dialer and
+separate cluster listener inherit the general listener's authenticated policy.
+Managed startup still needs to supply that policy and validate the remaining
+required endpoints before listening. The chaincode listener and participation
+admin paths still require integration or explicit exclusion from the protected
+service.
 
 Gateway prepares orderer endpoints separately from publication. Its orderer
 cache is scoped by channel, MSP and TLS roots. Publication retires stale

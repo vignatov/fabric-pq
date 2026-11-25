@@ -91,6 +91,7 @@ import (
 	"github.com/hyperledger/fabric/internal/peer/version"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/gateway"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/protoutil"
@@ -301,6 +302,7 @@ func serve(args []string) error {
 	}
 
 	deliverServiceConfig := deliverservice.GlobalConfig()
+	deliverServiceConfig.SecOpts.TransportPolicy = serverConfig.SecOpts.TransportPolicy
 
 	peerInstance := &peer.Peer{
 		ServerConfig:             serverConfig,
@@ -1178,7 +1180,7 @@ func createDockerClient(coreConfig *peer.Config) (dcli.APIClient, error) {
 }
 
 // secureDialOpts is the callback function for secure dial options for gossip service
-func secureDialOpts(credSupport *comm.CredentialSupport) func() []grpc.DialOption {
+func secureDialOpts(credSupport *comm.CredentialSupport, policy *pqtransport.Policy) func() []grpc.DialOption {
 	return func() []grpc.DialOption {
 		var dialOpts []grpc.DialOption
 		// set max send/recv msg sizes
@@ -1204,7 +1206,15 @@ func secureDialOpts(credSupport *comm.CredentialSupport) func() []grpc.DialOptio
 		}
 		dialOpts = append(dialOpts, kaOpts.ClientKeepaliveOptions()...)
 
-		if viper.GetBool("peer.tls.enabled") {
+		if policy != nil {
+			creds, err := credSupport.GetStrictPeerCredentials(policy)
+			if err != nil {
+				return append(dialOpts, grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+					return nil, err
+				}))
+			}
+			dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
+		} else if viper.GetBool("peer.tls.enabled") {
 			dialOpts = append(dialOpts, grpc.WithTransportCredentials(credSupport.GetPeerCredentials()))
 		} else {
 			dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -1269,7 +1279,7 @@ func initGossipService(
 		peerServer.Server(),
 		messageCryptoService,
 		secAdv,
-		secureDialOpts(credSupport),
+		secureDialOpts(credSupport, peerInstance.ServerConfig.SecOpts.TransportPolicy),
 		credSupport,
 		gossipConfig,
 		serviceConfig,
