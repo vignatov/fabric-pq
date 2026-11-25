@@ -23,7 +23,7 @@ import (
 //
 // If the transaction commit status cannot be returned, for example if the specified channel does not exist, a
 // FailedPrecondition error will be returned.
-func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedCommitStatusRequest) (*gp.CommitStatusResponse, error) {
+func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedCommitStatusRequest) (response *gp.CommitStatusResponse, err error) {
 	if len(signedRequest.GetRequest()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "a commit status request is required")
 	}
@@ -43,6 +43,12 @@ func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedComm
 		return nil, status.Error(codes.InvalidArgument, "transaction ID should not be empty")
 	}
 
+	ctx, admission, err := gs.admitUnary(ctx, request.GetChannelId(), false)
+	if err != nil {
+		return nil, err
+	}
+	defer finishUnary(admission, &response, &err)
+
 	signedData := &protoutil.SignedData{
 		Data:      signedRequest.GetRequest(),
 		Identity:  request.GetIdentity(),
@@ -57,7 +63,7 @@ func (gs *Server) CommitStatus(ctx context.Context, signedRequest *gp.SignedComm
 		return nil, toRpcError(err, codes.Aborted)
 	}
 
-	response := &gp.CommitStatusResponse{
+	response = &gp.CommitStatusResponse{
 		Result:      txStatus.Code,
 		BlockNumber: txStatus.BlockNumber,
 	}

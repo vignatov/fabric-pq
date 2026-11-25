@@ -136,12 +136,65 @@ jobs:
           sha256sum "$RUNNER_TEMP/orderer" "$RUNNER_TEMP/pq40d-raft.test"
       - name: Run native Raft restart and activation cases
         run: (cd orderer/common/multichannel && "$RUNNER_TEMP/pq40d-raft.test" -test.v -test.run '^TestPQ40D')
+      - name: Repeat protected membership promotion
+        run: (cd orderer/common/multichannel && "$RUNNER_TEMP/pq40d-raft.test" -test.v -test.count=5 -test.run '^TestPQ40DProtectedParticipationPromotion$')
       - name: Run Raft, follower and deliver tests
         if: ${{ !cancelled() }}
         run: go test -mod=vendor -race -count=1 ./orderer/consensus/etcdraft ./orderer/common/follower ./common/deliver
       - name: Vet affected packages
         if: ${{ !cancelled() }}
         run: go vet -mod=vendor ./internal/pkg/pqtransport/... ./orderer/consensus/etcdraft ./orderer/common/{follower,multichannel,server,localconfig} ./common/deliver
+  pq40e-bootstrap-admission:
+    name: PQ4.0E Bootstrap and Admission (incomplete)
+    runs-on: ubuntu-24.04
+    env:
+      GOFIPS140: "off"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.4
+      - name: Record test provenance
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          printf 'PR_HEAD=%s\n' "$PR_HEAD"
+          git rev-parse HEAD
+          go version
+          uname -a
+          printf 'GOFIPS140=%s\n' "$GOFIPS140"
+      - name: Test registry and existing activation recovery
+        run: |
+          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./orderer/common/multichannel
+          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./orderer/common/broadcast
+          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./orderer/common/cluster
+          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./internal/pkg/comm
+          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./internal/pkg/gateway
+          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./core/peer
+          go test -mod=vendor -race -count=1 -run '^TestPQ40E' ./core/chaincode ./core/chaincode/extcc ./gossip/comm ./gossip/privdata ./orderer/consensus/etcdraft
+          go test -mod=vendor -race -count=1 ./core/endorser
+          go test -mod=vendor -race -count=1 ./common/deliver ./core/ledger/snapshotgrpc ./orderer/common/channelparticipation
+          go test -mod=vendor -race -count=1 ./internal/pkg/pqtransport/...
+          go build -mod=vendor -o "$RUNNER_TEMP/orderer" ./cmd/orderer
+          go build -mod=vendor -o "$RUNNER_TEMP/peer" ./cmd/peer
+          PQ40E_MANAGED_ORDERER="$RUNNER_TEMP/orderer" PQ40E_MANAGED_PEER="$RUNNER_TEMP/peer" \
+            go test -mod=vendor -race -count=1 ./cmd/pq-launcher
+      - name: Verify the managed service on a disposable VM
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          if ! command -v getfacl >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y acl
+          fi
+          go build -mod=vendor -o "$RUNNER_TEMP/pq-launcher" ./cmd/pq-launcher
+          go test -mod=vendor -race -c -o "$RUNNER_TEMP/pq-launcher.test" ./cmd/pq-launcher
+          sha256sum "$RUNNER_TEMP/peer" "$RUNNER_TEMP/orderer" "$RUNNER_TEMP/pq-launcher" "$RUNNER_TEMP/pq-launcher.test"
+          sudo -n env PATH="$PATH" GOFIPS140=off PQ40E_DISPOSABLE_VM=1 PQ40E_VM_ASSETS="$RUNNER_TEMP" \
+            "$RUNNER_TEMP/pq-launcher.test" -test.v -test.timeout=2m -test.run '^TestPQ40EDisposableVMService$'
+      - name: Vet affected packages
+        run: go vet -mod=vendor ./cmd/pq-launcher ./common/deliver ./core/{peer,endorser,ledger/snapshotgrpc} ./internal/peer/node ./internal/pkg/{comm,gateway} ./internal/pkg/pqtransport/... ./orderer/common/{broadcast,channelparticipation,cluster,localconfig,multichannel,server} ./orderer/consensus/etcdraft
   unit-tests:
     name: Unit Tests
     needs: basic-checks

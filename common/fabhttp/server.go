@@ -120,11 +120,11 @@ func (s *Server) RegisterHandler(pattern string, handler http.Handler, secure bo
 }
 
 func (s *Server) Listen() (net.Listener, error) {
-	listener, err := net.Listen("tcp", s.options.ListenAddress)
+	tlsConfig, err := s.options.TLS.Config()
 	if err != nil {
 		return nil, err
 	}
-	tlsConfig, err := s.options.TLS.Config()
+	listener, err := net.Listen("tcp", s.options.ListenAddress)
 	if err != nil {
 		return nil, err
 	}

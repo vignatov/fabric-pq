@@ -10,6 +10,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -50,7 +51,29 @@ func newCertTemplate() (x509.Certificate, error) {
 }
 
 func newCertKeyPair(isCA bool, isServer bool, certSigner crypto.Signer, parent *x509.Certificate, hosts ...string) (*CertKeyPair, error) {
-	privateKey, privBytes, err := newPrivKey()
+	_, strict := certSigner.(*mldsa.PrivateKey)
+	return issueCertKeyPair(strict, isCA, isServer, certSigner, parent, hosts...)
+}
+
+func issueCertKeyPair(strict, isCA, isServer bool, certSigner crypto.Signer, parent *x509.Certificate, hosts ...string) (*CertKeyPair, error) {
+	var privateKey crypto.Signer
+	var privBytes []byte
+	var err error
+	keyType := "EC PRIVATE KEY"
+	if strict {
+		key, err := mldsa.GenerateKey(mldsa.MLDSA65())
+		if err != nil {
+			return nil, err
+		}
+		privateKey = key
+		privBytes, err = x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			return nil, err
+		}
+		keyType = "PRIVATE KEY"
+	} else {
+		privateKey, privBytes, err = newPrivKey()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -84,16 +107,23 @@ func newCertKeyPair(isCA bool, isServer bool, certSigner crypto.Signer, parent *
 			}
 		}
 	}
-	template.SubjectKeyId, err = computeSKI(&privateKey.PublicKey)
-	if err != nil {
-		return nil, err
+	public := privateKey.Public()
+	switch key := public.(type) {
+	case *mldsa.PublicKey:
+		digest := sha256.Sum256(key.Bytes())
+		template.SubjectKeyId = digest[:]
+	case *ecdsa.PublicKey:
+		template.SubjectKeyId, err = computeSKI(key)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// If no parent cert, it's a self signed cert
 	if parent == nil || certSigner == nil {
 		parent = &template
 		certSigner = privateKey
 	}
-	rawBytes, err := x509.CreateCertificate(rand.Reader, &template, parent, &privateKey.PublicKey, certSigner)
+	rawBytes, err := x509.CreateCertificate(rand.Reader, &template, parent, public, certSigner)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +137,7 @@ func newCertKeyPair(isCA bool, isServer bool, certSigner crypto.Signer, parent *
 	if err != nil {
 		return nil, err
 	}
-	privKey := encodePEM("EC PRIVATE KEY", privBytes)
+	privKey := encodePEM(keyType, privBytes)
 	return &CertKeyPair{
 		Key:     privKey,
 		Cert:    pubKey,

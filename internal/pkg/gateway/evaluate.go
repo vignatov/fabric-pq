@@ -20,7 +20,7 @@ import (
 )
 
 // Evaluate will invoke the transaction function as specified in the SignedProposal
-func (gs *Server) Evaluate(ctx context.Context, request *gp.EvaluateRequest) (*gp.EvaluateResponse, error) {
+func (gs *Server) Evaluate(ctx context.Context, request *gp.EvaluateRequest) (result *gp.EvaluateResponse, err error) {
 	if request == nil {
 		return nil, status.Error(codes.InvalidArgument, "an evaluate request is required")
 	}
@@ -29,6 +29,11 @@ func (gs *Server) Evaluate(ctx context.Context, request *gp.EvaluateRequest) (*g
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "failed to unpack transaction proposal: %s", err)
 	}
+	ctx, admission, err := gs.admitUnary(ctx, channel, true)
+	if err != nil {
+		return nil, err
+	}
+	defer finishUnary(admission, &result, &err)
 
 	err = gs.registry.connectChannelPeers(channel, false)
 	if err != nil {
@@ -57,7 +62,7 @@ func (gs *Server) Evaluate(ctx context.Context, request *gp.EvaluateRequest) (*g
 		gs.logger.Debugw("Sending to peer:", "channel", channel, "chaincode", chaincodeID, "txID", request.GetTransactionId(), "MSPID", endorser.mspid, "endpoint", endorser.address)
 
 		done := make(chan error, 1) // buffered so the goroutine can exit if the caller has already returned on timeout
-		go func() {
+		launchGatewayWork(ctx, func() {
 			defer close(done)
 			ctx, cancel := context.WithTimeout(ctx, gs.options.EndorsementTimeout)
 			defer cancel()
@@ -88,7 +93,7 @@ func (gs *Server) Evaluate(ctx context.Context, request *gp.EvaluateRequest) (*g
 					done <- newRpcError(code, "failed to evaluate transaction, see attached details for more info", errDetails...)
 				}
 			}
-		}()
+		})
 		select {
 		case status := <-done:
 			if status != nil {

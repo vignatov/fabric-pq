@@ -7,6 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 package multichannel
 
 import (
+	"context"
+
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
@@ -48,6 +50,56 @@ func (cs *ChainSupport) OrdererActivation() *activation.Channel {
 
 func (cs *ChainSupport) AdmissionReady() bool {
 	return cs.activation == nil || cs.activation.Ready()
+}
+
+// AcquireBroadcastAdmission binds validation and the cancellable consensus
+// handoff to the currently approved generation.
+func (cs *ChainSupport) AcquireBroadcastAdmission() (context.Context, func(), bool) {
+	if cs.activation == nil {
+		return nil, func() {}, true
+	}
+	_, ctx, release, ok := cs.activation.Gate.Acquire()
+	return ctx, release, ok
+}
+
+// OrderWithGeneration refuses a protected handoff unless the consenter can
+// keep the validated generation attached to the submission.
+func (cs *ChainSupport) OrderWithGeneration(generation context.Context, env *cb.Envelope, seq uint64) error {
+	guarded, ok := cs.Chain.(interface {
+		OrderWithGeneration(context.Context, *cb.Envelope, uint64) error
+	})
+	if !ok {
+		return errors.New("consenter does not support protected order handoff")
+	}
+	return guarded.OrderWithGeneration(generation, env, seq)
+}
+
+// ConfigureWithGeneration applies the same handoff requirement to config
+// updates, which may themselves initiate a generation transition.
+func (cs *ChainSupport) ConfigureWithGeneration(generation context.Context, env *cb.Envelope, seq uint64) error {
+	guarded, ok := cs.Chain.(interface {
+		ConfigureWithGeneration(context.Context, *cb.Envelope, uint64) error
+	})
+	if !ok {
+		return errors.New("consenter does not support protected config handoff")
+	}
+	return guarded.ConfigureWithGeneration(generation, env, seq)
+}
+
+// WaitReadyWithGeneration prevents protected readiness waits from spanning a
+// generation transition. Protected consenters must implement this boundary.
+func (cs *ChainSupport) WaitReadyWithGeneration(generation context.Context) error {
+	if guarded, ok := cs.Chain.(interface{ WaitReadyWithGeneration(context.Context) error }); ok {
+		return guarded.WaitReadyWithGeneration(generation)
+	}
+	if cs.activation != nil {
+		return errors.New("consenter does not support protected readiness")
+	}
+	return cs.WaitReady()
+}
+
+func (cs *ChainSupport) AcquireDeliveryAdmission() (context.Context, func(), bool) {
+	return cs.AcquireBroadcastAdmission()
 }
 
 func (cs *ChainSupport) RequiredDeliveryAdmission() <-chan struct{} {

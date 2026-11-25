@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install this unit and its launcher only through the trusted VM provisioner.
+[Unit]
+Description=Fabric managed node with signed PQ enrollment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=fabric-pq
+Group=fabric-pq
+Environment=FABRIC_CFG_PATH=/etc/fabric-pq/fabric
+ExecStart=/usr/local/libexec/fabric-pq/pq-launcher -authority /etc/fabric-pq/enrollment/authority.pub -manifest /etc/fabric-pq/enrollment/manifest.json -history /etc/fabric-pq/enrollment/history.json
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/fabric-pq
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

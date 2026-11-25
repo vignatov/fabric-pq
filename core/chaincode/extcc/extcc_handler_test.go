@@ -9,8 +9,10 @@ package extcc_test
 import (
 	"errors"
 	"net"
+	"testing"
 	"time"
 
+	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/core/chaincode/extcc"
 	"github.com/hyperledger/fabric/core/chaincode/extcc/mock"
@@ -18,8 +20,55 @@ import (
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
+
+func TestPQ40EAbortExternalChaincodeStream(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	t.Cleanup(server.Stop)
+	probe := &abortProbe{entered: make(chan struct{}), ended: make(chan struct{})}
+	pb.RegisterChaincodeServer(server, probe)
+	go server.Serve(listener)
+
+	handler := &mock.StreamHandler{}
+	handler.HandleChaincodeStreamCalls(func(stream ccintf.ChaincodeStream) error {
+		select {
+		case <-probe.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("external shim stream did not open")
+		}
+		aborter, ok := stream.(interface{ Abort() })
+		require.True(t, ok)
+		aborter.Abort()
+		_, err := stream.Recv()
+		require.Error(t, err)
+		select {
+		case <-probe.ended:
+		case <-time.After(5 * time.Second):
+			t.Fatal("external shim still has an open RPC after abort")
+		}
+		return nil
+	})
+	runtime := &extcc.ExternalChaincodeRuntime{}
+	require.NoError(t, runtime.Stream("cc", &ccintf.ChaincodeServerInfo{
+		Address: listener.Addr().String(), ClientConfig: comm.ClientConfig{DialTimeout: 5 * time.Second},
+	}, handler))
+}
+
+type abortProbe struct {
+	pb.UnimplementedChaincodeServer
+	entered, ended chan struct{}
+}
+
+func (p *abortProbe) Connect(stream pb.Chaincode_ConnectServer) error {
+	close(p.entered)
+	defer close(p.ended)
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
 
 var _ = Describe("Extcc", func() {
 	var (

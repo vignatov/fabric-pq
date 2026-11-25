@@ -21,6 +21,7 @@ import (
 	"github.com/hyperledger/fabric/core/chaincode/lifecycle"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protoutil"
@@ -91,6 +92,7 @@ type ChannelFetcher interface {
 
 type Channel struct {
 	IdentityDeserializer msp.IdentityDeserializer
+	AcquireEndorsement   func() (msp.IdentityDeserializer, context.Context, func(), bool)
 }
 
 // Endorser provides the Endorser service ProcessProposal
@@ -101,6 +103,9 @@ type Endorser struct {
 	Support                Support
 	PvtRWSetAssembler      PvtRWSetAssembler
 	Metrics                *Metrics
+	// AdmitSystemQuery retains the generation for a system query's target
+	// when that target differs from the proposal channel.
+	AdmitSystemQuery func(context.Context, *UnpackedProposal) (context.Context, error)
 }
 
 // call specified chaincode (system or user)
@@ -301,7 +306,7 @@ func (e *Endorser) preProcess(up *UnpackedProposal, channel *Channel) error {
 // Errors related to the proposal itself are returned with an error that results in a grpc error.
 // Errors related to proposal processing (either infrastructure errors or chaincode errors) are returned with a nil error,
 // clients are expected to look at the ProposalResponse response status code (e.g. 500) and message.
-func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedProposal) (*pb.ProposalResponse, error) {
+func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedProposal) (response *pb.ProposalResponse, responseErr error) {
 	// start time for computing elapsed time metric for successfully endorsed proposals
 	startTime := time.Now()
 	e.Metrics.ProposalsReceived.Add(1)
@@ -325,6 +330,29 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 		if channel == nil {
 			return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: fmt.Sprintf("channel '%s' not found", up.ChannelHeader.GetChannelId())}}, nil
 		}
+		if channel.AcquireEndorsement != nil {
+			deserializer, generation, release, admitted := channel.AcquireEndorsement()
+			if !admitted {
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected channel admission is closed"}}, nil
+			}
+			privateChannel := *channel
+			privateChannel.IdentityDeserializer = deserializer
+			channel = &privateChannel
+			retained := generation.Done() != nil
+			if retained && !comm.RetainUntilRPCEnd(ctx, release) {
+				release()
+				return &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected response admission is unavailable"}}, nil
+			}
+			defer func() {
+				if generation.Err() != nil {
+					response = &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected channel generation closed"}}
+					responseErr = nil
+				}
+				if !retained {
+					release()
+				}
+			}()
+		}
 	} else {
 		channel = &Channel{
 			IdentityDeserializer: e.LocalMSP,
@@ -336,6 +364,21 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 	if err != nil {
 		endorserLogger.Warnw("Failed to preProcess proposal", "error", err.Error())
 		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}, err
+	}
+
+	if e.AdmitSystemQuery != nil {
+		generation, err := e.AdmitSystemQuery(ctx, up)
+		if err != nil {
+			return &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: err.Error()}}, nil
+		}
+		if generation != nil {
+			defer func() {
+				if generation.Err() != nil {
+					response = &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected channel generation closed"}}
+					responseErr = nil
+				}
+			}()
+		}
 	}
 
 	defer func() {

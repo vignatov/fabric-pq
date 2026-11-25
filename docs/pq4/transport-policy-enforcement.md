@@ -1,15 +1,21 @@
 # PQ4.0 transport-policy enforcement review
 
+Managed protected peers and Raft orderers authenticate enrollment before
+starting channel services. Their shared and administrative listeners use the
+authenticated transport floor. Direct unmanaged startup serves baseline
+deployments. Production verification and bounded endpoint coverage are
+tracked in [PQ4.0E status](pq4.0e-status.md).
+
 Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. PQ4.0D adds the local
 orderer configuration authorization boundary. Strict service endpoint and
 shared-listener enforcement still require integration evidence.
 
-### Isolated orderer provisioning
+### Isolated managed orderer provisioning
 
-Set `General.PQActivation` in `orderer.yaml` with `Channels`, `StateDir`,
-`TrustAnchor`, `Network` and `Node`. Use a private local Linux directory
-for `StateDir` and provision its ancestors durably before startup.
-`TrustAnchor` contains raw ML-DSA-65 public key bytes. The state directory
+Use the signed launcher and service-manager contract described in the
+[PQ4.0E provisioning guide](pq4.0e-status.md). Provision a private local
+Linux state directory and protect its ancestors before startup. The pinned
+policy signer contains raw ML-DSA-65 public key bytes. The state directory
 uses the PQ4.0C `checkpoint` record produced by `Store.Provision`. Supply
 `Version` as the initial node checkpoint version, `Digest` as the 32-byte
 SHA-256 array of the signed policy payload, and `Policy` as an object with
@@ -18,7 +24,8 @@ the base64 fields `Payload` and `Signature`.
 Supply
 `genesis-<sha256(channel-id)>` as a JSON string containing the lowercase
 hex Fabric genesis header hash. For later-block participation joins, also
-supply `genesis-<sha256(channel-id)>.block` containing the raw Fabric block.
+supply `genesis-<sha256(channel-id)>.block` with the raw Fabric block and
+the independently signed join target described in the provisioning guide.
 
 Stage each operator authorization as a complete JSON record named
 `approval-<sha256(channel-id)>-<next-node-checkpoint-version>`. Its four
@@ -75,15 +82,10 @@ The [configuration activation ADR](adr-config-activation.md) identifies
 candidate interception and recovery points for review; it is not an approved
 implementation design.
 
-The focused `comm` component now authenticates a caller-supplied policy and
-checkpoint, and preserves the strict TLS minimum across credential creation,
-cloning and direct factory use. A
-separate operator-transition verifier checks signed candidate values but does
-not perform Fabric authorization, persist a preparation or commit a
-checkpoint. Neither component is wired into node startup or channel
-processing. They cannot by themselves prevent a node from starting in
-baseline mode or resolve the lifecycle ordering above. See the
-[PQ4.0B gate report](pq4.0b-gate-report.md) for the evidence and review stop.
+The focused PQ4.0B components authenticate policy and verify signed transition
+values. The bounded PQ4.0E integration adds managed startup, native Fabric
+validation and journaled publication. Deployment enforcement and network-wide
+transport require separate evidence. [PQ4.0B gate report](pq4.0b-gate-report.md)
 
 ## Candidates
 

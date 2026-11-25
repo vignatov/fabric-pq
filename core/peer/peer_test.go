@@ -89,8 +89,11 @@ func TestHybridCapabilityActivationStopsIncompatiblePeer(t *testing.T) {
 }
 
 func NewTestPeer(t *testing.T) (*Peer, func()) {
-	tempdir := t.TempDir()
+	return newTestPeer(t, t.TempDir())
+}
 
+func newTestPeer(t *testing.T, tempdir string) (*Peer, func()) {
+	t.Helper()
 	// Initialize gossip service
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	require.NoError(t, err)
@@ -123,7 +126,7 @@ func NewTestPeer(t *testing.T) (*Peer, func()) {
 		defaultSecureDialOpts,
 		nil,
 		gossipConfig,
-		&gossipservice.ServiceConfig{},
+		&gossipservice.ServiceConfig{TransientstoreMaxBlockRetention: 1000},
 		&privdata.PrivdataConfig{},
 		&deliverservice.DeliverServiceConfig{
 			ReConnectBackoffThreshold:   deliverservice.DefaultReConnectBackoffThreshold,

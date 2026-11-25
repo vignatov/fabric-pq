@@ -26,6 +26,7 @@ import (
 	"github.com/hyperledger/fabric/internal/configtxlator/update"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
@@ -105,21 +106,27 @@ func (f Fixture) Update(t *testing.T, base *cb.Config) *cb.ConfigEnvelope {
 // UpdateTo signs and validates the difference between two test configurations.
 func (f Fixture) UpdateTo(t *testing.T, base, next *cb.Config) *cb.ConfigEnvelope {
 	t.Helper()
+	return f.UpdateChannelTo(t, ChannelID, base, next)
+}
+
+// UpdateChannelTo signs and validates a configuration update for the given channel.
+func (f Fixture) UpdateChannelTo(t *testing.T, channel string, base, next *cb.Config) *cb.ConfigEnvelope {
+	t.Helper()
 	update, err := update.Compute(base, next)
 	require.NoError(t, err)
-	update.ChannelId = ChannelID
+	update.ChannelId = channel
 	header, err := protoutil.NewSignatureHeader(f.Fabric)
 	require.NoError(t, err)
 	updateBytes := protoutil.MarshalOrPanic(update)
 	signatureHeader := protoutil.MarshalOrPanic(header)
 	signature, err := f.Fabric.Sign(util.ConcatenateBytes(signatureHeader, updateBytes))
 	require.NoError(t, err)
-	envelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG_UPDATE, ChannelID, f.Fabric, &cb.ConfigUpdateEnvelope{
+	envelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG_UPDATE, channel, f.Fabric, &cb.ConfigUpdateEnvelope{
 		ConfigUpdate: updateBytes,
 		Signatures:   []*cb.ConfigSignature{{SignatureHeader: signatureHeader, Signature: signature}},
 	}, 0, 0)
 	require.NoError(t, err)
-	bundle, err := channelconfig.NewBundle(ChannelID, base, f.Crypto)
+	bundle, err := channelconfig.NewBundle(channel, base, f.Crypto)
 	require.NoError(t, err)
 	config, err := bundle.ConfigtxValidator().ProposeConfigUpdate(envelope)
 	require.NoError(t, err)
@@ -179,4 +186,27 @@ func (f Fixture) sign(t *testing.T, document any) ([]byte, []byte) {
 	signature, err := f.key.Sign(rand.Reader, payload, nil)
 	require.NoError(t, err)
 	return payload, signature
+}
+
+func (f Fixture) JoinAnchor(t *testing.T, genesis, block *cb.Block) enrollment.JoinAnchor {
+	t.Helper()
+	conf := Config(t, block)
+	return enrollment.JoinAnchor{
+		Network: Network, Node: Node, Profile: pqtransport.ProfileV1, Channel: ChannelID,
+		GenesisHash: hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())),
+		BlockNumber: block.GetHeader().GetNumber(),
+		BlockHash:   hex.EncodeToString(protoutil.BlockHeaderHash(block.GetHeader())),
+		Config:      document(t, 1, conf).Channels[ChannelID],
+	}
+}
+
+func (f Fixture) SignedJoinAnchor(t *testing.T, domain string, anchor any) []byte {
+	t.Helper()
+	payload, err := json.Marshal(anchor)
+	require.NoError(t, err)
+	signature, err := f.key.Sign(rand.Reader, append([]byte(domain), payload...), nil)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(enrollment.Envelope{Payload: payload, Signature: signature})
+	require.NoError(t, err)
+	return encoded
 }

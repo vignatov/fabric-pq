@@ -8,6 +8,7 @@ package chaincode
 
 import (
 	"bytes"
+	"context"
 	"time"
 	"unicode/utf8"
 
@@ -77,6 +78,7 @@ type ChaincodeSupport struct {
 	MaxSizeWriteBatch      uint32
 	UseGetMultipleKeys     bool
 	MaxSizeGetMultipleKeys uint32
+	AcquireAdmission       func(string) (context.Context, func(), bool)
 }
 
 // Launch starts executing chaincode if it is not already running. This method
@@ -134,6 +136,7 @@ func (cs *ChaincodeSupport) HandleChaincodeStream(stream ccintf.ChaincodeStream)
 		MaxSizeWriteBatch:      cs.MaxSizeWriteBatch,
 		UseGetMultipleKeys:     cs.UseGetMultipleKeys,
 		MaxSizeGetMultipleKeys: cs.MaxSizeGetMultipleKeys,
+		acquireAdmission:       cs.admit,
 	}
 
 	return handler.ProcessStream(stream)
@@ -149,6 +152,11 @@ func (cs *ChaincodeSupport) Register(stream pb.ChaincodeSupport_RegisterServer) 
 // It does not attempt to start the chaincode based on the information from lifecycle, but instead
 // accepts the container information directly in the form of a ChaincodeDeploymentSpec.
 func (cs *ChaincodeSupport) ExecuteLegacyInit(txParams *ccprovider.TransactionParams, ccName, ccVersion string, input *pb.ChaincodeInput) (*pb.Response, *pb.ChaincodeEvent, error) {
+	generation, release, err := cs.admit(txParams.ChannelID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
 	// FIXME: this is a hack, we shouldn't construct the
 	// ccid manually but rather let lifecycle construct it
 	// for us. However this is legacy code that will disappear
@@ -161,6 +169,9 @@ func (cs *ChaincodeSupport) ExecuteLegacyInit(txParams *ccprovider.TransactionPa
 	}
 
 	resp, err := cs.execute(pb.ChaincodeMessage_INIT, txParams, ccName, input, h)
+	if generation != nil && generation.Err() != nil {
+		return nil, nil, errors.New("protected chaincode generation closed during execution")
+	}
 	return processChaincodeExecutionResult(txParams.TxID, ccName, resp, err)
 }
 
@@ -203,6 +214,11 @@ func processChaincodeExecutionResult(txid, ccName string, resp *pb.ChaincodeMess
 // Invoke will invoke chaincode and return the message containing the response.
 // The chaincode will be launched if it is not already running.
 func (cs *ChaincodeSupport) Invoke(txParams *ccprovider.TransactionParams, chaincodeName string, input *pb.ChaincodeInput) (*pb.ChaincodeMessage, error) {
+	generation, release, err := cs.admit(txParams.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	ccid, cctype, err := cs.CheckInvocation(txParams, chaincodeName, input)
 	if err != nil {
 		return nil, errors.WithMessage(err, "invalid invocation")
@@ -213,7 +229,29 @@ func (cs *ChaincodeSupport) Invoke(txParams *ccprovider.TransactionParams, chain
 		return nil, err
 	}
 
-	return cs.execute(cctype, txParams, chaincodeName, input, h)
+	result, err := cs.execute(cctype, txParams, chaincodeName, input, h)
+	if generation != nil && generation.Err() != nil {
+		return nil, errors.New("protected chaincode generation closed during execution")
+	}
+	return result, err
+}
+
+func (cs *ChaincodeSupport) admit(channel string) (context.Context, func(), error) {
+	if cs.AcquireAdmission == nil || channel == "" {
+		return nil, func() {}, nil
+	}
+	generation, release, admitted := cs.AcquireAdmission(channel)
+	if !admitted {
+		return nil, nil, errors.New("protected channel admission is closed")
+	}
+	if generation == nil {
+		return nil, func() {}, nil
+	}
+	if err := generation.Err(); err != nil {
+		release()
+		return nil, nil, err
+	}
+	return generation, release, nil
 }
 
 // CheckInvocation inspects the parameters of an invocation and determines if, how, and to where a that invocation should be routed.

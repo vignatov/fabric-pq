@@ -16,6 +16,7 @@ import (
 	"github.com/hyperledger/fabric/common/deliverclient/orderers"
 	"github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 )
@@ -23,6 +24,7 @@ import (
 type endorser struct {
 	client          peer.EndorserClient
 	closeConnection func() error
+	channel         string
 	*endpointConfig
 }
 
@@ -55,6 +57,7 @@ type endpointFactory struct {
 	dialer                   dialer
 	clientCert               []byte
 	clientKey                []byte
+	transportPolicy          *pqtransport.Policy
 	ordererEndpointOverrides map[string]*orderers.Endpoint
 }
 
@@ -99,9 +102,15 @@ func (ef *endpointFactory) newOrderer(address, mspid string, tlsRootCerts [][]by
 	if connectOrderer == nil {
 		connectOrderer = ab.NewAtomicBroadcastClient
 	}
+	close := func() error {
+		if conn == nil || conn.GetState() == connectivity.Shutdown {
+			return nil
+		}
+		return conn.Close()
+	}
 	return &orderer{
 		client:          connectOrderer(conn),
-		closeConnection: conn.Close,
+		closeConnection: close,
 		endpointConfig:  &endpointConfig{address: address, logAddress: logAddess, mspid: mspid, tlsRootCerts: tlsRootCerts},
 	}, nil
 }
@@ -109,11 +118,12 @@ func (ef *endpointFactory) newOrderer(address, mspid string, tlsRootCerts [][]by
 func (ef *endpointFactory) newConnection(address string, tlsRootCerts [][]byte) (*grpc.ClientConn, error) {
 	config := comm.ClientConfig{
 		SecOpts: comm.SecureOptions{
-			UseTLS:            len(tlsRootCerts) > 0,
+			UseTLS:            ef.transportPolicy != nil || len(tlsRootCerts) > 0,
 			ServerRootCAs:     tlsRootCerts,
 			RequireClientCert: true,
 			Certificate:       ef.clientCert,
 			Key:               ef.clientKey,
+			TransportPolicy:   ef.transportPolicy,
 		},
 		DialTimeout:  ef.timeout,
 		AsyncConnect: true,

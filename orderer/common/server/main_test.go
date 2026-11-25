@@ -34,6 +34,7 @@ import (
 	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/filerepo"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
@@ -509,7 +510,7 @@ func TestInitializeMultichannelRegistrar(t *testing.T) {
 		require.NoError(t, err)
 		lf, err := createLedgerFactory(conf, &disabled.Provider{})
 		require.NoError(t, err)
-		registrar := initializeMultichannelRegistrar(&cluster.PredicateDialer{}, comm.ServerConfig{}, srv, conf, signer, &disabled.Provider{}, lf, cryptoProvider)
+		registrar := initializeMultichannelRegistrar(&cluster.PredicateDialer{}, comm.ServerConfig{}, srv, conf, signer, &disabled.Provider{}, lf, cryptoProvider, nil, nil)
 		require.NotNil(t, registrar)
 	})
 }
@@ -624,7 +625,7 @@ func TestUpdateTrustedRoots(t *testing.T) {
 		},
 	}
 
-	r := initializeMultichannelRegistrar(&cluster.PredicateDialer{}, srvConf, grpcServer, conf, signer, &disabled.Provider{}, lf, cryptoProvider, callback)
+	r := initializeMultichannelRegistrar(&cluster.PredicateDialer{}, srvConf, grpcServer, conf, signer, &disabled.Provider{}, lf, cryptoProvider, nil, nil, callback)
 
 	t.Logf("# app CAs: %d", len(caMgr.appRootCAsByChain["testchannelid"]))
 	t.Logf("# orderer CAs: %d", len(caMgr.ordererRootCAsByChain["testchannelid"]))
@@ -676,7 +677,7 @@ func TestUpdateTrustedRoots(t *testing.T) {
 		}
 	}
 
-	r = initializeMultichannelRegistrar(predDialer, srvConf, grpcServer, conf, signer, &disabled.Provider{}, lf, cryptoProvider, callback)
+	r = initializeMultichannelRegistrar(predDialer, srvConf, grpcServer, conf, signer, &disabled.Provider{}, lf, cryptoProvider, nil, nil, callback)
 	t.Logf("# app CAs: %d", len(caMgr.appRootCAsByChain["testchannelid"]))
 	t.Logf("# orderer CAs: %d", len(caMgr.ordererRootCAsByChain["testchannelid"]))
 	// mutual TLS is required so updates should have occurred
@@ -687,6 +688,39 @@ func TestUpdateTrustedRoots(t *testing.T) {
 	grpcServer.Listener().Close()
 	cs = r.GetChain("testchannelid")
 	cs.Halt()
+}
+
+func TestPQ40EManagedOrdererTrustStagesBeforePublication(t *testing.T) {
+	fixture := testfixture.New(t)
+	bundle, err := channelconfig.NewBundle(testfixture.ChannelID, testfixture.Config(t, testfixture.Genesis(t)), fixture.Crypto)
+	require.NoError(t, err)
+	ca, err := tlsgen.NewCA()
+	require.NoError(t, err)
+	cert, err := ca.NewServerCertKeyPair("127.0.0.1")
+	require.NoError(t, err)
+	listener, err := comm.NewGRPCServer("127.0.0.1:0", comm.ServerConfig{SecOpts: comm.SecureOptions{
+		UseTLS: true, Certificate: cert.Cert, Key: cert.Key,
+	}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Listener().Close() })
+	previous := [][]byte{ca.CertBytes()}
+	mgr := &caManager{
+		appRootCAsByChain:     map[string][][]byte{"baseline": previous},
+		ordererRootCAsByChain: map[string][][]byte{"baseline": previous},
+		clientRootCAs:         [][]byte{[]byte("invalid listener trust anchor")},
+	}
+	dialer := &cluster.PredicateDialer{Config: comm.ClientConfig{SecOpts: comm.SecureOptions{ServerRootCAs: previous}}}
+	require.ErrorContains(t, mgr.publishManagedTrust(bundle, dialer, previous, []*comm.GRPCServer{listener}), "client root certificate")
+	require.NotContains(t, mgr.appRootCAsByChain, testfixture.ChannelID)
+	require.NotContains(t, mgr.ordererRootCAsByChain, testfixture.ChannelID)
+	require.Equal(t, previous, dialer.Config.SecOpts.ServerRootCAs)
+	mgr.clientRootCAs = previous
+	require.NoError(t, mgr.publishManagedTrust(bundle, dialer, previous, []*comm.GRPCServer{listener}))
+	require.Contains(t, mgr.appRootCAsByChain, testfixture.ChannelID)
+	require.Contains(t, mgr.ordererRootCAsByChain, testfixture.ChannelID)
+	require.Equal(t, previous, mgr.appRootCAsByChain["baseline"])
+	require.Equal(t, previous, mgr.ordererRootCAsByChain["baseline"])
+	require.Contains(t, dialer.Config.SecOpts.ServerRootCAs, ca.CertBytes())
 }
 
 func TestRootServerCertAggregation(t *testing.T) {

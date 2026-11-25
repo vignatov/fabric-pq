@@ -23,6 +23,7 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/filerepo"
@@ -67,6 +68,7 @@ type Registrar struct {
 
 	joinBlockFileRepo *filerepo.Repo
 	protected         protectedChannels
+	protectedPublish  func(*channelconfig.Bundle) error
 	failedProtected   map[string]types.ChannelInfo
 }
 
@@ -102,6 +104,38 @@ func NewRegistrar(
 	clusterDialer *cluster.PredicateDialer,
 	callbacks ...channelconfig.BundleActor,
 ) *Registrar {
+	return newRegistrar(config, ledgerFactory, signer, metricsProvider, bccsp, clusterDialer,
+		newProtectedChannels(config.General.PQActivation), callbacks...)
+}
+
+// NewManagedRegistrar selects protected channels exclusively from verified enrollment.
+func NewManagedRegistrar(
+	config localconfig.TopLevel,
+	ledgerFactory blockledger.Factory,
+	signer identity.SignerSerializer,
+	metricsProvider metrics.Provider,
+	bccsp bccsp.BCCSP,
+	clusterDialer *cluster.PredicateDialer,
+	registry *enrollment.Registry,
+	publish func(*channelconfig.Bundle) error,
+	callbacks ...channelconfig.BundleActor,
+) *Registrar {
+	registrar := newRegistrar(config, ledgerFactory, signer, metricsProvider, bccsp, clusterDialer,
+		managedProtectedChannels(registry), callbacks...)
+	registrar.protectedPublish = publish
+	return registrar
+}
+
+func newRegistrar(
+	config localconfig.TopLevel,
+	ledgerFactory blockledger.Factory,
+	signer identity.SignerSerializer,
+	metricsProvider metrics.Provider,
+	bccsp bccsp.BCCSP,
+	clusterDialer *cluster.PredicateDialer,
+	protected protectedChannels,
+	callbacks ...channelconfig.BundleActor,
+) *Registrar {
 	r := &Registrar{
 		config:                      config,
 		chains:                      make(map[string]*ChainSupport),
@@ -118,7 +152,10 @@ func NewRegistrar(
 	}
 
 	var err error
-	r.protected = newProtectedChannels(config.General.PQActivation)
+	r.protected = protected
+	if r.protected.err != nil {
+		logger.Panicf("Cannot authenticate protected channel registry: %s", r.protected.err)
+	}
 	r.joinBlockFileRepo, err = InitJoinBlockFileRepo(&r.config)
 	if err != nil {
 		logger.Panicf("Error initializing joinblock file repo: %s", err)
@@ -208,6 +245,12 @@ func (r *Registrar) discoverLedgers(channelsWithJoinBlock map[string]*cb.Block) 
 func (r *Registrar) initAppChannels(existingChannels []string, channelsWithJoinBlock map[string]*cb.Block) {
 	// init app channels with join-blocks
 	for channelID, joinBlock := range channelsWithJoinBlock {
+		if err := r.authorizeManagedJoin(channelID, joinBlock); err != nil {
+			if r.recordProtectedFailure(channelID, err) {
+				continue
+			}
+			logger.Panicf("Invalid managed join block for channel %s: %s", channelID, err)
+		}
 		ledgerRes, clusterConsenter, err := r.initLedgerResourcesClusterConsenter(joinBlock)
 		if err != nil {
 			if r.recordProtectedFailure(channelID, err) {
@@ -325,6 +368,28 @@ func (r *Registrar) initAppChannels(existingChannels []string, channelsWithJoinB
 			}
 		}
 	}
+}
+
+func (r *Registrar) authorizeManagedJoin(channelID string, configBlock *cb.Block) error {
+	managed := r.protected.managed
+	if managed == nil {
+		return nil
+	}
+	configEnv, err := protoutil.ExtractEnvelope(configBlock, 0)
+	if err != nil {
+		return err
+	}
+	id, err := channelNameFromConfigTx(configEnv)
+	if err != nil {
+		return err
+	}
+	if id != channelID {
+		return errors.New("join block conflicts with the managed channel ID")
+	}
+	if managed.RequiresProtection(id) && configBlock.GetHeader().GetNumber() != 0 {
+		return managed.VerifyOrdererJoin(id, configBlock, r.bccsp)
+	}
+	return nil
 }
 
 func (r *Registrar) initLedgerResourcesClusterConsenter(configBlock *cb.Block) (*ledgerResources, consensus.ClusterConsenter, error) {
@@ -717,6 +782,9 @@ func (r *Registrar) FetchBlock(channelID string, blockID string) (*cb.Block, err
 	r.lock.RLock()
 	defer r.lock.RUnlock()
 
+	if r.protected.contains(channelID) {
+		return nil, errors.Wrap(types.ErrProtectedOperationUnavailable, "use the protected Deliver service for block retrieval")
+	}
 	if status, ok := r.pendingRemoval[channelID]; ok {
 		if status.Status == types.StatusFailed {
 			return nil, types.ErrChannelRemovalFailure
@@ -780,6 +848,9 @@ func (r *Registrar) JoinChannel(channelID string, configBlock *cb.Block) (info t
 		return types.ChannelInfo{}, types.ErrChannelAlreadyExists
 	}
 
+	if err := r.authorizeManagedJoin(channelID, configBlock); err != nil {
+		return types.ChannelInfo{}, err
+	}
 	defer func() {
 		if err != nil && !r.protected.contains(channelID) {
 			if err2 := r.ledgerFactory.Remove(channelID); err2 != nil {
@@ -855,21 +926,49 @@ func (r *Registrar) UpdateChannel(channelID string, envelope *cb.Envelope) (info
 	}
 
 	cs, ok := r.chains[channelID]
+	protected := r.protected.contains(channelID)
 	r.lock.Unlock()
 	if !ok {
+		if protected {
+			return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+		}
 		return types.ChannelInfo{}, types.ErrChannelNotExist
 	}
 
+	generation, release, admitted := cs.AcquireBroadcastAdmission()
+	if !admitted {
+		return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+	}
+	defer release()
+
 	config, configSeq, err := cs.ProcessConfigUpdateMsg(envelope)
+	if generation != nil && generation.Err() != nil {
+		return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+	}
 	if err != nil {
 		return types.ChannelInfo{}, errors.WithMessagef(err, "failed update config of channel %s", channelID)
 	}
 
-	if err = cs.WaitReady(); err != nil {
+	if generation == nil {
+		err = cs.WaitReady()
+	} else {
+		err = cs.WaitReadyWithGeneration(generation)
+		if generation.Err() != nil {
+			return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+		}
+	}
+	if err != nil {
 		return types.ChannelInfo{}, errors.WithMessagef(err, "failed update config of channel %s with SERVICE_UNAVAILABLE: rejected by Consenter", channelID)
 	}
 
-	err = cs.Configure(config, configSeq)
+	if generation == nil {
+		err = cs.Configure(config, configSeq)
+	} else {
+		err = cs.ConfigureWithGeneration(generation, config, configSeq)
+		if err != nil && generation.Err() != nil {
+			return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+		}
+	}
 	if err != nil {
 		return types.ChannelInfo{}, errors.WithMessagef(err, "failed update config of channel %s with SERVICE_UNAVAILABLE: rejected by Configure", channelID)
 	}
@@ -973,6 +1072,9 @@ func (r *Registrar) createFollower(
 func (r *Registrar) RemoveChannel(channelID string) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
+	if r.protected.contains(channelID) {
+		return errors.Wrap(types.ErrProtectedOperationUnavailable, "protected removal requires operator decommissioning")
+	}
 
 	status, ok := r.pendingRemoval[channelID]
 	if ok && status.Status != types.StatusFailed {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/pkg/errors"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
@@ -103,6 +104,23 @@ func (s *RPC) SendConsensus(destination uint64, msg *orderer.ConsensusRequest) e
 
 // SendSubmit sends a SubmitRequest to the given destination node.
 func (s *RPC) SendSubmit(destination uint64, request *orderer.SubmitRequest, report func(error)) error {
+	return s.sendSubmit(context.Background(), nil, nil, destination, request, report)
+}
+
+// SendSubmitWithGeneration forwards only work validated under expected. The
+// stream retains the generation lease until its accepted send has stopped.
+// This does not protect work before this call or the remote consensus queue.
+func (s *RPC) SendSubmitWithGeneration(ctx context.Context, gate *activation.Gate, expected context.Context, destination uint64, request *orderer.SubmitRequest, report func(error)) error {
+	if gate == nil || expected == nil {
+		return errors.New("protected channel generation is required")
+	}
+	return s.sendSubmit(ctx, gate, expected, destination, request, report)
+}
+
+func (s *RPC) sendSubmit(ctx context.Context, gate *activation.Gate, expected context.Context, destination uint64, request *orderer.SubmitRequest, report func(error)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.Logger.IsEnabledFor(zapcore.DebugLevel) {
 		defer s.submitSent(time.Now(), destination, request)
 	}
@@ -129,8 +147,12 @@ func (s *RPC) SendSubmit(destination uint64, request *orderer.SubmitRequest, rep
 	s.submitLock.Lock()
 	defer s.submitLock.Unlock()
 
-	err = stream.SendWithReport(req, unmapOnFailure)
-	if err != nil {
+	if gate != nil {
+		err = stream.SendWithGeneration(ctx, gate, expected, req, unmapOnFailure)
+	} else {
+		err = stream.SendWithReport(req, unmapOnFailure)
+	}
+	if err != nil && (gate == nil || stream.Canceled()) {
 		s.unMapStream(destination, SubmitOperation, stream.ID)
 	}
 	return err

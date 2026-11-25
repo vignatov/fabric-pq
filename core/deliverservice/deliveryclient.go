@@ -193,6 +193,7 @@ func (d *deliverServiceImpl) createBlockDelivererCFT(chainID string, ledgerInfo 
 		},
 		Ledger:                 ledgerInfo,
 		UpdatableBlockVerifier: ubv,
+		VerificationHeight:     height,
 		Dialer: blocksprovider.DialerAdapter{
 			ClientConfig: comm.ClientConfig{
 				DialTimeout:    d.conf.DeliverServiceConfig.ConnectionTimeout,

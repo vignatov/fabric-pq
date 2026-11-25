@@ -35,3 +35,11 @@ var ErrChannelRemovalFailure = errors.New("channel removal failure")
 
 // ErrChannelNotReady is returned when trying to update a channel that is a follower
 var ErrChannelNotReady = errors.New("channel is not ready, he is a follower")
+
+// ErrProtectedAdmissionClosed is returned when an admin update cannot enter
+// the channel's serving generation.
+var ErrProtectedAdmissionClosed = errors.New("protected channel admission is closed")
+
+// ErrProtectedOperationUnavailable is returned for admin operations without
+// a protected publication or decommissioning contract.
+var ErrProtectedOperationUnavailable = errors.New("operation is unavailable for protected channels")

@@ -7,9 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 package gateway
 
 import (
+	"context"
+	"errors"
 	"math"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
@@ -21,6 +25,7 @@ import (
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
 	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 const channelName = "mychannel"
@@ -137,11 +142,201 @@ func TestOrdererCache(t *testing.T) {
 	require.Equal(t, 3, n)
 }
 
+func TestPQ40EGatewayOrdererStaging(t *testing.T) {
+	test := prepareTest(t, &testDef{config: buildConfig(t, []string{"orderer1", "orderer2"})})
+	registry := test.server.registry
+	old, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, old, 2)
+	closed := false
+	failRetirement := true
+	old[0].closeConnection = func() error {
+		if failRetirement {
+			return errors.New("injected retirement failure")
+		}
+		closed = true
+		return nil
+	}
+
+	otherBundle, err := createChannelConfigBundle("other-channel", []string{"other:7050"})
+	require.NoError(t, err)
+	registry.configUpdate(otherBundle)
+	other, _, err := registry.orderers("other-channel")
+	require.NoError(t, err)
+	require.Len(t, other, 1)
+	otherClosed := false
+	other[0].closeConnection = func() error { otherClosed = true; return nil }
+
+	candidateBundle, err := createChannelConfigBundle(channelName, []string{"orderer2:7050"})
+	require.NoError(t, err)
+	channel, candidate := stageOrdererConfig(candidateBundle)
+	require.Equal(t, channelName, channel)
+	require.Len(t, candidate, 1)
+	publication, err := registry.prepareProtectedConfigUpdate(candidateBundle)
+	require.NoError(t, err)
+	before, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Equal(t, old, before)
+	require.False(t, closed, "preparation must not close an active connection")
+
+	previous, _ := registry.channelOrderers.Load(channelName)
+	require.ErrorContains(t, publication.Retire(), "injected retirement failure")
+	current, _ := registry.channelOrderers.Load(channelName)
+	require.Equal(t, previous, current, "failed retirement must keep the candidate private")
+	failRetirement = false
+	require.NoError(t, publication.Retire())
+	publication.Publish()
+	after, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	require.True(t, closed, "publication must retire the removed connection")
+	require.False(t, otherClosed, "publication must preserve unrelated connections")
+
+	// Recovery rebuilds the in-memory cache from the serving bundle even if
+	// discovery still advertises a retired endpoint.
+	restarted := prepareTest(t, &testDef{config: buildConfig(t, []string{"orderer1"})}).server.registry
+	restarted.configUpdate(otherBundle)
+	recovery, err := restarted.prepareProtectedConfigUpdate(candidateBundle)
+	require.NoError(t, err)
+	require.NoError(t, recovery.Retire())
+	recovery.Publish()
+	recovered, _, err := restarted.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, recovered, 1)
+	require.Equal(t, after[0].address, recovered[0].address)
+	require.NotSame(t, after[0], recovered[0])
+	otherRecovered, _, err := restarted.orderers("other-channel")
+	require.NoError(t, err)
+	require.Len(t, otherRecovered, 1)
+	require.Equal(t, other[0].address, otherRecovered[0].address)
+}
+
+func TestPQ40EGatewayRetiresChangedTLSRoots(t *testing.T) {
+	test := prepareTest(t, &testDef{config: buildConfig(t, []string{"orderer1"})})
+	registry := test.server.registry
+	old, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, old, 1)
+	oldClosed := false
+	old[0].closeConnection = func() error { oldClosed = true; return nil }
+
+	otherBundle, err := createChannelConfigBundle("other-channel", []string{old[0].address})
+	require.NoError(t, err)
+	registry.configUpdate(otherBundle)
+	other, _, err := registry.orderers("other-channel")
+	require.NoError(t, err)
+	require.Len(t, other, 1)
+	otherClosed := false
+	other[0].closeConnection = func() error { otherClosed = true; return nil }
+	require.NotSame(t, old[0], other[0])
+
+	newCA, err := tlsgen.NewCA()
+	require.NoError(t, err)
+	candidate := []*endpointConfig{{address: old[0].address, mspid: old[0].mspid, tlsRootCerts: [][]byte{newCA.CertBytes()}}}
+	before, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Same(t, old[0], before[0])
+	require.False(t, oldClosed)
+	require.NoError(t, registry.publishOrdererConfig(channelName, candidate))
+	require.True(t, oldClosed)
+	require.False(t, otherClosed)
+	after, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	require.NotSame(t, old[0], after[0])
+	require.Equal(t, candidate[0].tlsRootCerts, after[0].tlsRootCerts)
+}
+
+func TestPQ40EGatewayRetriesFailedConnectionRetirement(t *testing.T) {
+	test := prepareTest(t, &testDef{config: buildConfig(t, []string{"orderer1"})})
+	registry := test.server.registry
+	old, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, old, 1)
+	oldKey := cacheKey(channelName, old[0].endpointConfig)
+	attempts := 0
+	old[0].closeConnection = func() error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("close failed")
+		}
+		return nil
+	}
+	newCA, err := tlsgen.NewCA()
+	require.NoError(t, err)
+	candidate := []*endpointConfig{{address: old[0].address, mspid: old[0].mspid, tlsRootCerts: [][]byte{newCA.CertBytes()}}}
+	require.ErrorContains(t, registry.publishOrdererConfig(channelName, candidate), "close failed")
+	_, found := registry.broadcastClients.Load(oldKey)
+	require.True(t, found, "failed retirement must remain retryable")
+	current, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, current, 1)
+	require.NotSame(t, old[0], current[0], "failed retirement must not make old roots current")
+	require.NoError(t, registry.publishOrdererConfig(channelName, candidate))
+	_, found = registry.broadcastClients.Load(oldKey)
+	require.False(t, found)
+	require.Equal(t, 2, attempts)
+}
+
+func TestPQ40EGatewayEmptyPublishedEndpointsRetireConnections(t *testing.T) {
+	test := prepareTest(t, &testDef{config: buildConfig(t, []string{"orderer1"})})
+	registry := test.server.registry
+	old, _, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Len(t, old, 1)
+	closed := false
+	old[0].closeConnection = func() error { closed = true; return nil }
+	require.NoError(t, registry.publishOrdererConfig(channelName, nil))
+	require.True(t, closed)
+	current, count, err := registry.orderers(channelName)
+	require.NoError(t, err)
+	require.Empty(t, current)
+	require.Zero(t, count, "an approved empty snapshot must not fall back to discovery")
+}
+
+func TestPQ40EGatewayRejectsConnectionFromSupersededConfig(t *testing.T) {
+	test := prepareTest(t, &testDef{config: buildConfig(t, []string{"orderer1"})})
+	registry := test.server.registry
+	started := make(chan struct{})
+	resume := make(chan struct{})
+	resumeDial := sync.OnceFunc(func() { close(resume) })
+	defer resumeDial()
+	registry.endpointFactory.dialer = func(context.Context, string, ...grpc.DialOption) (*grpc.ClientConn, error) {
+		close(started)
+		<-resume
+		return nil, nil
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := registry.orderers(channelName)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("orderer connection did not start")
+	}
+	newCA, err := tlsgen.NewCA()
+	require.NoError(t, err)
+	candidate := []*endpointConfig{{address: "orderer1:7050", mspid: "msp1", tlsRootCerts: [][]byte{newCA.CertBytes()}}}
+	require.NoError(t, registry.publishOrdererConfig(channelName, candidate))
+	resumeDial()
+	select {
+	case err := <-result:
+		require.ErrorContains(t, err, "configuration changed during connection setup")
+	case <-time.After(5 * time.Second):
+		t.Fatal("superseded connection did not return")
+	}
+}
+
 func TestStaleOrdererConnections(t *testing.T) {
 	def := &testDef{
 		config: buildConfig(t, []string{"orderer1", "orderer2", "orderer3"}),
 	}
 	test := prepareTest(t, def)
+	initial, err := createChannelConfigBundle(channelName, []string{"orderer1:7050", "orderer2:7050", "orderer3:7050"})
+	require.NoError(t, err)
+	test.server.registry.configUpdate(initial)
 
 	orderers, n, err := test.server.registry.orderers(channelName)
 	require.NoError(t, err)
@@ -181,6 +376,8 @@ func TestStaleMultiChannelOrdererConnections(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, orderers, 2)
 	require.Equal(t, 2, n)
+	firstChannelClosed := false
+	orderers[0].closeConnection = func() error { firstChannelClosed = true; return nil }
 
 	// trigger the config update callback, updating the orderers
 	bundle, err := createChannelConfigBundle(channel1, []string{"orderer1:7050", "orderer3:7050", "orderer4:7050"})
@@ -201,7 +398,8 @@ func TestStaleMultiChannelOrdererConnections(t *testing.T) {
 		}(i)
 	}
 
-	// new config update removes orderer1 and orderer3 from channel1 - should only trigger the closure of orderer3
+	// Removing endpoints retires this channel's connections independently of
+	// connections to the same address used by other channels.
 	bundle, err = createChannelConfigBundle(channel1, []string{"orderer4:7050"})
 	require.NoError(t, err)
 	test.server.registry.configUpdate(bundle)
@@ -210,9 +408,10 @@ func TestStaleMultiChannelOrdererConnections(t *testing.T) {
 	require.Len(t, orderers, 1)
 	require.Equal(t, 1, n)
 
-	require.False(t, closed[0]) // orderer1
+	require.True(t, closed[0])  // orderer1 on channel1
 	require.True(t, closed[1])  // orderer3
 	require.False(t, closed[2]) // orderer4
+	require.False(t, firstChannelClosed)
 }
 
 func buildConfig(t *testing.T, orderers []string) *dp.ConfigResult {

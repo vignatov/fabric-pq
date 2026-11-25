@@ -7,6 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 package gateway
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -18,6 +21,7 @@ import (
 	"github.com/hyperledger/fabric-protos-go-apiv2/gossip"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/channelconfig"
+	corepeer "github.com/hyperledger/fabric/core/peer"
 	"github.com/hyperledger/fabric/core/scc"
 	gossipapi "github.com/hyperledger/fabric/gossip/api"
 	gossipcommon "github.com/hyperledger/fabric/gossip/common"
@@ -41,12 +45,49 @@ type registry struct {
 	logger             *flogging.FabricLogger
 	endpointFactory    *endpointFactory
 	remoteEndorsers    map[string]*endorser
-	broadcastClients   sync.Map // orderer address (string) -> client connection (orderer)
+	broadcastClients   sync.Map // ordererCacheKey -> client connection (orderer)
 	channelInitialized map[string]bool
 	configLock         sync.RWMutex
+	ordererConfigLock  sync.Mutex
+	ordererPublishLock sync.Mutex
 	channelOrderers    sync.Map // channel (string) -> orderer addresses (endpointConfig)
 	systemChaincodes   scc.BuiltinSCCs
 	localProvider      ledger.Provider
+}
+
+// Connections must not be reused across channels or TLS trust snapshots.
+type ordererCacheKey struct {
+	channel string
+	address string
+	mspid   string
+	roots   [sha256.Size]byte
+}
+
+func cacheKey(channel string, ep *endpointConfig) ordererCacheKey {
+	h := sha256.New()
+	var length [8]byte
+	for _, root := range ep.tlsRootCerts {
+		binary.BigEndian.PutUint64(length[:], uint64(len(root)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write(root)
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], h.Sum(nil))
+	return ordererCacheKey{channel: channel, address: ep.address, mspid: ep.mspid, roots: digest}
+}
+
+// ordererKeyCurrent is called while ordererConfigLock is held.
+func (reg *registry) ordererKeyCurrent(key ordererCacheKey) bool {
+	value, ok := reg.channelOrderers.Load(key.channel)
+	if !ok {
+		return false
+	}
+	for _, endpoint := range value.([]*endpointConfig) {
+		if cacheKey(key.channel, endpoint) == key {
+			return true
+		}
+	}
+	return false
 }
 
 type endorserState struct {
@@ -313,11 +354,20 @@ func (reg *registry) orderers(channel string) ([]*orderer, int, error) {
 			return nil, 0, err
 		}
 		// A config update may have saved this first, in which case don't overwrite it.
+		reg.ordererConfigLock.Lock()
 		addr, _ = reg.channelOrderers.LoadOrStore(channel, channelOrderers)
+		reg.ordererConfigLock.Unlock()
 		ordererEndpoints = addr.([]*endpointConfig)
 	}
 	for _, ep := range ordererEndpoints {
-		entry, exists := reg.broadcastClients.Load(ep.address)
+		key := cacheKey(channel, ep)
+		reg.ordererConfigLock.Lock()
+		if !reg.ordererKeyCurrent(key) {
+			reg.ordererConfigLock.Unlock()
+			return nil, 0, errors.New("channel orderer configuration changed during lookup")
+		}
+		entry, exists := reg.broadcastClients.Load(key)
+		reg.ordererConfigLock.Unlock()
 		if !exists {
 			// this orderer is new - connect to it and add to the broadcastClients registry
 			client, err := reg.endpointFactory.newOrderer(ep.address, ep.mspid, ep.tlsRootCerts)
@@ -327,7 +377,14 @@ func (reg *registry) orderers(channel string) ([]*orderer, int, error) {
 				continue
 			}
 			var loaded bool
-			entry, loaded = reg.broadcastClients.LoadOrStore(ep.address, client)
+			reg.ordererConfigLock.Lock()
+			if !reg.ordererKeyCurrent(key) {
+				reg.ordererConfigLock.Unlock()
+				_ = client.closeConnection()
+				return nil, 0, errors.New("channel orderer configuration changed during connection setup")
+			}
+			entry, loaded = reg.broadcastClients.LoadOrStore(key, client)
+			reg.ordererConfigLock.Unlock()
 			if loaded {
 				// another goroutine got there first, close this new connection
 				err = client.closeConnection()
@@ -359,7 +416,7 @@ func (reg *registry) lookupEndorser(endpoint string, pkiID gossipcommon.PKIidTyp
 			reg.logger.Warnw("No endpoint for endorser with PKI ID %s", "pkiID", pkiID.String())
 			return nil, false
 		}
-		if e, ok := reg.remoteEndorsers[endpoint]; ok {
+		if e, ok := reg.remoteEndorsers[reg.endorserKey(channel, endpoint)]; ok {
 			logger.Debugw("Found remote endorser", "endpoint", endpoint)
 			return e, false
 		}
@@ -377,6 +434,13 @@ func (reg *registry) lookupEndorser(endpoint string, pkiID gossipcommon.PKIidTyp
 		endorser, _ = lookup() // if it failed to reconnect, this will be nil
 	}
 	return endorser
+}
+
+func (reg *registry) endorserKey(channel, address string) string {
+	if reg.endpointFactory.transportPolicy != nil {
+		return channel + "\x00" + address
+	}
+	return address
 }
 
 // Connect to peers in channel, and add to the registry.  If a reconnection is required, then it must be removed
@@ -409,13 +473,15 @@ func (reg *registry) connectChannelPeers(channel string, force bool) error {
 			pkiID := info.PKIId
 			if address, ok := peers[pkiID.String()]; ok {
 				// add the peer to the peer map - except the local peer, which seems to have an empty address
-				if _, ok := reg.remoteEndorsers[address]; !ok && len(address) > 0 {
+				key := reg.endorserKey(channel, address)
+				if _, ok := reg.remoteEndorsers[key]; !ok && len(address) > 0 {
 					// this peer is new - connect to it and add to the remoteEndorsers registry
 					endorser, err := reg.endpointFactory.newEndorser(pkiID, address, mspid, tlsRootCerts)
 					if err != nil {
 						return err
 					}
-					reg.remoteEndorsers[address] = endorser
+					endorser.channel = channel
+					reg.remoteEndorsers[key] = endorser
 					reg.logger.Infof("Added peer to registry: %s", address)
 				}
 			}
@@ -440,7 +506,10 @@ func (reg *registry) removeEndorser(endorser *endorser) {
 	if err != nil {
 		reg.logger.Errorw("Failed to close connection to endorser", "address", endorser.address, "mspid", endorser.mspid, "err", err)
 	}
-	delete(reg.remoteEndorsers, endorser.address)
+	key := reg.endorserKey(endorser.channel, endorser.address)
+	if reg.remoteEndorsers[key] == endorser {
+		delete(reg.remoteEndorsers, key)
+	}
 }
 
 func (reg *registry) config(channel string) ([]*endpointConfig, error) {
@@ -464,55 +533,118 @@ func (reg *registry) config(channel string) ([]*endpointConfig, error) {
 }
 
 func (reg *registry) configUpdate(bundle *channelconfig.Bundle) {
+	channel, channelOrderers := stageOrdererConfig(bundle)
+	if len(channelOrderers) == 0 {
+		return
+	}
+	if err := reg.publishOrdererConfig(channel, channelOrderers); err != nil {
+		reg.logger.Errorw("Failed to publish orderer configuration", "channel", channel, "err", err)
+	}
+}
+
+// prepareProtectedConfigUpdate stages the cache candidate without publishing
+// it. The activation owner invokes the returned function after durable commit.
+func (reg *registry) prepareProtectedConfigUpdate(bundle *channelconfig.Bundle) (corepeer.ProtectedConfigPublication, error) {
+	channel, orderers := stageOrdererConfig(bundle)
+	if channel == "" {
+		return corepeer.ProtectedConfigPublication{}, errors.New("protected Gateway configuration has no orderer section")
+	}
+	return corepeer.ProtectedConfigPublication{
+		Retire: func() error {
+			if err := reg.retireChannelEndorsers(channel); err != nil {
+				return err
+			}
+			return reg.retireStaleOrderers(channel, orderers)
+		},
+		Publish: func() {
+			reg.ordererConfigLock.Lock()
+			reg.channelOrderers.Store(channel, orderers)
+			reg.ordererConfigLock.Unlock()
+		},
+	}, nil
+}
+
+func (reg *registry) retireChannelEndorsers(channel string) error {
+	reg.configLock.Lock()
+	defer reg.configLock.Unlock()
+	delete(reg.channelInitialized, channel)
+	for key, client := range reg.remoteEndorsers {
+		if client.channel != channel {
+			continue
+		}
+		if err := client.closeConnection(); err != nil {
+			return errors.Wrap(err, "retire protected endorser connection")
+		}
+		delete(reg.remoteEndorsers, key)
+	}
+	return nil
+}
+
+// stageOrdererConfig derives a private candidate without changing the shared
+// Gateway connection cache. Protected callers must publish it only after the
+// corresponding activation is durable.
+func stageOrdererConfig(bundle *channelconfig.Bundle) (string, []*endpointConfig) {
 	if ordererConfig, ok := bundle.OrdererConfig(); ok {
-		// orderer config has changed - process the bundle
 		channel := bundle.ConfigtxValidator().ChannelID()
-		reg.logger.Infow("Updating orderer config", "channel", channel)
 		var channelOrderers []*endpointConfig
 		for _, org := range ordererConfig.Organizations() {
 			mspid := org.MSPID()
 			msp := org.MSP()
-			tlsRootCerts := append([][]byte{}, msp.GetTLSRootCerts()...)
-			tlsRootCerts = append(tlsRootCerts, msp.GetTLSIntermediateCerts()...)
+			var tlsRootCerts [][]byte
+			for _, root := range msp.GetTLSRootCerts() {
+				tlsRootCerts = append(tlsRootCerts, bytes.Clone(root))
+			}
+			for _, root := range msp.GetTLSIntermediateCerts() {
+				tlsRootCerts = append(tlsRootCerts, bytes.Clone(root))
+			}
 			for _, address := range org.Endpoints() {
 				channelOrderers = append(channelOrderers, &endpointConfig{address: address, mspid: mspid, tlsRootCerts: tlsRootCerts})
-				reg.logger.Debugw("Channel orderer", "address", address, "mspid", mspid)
 			}
 		}
-		if len(channelOrderers) > 0 {
-			reg.closeStaleOrdererConnections(channel, channelOrderers)
-			reg.channelOrderers.Store(channel, channelOrderers)
-		}
+		return channel, channelOrderers
 	}
+	return "", nil
 }
 
-func (reg *registry) closeStaleOrdererConnections(channel string, channelOrderers []*endpointConfig) {
-	// Load the list of orderers that is about to be overwritten, if loaded is false, then another goroutine got there first
-	oldList, loaded := reg.channelOrderers.LoadAndDelete(channel)
-	if loaded {
-		currentEndpoints := map[string]struct{}{}
-		reg.channelOrderers.Range(func(key, value any) bool {
-			for _, ep := range value.([]*endpointConfig) {
-				currentEndpoints[ep.address] = struct{}{}
-			}
-			return true
-		})
-		for _, ep := range channelOrderers {
-			currentEndpoints[ep.address] = struct{}{}
-		}
-		// if there are any in the oldEndpoints that are not in the currentEndpoints, then remove from registry and close connection
-		for _, ep := range oldList.([]*endpointConfig) {
-			if _, exists := currentEndpoints[ep.address]; !exists {
-				client, found := reg.broadcastClients.LoadAndDelete(ep.address)
-				if found {
-					err := client.(*orderer).closeConnection()
-					if err != nil {
-						reg.logger.Errorw("Failed to close connection to orderer", "address", ep.logAddress, "mspid", ep.mspid, "err", err)
-					}
-				}
-			}
-		}
+func (reg *registry) publishOrdererConfig(channel string, channelOrderers []*endpointConfig) error {
+	reg.ordererPublishLock.Lock()
+	defer reg.ordererPublishLock.Unlock()
+	reg.logger.Infow("Updating orderer config", "channel", channel)
+	reg.ordererConfigLock.Lock()
+	reg.channelOrderers.Store(channel, channelOrderers)
+	reg.ordererConfigLock.Unlock()
+	return reg.retireStaleOrderers(channel, channelOrderers)
+}
+
+func (reg *registry) retireStaleOrderers(channel string, endpoints []*endpointConfig) error {
+	active := make(map[ordererCacheKey]struct{}, len(endpoints))
+	for _, endpoint := range endpoints {
+		active[cacheKey(channel, endpoint)] = struct{}{}
 	}
+	type staleConnection struct {
+		key    ordererCacheKey
+		client *orderer
+	}
+	var stale []staleConnection
+	reg.broadcastClients.Range(func(rawKey, value any) bool {
+		key := rawKey.(ordererCacheKey)
+		if _, current := active[key]; key.channel == channel && !current {
+			stale = append(stale, staleConnection{key: key, client: value.(*orderer)})
+		}
+		return true
+	})
+	var closeErr error
+	for _, old := range stale {
+		if err := old.client.closeConnection(); err != nil {
+			reg.logger.Errorw("Failed to close connection to orderer", "address", old.client.logAddress, "mspid", old.client.mspid, "err", err)
+			if closeErr == nil {
+				closeErr = errors.Wrap(err, "retire stale orderer connection")
+			}
+			continue
+		}
+		reg.broadcastClients.CompareAndDelete(old.key, old.client)
+	}
+	return closeErr
 }
 
 func (reg *registry) hasChaincode(member gossipdiscovery.NetworkMember, chaincodeName string) bool {

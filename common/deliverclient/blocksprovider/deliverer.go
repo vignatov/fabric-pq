@@ -18,8 +18,10 @@ import (
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/gossip"
 	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"github.com/hyperledger/fabric/common/deliverclient"
 	"github.com/hyperledger/fabric/common/deliverclient/orderers"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
+	"github.com/hyperledger/fabric/protoutil"
 	"google.golang.org/grpc"
 )
 
@@ -78,13 +80,15 @@ type Deliverer struct {
 	BlockHandler           BlockHandler
 	Ledger                 LedgerInfo
 	UpdatableBlockVerifier UpdatableBlockVerifier
-	Dialer                 Dialer
-	OrderersSourceFactory  OrdererConnectionSourceFactory
-	CryptoProvider         bccsp.BCCSP
-	DoneC                  chan struct{}
-	Signer                 identity.SignerSerializer
-	DeliverStreamer        DeliverStreamer
-	Logger                 *flogging.FabricLogger
+	// VerificationHeight is the next block expected by the initial verifier.
+	VerificationHeight    uint64
+	Dialer                Dialer
+	OrderersSourceFactory OrdererConnectionSourceFactory
+	CryptoProvider        bccsp.BCCSP
+	DoneC                 chan struct{}
+	Signer                identity.SignerSerializer
+	DeliverStreamer       DeliverStreamer
+	Logger                *flogging.FabricLogger
 
 	// The maximal value of the actual retry interval, which cannot increase beyond this value
 	MaxRetryInterval time.Duration
@@ -169,6 +173,13 @@ func (d *Deliverer) DeliverBlocks() {
 			d.Logger.Error("Did not return ledger height, something is critically wrong", err)
 			return
 		}
+		if d.VerificationHeight != 0 && ledgerHeight > d.VerificationHeight {
+			if err := d.refreshVerifier(ledgerHeight); err != nil {
+				d.Logger.Warningf("Could not reconcile delivery verifier at committed height %d: %s", ledgerHeight, err)
+				failureCounter++
+				continue
+			}
+		}
 
 		endpoint, err := d.orderers.RandomEndpoint()
 		if err != nil {
@@ -207,6 +218,9 @@ func (d *Deliverer) DeliverBlocks() {
 
 		blockReceiver.Start() // starts an internal goroutine
 		onSuccess := func(blockNum uint64, channelConfig *cb.Config) {
+			if d.VerificationHeight != 0 {
+				d.VerificationHeight = blockNum + 1
+			}
 			failureCounter = 0
 			totalDuration = time.Duration(0)
 
@@ -233,6 +247,43 @@ func (d *Deliverer) DeliverBlocks() {
 			}
 		}
 	}
+}
+
+// Gossip can commit blocks while the orderer is disconnected. Rebuild both
+// the verifier and endpoint view from the same committed prefix used to seek.
+func (d *Deliverer) refreshVerifier(height uint64) error {
+	reader, ok := d.Ledger.(interface{ GetBlocks([]uint64) []*cb.Block })
+	if !ok {
+		return errors.New("ledger does not expose committed blocks")
+	}
+	tip := reader.GetBlocks([]uint64{height - 1})
+	if len(tip) != 1 || tip[0].GetHeader() == nil || tip[0].GetHeader().GetNumber() != height-1 {
+		return errors.New("committed ledger tip is unavailable")
+	}
+	index, err := protoutil.GetLastConfigIndexFromBlock(tip[0])
+	if err != nil {
+		return err
+	}
+	config := reader.GetBlocks([]uint64{index})
+	if len(config) != 1 || config[0].GetHeader() == nil || config[0].GetHeader().GetNumber() != index {
+		return errors.New("committed configuration block is unavailable")
+	}
+	verifier, err := deliverclient.NewBlockVerificationAssistant(config[0], tip[0], d.CryptoProvider, d.Logger)
+	if err != nil {
+		return err
+	}
+	envelope, err := deliverclient.ConfigFromBlock(config[0])
+	if err != nil {
+		return err
+	}
+	global, orgs, err := extractAddresses(d.ChannelID, envelope.GetConfig(), d.CryptoProvider)
+	if err != nil {
+		return err
+	}
+	d.orderers.Update(global, orgs)
+	d.UpdatableBlockVerifier = verifier
+	d.VerificationHeight = height
+	return nil
 }
 
 // Stop stops blocks delivery provider

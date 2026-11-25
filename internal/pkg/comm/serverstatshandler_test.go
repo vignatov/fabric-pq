@@ -8,18 +8,26 @@ package comm_test
 
 import (
 	"context"
+	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/hyperledger/fabric-lib-go/common/metrics"
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
 	"github.com/hyperledger/fabric-lib-go/common/metrics/metricsfakes"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/comm/testpb"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/stats"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestConnectionCounters(t *testing.T) {
@@ -41,6 +49,203 @@ func TestConnectionCounters(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		sh.HandleConn(context.Background(), &stats.ConnEnd{})
 		gt.Expect(closedConn.AddCallCount()).To(Equal(i))
+	}
+}
+
+type responseLeaseServer struct {
+	testpb.UnimplementedEmptyServiceServer
+	gate     *activation.Gate
+	acquired chan struct{}
+	finish   chan struct{}
+	released chan struct{}
+}
+
+func (s *responseLeaseServer) EmptyCall(ctx context.Context, _ *testpb.Empty) (*testpb.Empty, error) {
+	release := func() {}
+	if s.gate != nil {
+		var ok bool
+		_, _, release, ok = s.gate.Acquire()
+		if !ok {
+			return nil, context.Canceled
+		}
+	}
+	if !comm.RetainUntilRPCEnd(ctx, func() { release(); close(s.released) }) {
+		release()
+		return nil, context.Canceled
+	}
+	close(s.acquired)
+	<-s.finish
+	return &testpb.Empty{}, nil
+}
+
+func TestPQ40EResponseLeaseEndsWithGRPC(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv, err := comm.NewGRPCServerFromListener(listener, comm.ServerConfig{
+		ServerStatsHandler: comm.NewServerStatsHandler(&disabled.Provider{}),
+	})
+	require.NoError(t, err)
+	service := &responseLeaseServer{acquired: make(chan struct{}), finish: make(chan struct{}), released: make(chan struct{})}
+	testpb.RegisterEmptyServiceServer(srv.Server(), service)
+	go srv.Start()
+	t.Cleanup(srv.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	done := make(chan error, 1)
+	go func() { _, err := testpb.NewEmptyServiceClient(conn).EmptyCall(ctx, &testpb.Empty{}); done <- err }()
+	select {
+	case <-service.acquired:
+	case <-ctx.Done():
+		t.Fatal("RPC did not acquire the response lease")
+	}
+	select {
+	case <-service.released:
+		t.Fatal("response lease released while handler was active")
+	default:
+	}
+	close(service.finish)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("RPC did not complete")
+	}
+	select {
+	case <-service.released:
+	case <-ctx.Done():
+		t.Fatal("response lease was not released")
+	}
+}
+
+func TestPQ40EResponseLeaseScopeEndsOnce(t *testing.T) {
+	handler := &comm.ServerStatsHandler{}
+	ctx := handler.TagRPC(context.Background(), &stats.RPCTagInfo{})
+	count := 0
+	require.False(t, comm.RetainUntilRPCEnd(ctx, func() {}))
+	handler.HandleRPC(ctx, &stats.Begin{})
+	require.True(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
+	require.True(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
+	handler.HandleRPC(ctx, &stats.OutPayload{})
+	require.Zero(t, count)
+	handler.HandleRPC(ctx, &stats.End{})
+	handler.HandleRPC(ctx, &stats.End{})
+	require.Equal(t, 2, count)
+	require.False(t, comm.RetainUntilRPCEnd(ctx, func() { count++ }))
+	require.False(t, comm.RetainUntilRPCEnd(context.Background(), func() {}))
+}
+
+func TestPQ40EResponseLeaseRejectsStreams(t *testing.T) {
+	handler := &comm.ServerStatsHandler{}
+	for _, begin := range []*stats.Begin{{IsClientStream: true}, {IsServerStream: true}} {
+		ctx := handler.TagRPC(context.Background(), &stats.RPCTagInfo{})
+		handler.HandleRPC(ctx, begin)
+		require.False(t, comm.RetainUntilRPCEnd(ctx, func() { t.Error("stream retained a unary lease") }))
+		handler.HandleRPC(ctx, &stats.End{})
+	}
+}
+
+type blockingResponseCodec struct {
+	started chan struct{}
+	finish  chan struct{}
+}
+
+func (c *blockingResponseCodec) Name() string { return "proto" }
+
+func (c *blockingResponseCodec) Marshal(v any) ([]byte, error) {
+	close(c.started)
+	<-c.finish
+	return proto.Marshal(v.(proto.Message))
+}
+
+func (c *blockingResponseCodec) Unmarshal(data []byte, v any) error {
+	return proto.Unmarshal(data, v.(proto.Message))
+}
+
+func TestPQ40EResponseLeaseSurvivesBlockedSend(t *testing.T) {
+	fixture := testfixture.New(t)
+	genesis := testfixture.Genesis(t)
+	store, err := activation.OpenStore(t.TempDir(), nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, testfixture.Config(t, genesis))
+	controller := fixture.Channel(store, activation.Ledger{
+		LatestConfig: func() (*cb.Block, error) { return genesis, nil },
+		Block: func(number uint64) (*cb.Block, error) {
+			if number != 0 {
+				return nil, errors.New("missing block")
+			}
+			return genesis, nil
+		},
+		Height: func() (uint64, error) { return 1, nil },
+		Sync:   func() error { return nil },
+	})
+	require.NoError(t, controller.Recover(true))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	codec := &blockingResponseCodec{started: make(chan struct{}), finish: make(chan struct{})}
+	server := grpc.NewServer(grpc.StatsHandler(comm.NewServerStatsHandler(&disabled.Provider{})), grpc.ForceServerCodec(codec))
+	service := &responseLeaseServer{gate: controller.Gate, acquired: make(chan struct{}), finish: make(chan struct{}), released: make(chan struct{})}
+	testpb.RegisterEmptyServiceServer(server, service)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	var finishService, finishCodec sync.Once
+	t.Cleanup(func() {
+		finishService.Do(func() { close(service.finish) })
+		finishCodec.Do(func() { close(codec.finish) })
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	done := make(chan error, 1)
+	go func() { _, err := testpb.NewEmptyServiceClient(conn).EmptyCall(ctx, &testpb.Empty{}); done <- err }()
+	select {
+	case <-service.acquired:
+	case <-ctx.Done():
+		t.Fatal("RPC did not acquire the lease")
+	}
+	finishService.Do(func() { close(service.finish) })
+	select {
+	case <-codec.started:
+	case <-ctx.Done():
+		t.Fatal("response did not enter serialization")
+	}
+	drained := make(chan struct{})
+	go func() { controller.Suspend(); close(drained) }()
+	select {
+	case <-controller.Gate.Errored():
+	case <-ctx.Done():
+		t.Fatal("generation did not close")
+	}
+	select {
+	case <-drained:
+		t.Fatal("generation drained while response send was blocked")
+	default:
+	}
+	select {
+	case <-service.released:
+		t.Fatal("lease released while response send was blocked")
+	default:
+	}
+	finishCodec.Do(func() { close(codec.finish) })
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("RPC did not finish")
+	}
+	select {
+	case <-service.released:
+	case <-ctx.Done():
+		t.Fatal("lease did not release after RPC completion")
+	}
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		t.Fatal("generation did not drain after the response")
 	}
 }
 

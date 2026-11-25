@@ -7,6 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 package comm
 
 import (
+	"context"
+
 	proto "github.com/hyperledger/fabric-protos-go-apiv2/gossip"
 	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/pkg/errors"
@@ -34,6 +36,17 @@ func (m *ReceivedMessageImpl) Respond(msg *proto.GossipMessage) {
 		return
 	}
 	m.conn.send(sMsg, func(e error) {}, blockingSend)
+}
+
+// RespondWithGeneration waits for the protected reply to leave the local
+// transport or be discarded. Revocation aborts an in-flight blocked send.
+func (m *ReceivedMessageImpl) RespondWithGeneration(msg *proto.GossipMessage, generation context.Context) {
+	signed, err := protoext.NoopSign(msg)
+	if err != nil {
+		m.conn.logger.Errorf("Failed creating protected gossip reply: %v", err)
+		return
+	}
+	m.conn.sendProtectedReply(signed, generation)
 }
 
 // GetGossipMessage returns the inner GossipMessage

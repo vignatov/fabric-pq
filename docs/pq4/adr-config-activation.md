@@ -1,5 +1,11 @@
 # ADR: PQ transport policy and Fabric configuration activation
 
+PQ4.0E authenticates channel selection before managed startup. Protected
+services consume the activation generation and hold it through the relevant
+handoff or response. Shared roots and Gateway endpoints publish after staged
+validation and cache retirement. The service inventory and deployment
+boundary are tracked in [PQ4.0E status](pq4.0e-status.md).
+
 **Status: proposed for architecture review. PQ4.0B enforcement remains INCOMPLETE.**
 
 ## Decision and alternatives

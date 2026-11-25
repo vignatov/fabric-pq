@@ -33,6 +33,7 @@ type Server struct {
 	logger           *flogging.FabricLogger
 	ledgerProvider   ledger.Provider
 	getChannelConfig channelConfigGetter
+	acquireAdmission func(string) (context.Context, func(), bool)
 }
 
 type EndorserServerAdapter struct {
@@ -63,7 +64,7 @@ func CreateServer(
 	localMSPID string,
 	options config.Options,
 	systemChaincodes scc.BuiltinSCCs,
-) *Server {
+) (*Server, error) {
 	adapter := &ledger.PeerAdapter{
 		Peer: peerInstance,
 	}
@@ -86,9 +87,13 @@ func CreateServer(
 		peerInstance.GetChannelConfig,
 	)
 
+	if err := peerInstance.AddProtectedConfigStage(server.registry.prepareProtectedConfigUpdate); err != nil {
+		return nil, err
+	}
+	server.acquireAdmission = peerInstance.AcquireChannelAdmission
 	peerInstance.AddConfigCallbacks(server.registry.configUpdate)
 
-	return server
+	return server, nil
 }
 
 func newServer(localEndorser peerproto.EndorserClient,
@@ -116,6 +121,7 @@ func newServer(localEndorser peerproto.EndorserClient,
 				timeout:                  options.DialTimeout,
 				clientCert:               secureOptions.Certificate,
 				clientKey:                secureOptions.Key,
+				transportPolicy:          secureOptions.TransportPolicy,
 				ordererEndpointOverrides: ordererEndpointOverrides,
 			},
 			remoteEndorsers:    map[string]*endorser{},

@@ -72,7 +72,8 @@ type General struct {
 	Throttling        Throttling
 }
 
-// PQActivation selects channels using the isolated-development activation store.
+// PQActivation configures the isolated-development activation store. Channels
+// is checked against the authenticated policy; it does not select membership.
 type PQActivation struct {
 	Channels    []string
 	StateDir    string

@@ -27,8 +27,10 @@ import (
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/types"
@@ -44,6 +46,15 @@ import (
 const promotionRaftID = 4
 
 func TestPQ40DProtectedParticipationPromotion(t *testing.T) {
+	testProtectedParticipationPromotion(t, false)
+}
+
+func TestPQ40EManagedOrdererNonGenesisPromotion(t *testing.T) {
+	testProtectedParticipationPromotion(t, true)
+}
+
+func testProtectedParticipationPromotion(t *testing.T, managed bool) {
+	t.Helper()
 	fixture := testfixture.New(t)
 	ca, err := tlsgen.NewCA()
 	require.NoError(t, err)
@@ -141,9 +152,23 @@ func TestPQ40DProtectedParticipationPromotion(t *testing.T) {
 			UseTLS: true, RequireClientCert: true, Certificate: promotedClient.Cert, Key: promotedClient.Key,
 		},
 	}}
-	registrar := NewRegistrar(config, factory, fixture.Fabric, &disabled.Provider{}, fixture.Crypto, dialer, func(bundle *channelconfig.Bundle) {
+	publish := func(bundle *channelconfig.Bundle) {
 		published.Store(bundle.ConfigtxValidator().Sequence())
-	})
+	}
+	var registrar *Registrar
+	if managed {
+		key := controller.Signer.Bytes()
+		registry, err := enrollment.OpenProtectedRegistry(&enrollment.Manifest{
+			Mode: enrollment.Protected, Network: testfixture.Network, Node: testfixture.Node, Profile: pqtransport.ProfileV1,
+			StateDir: root, LedgerDir: config.FileLedger.Location, PolicySigner: anchor,
+			PolicySignerDigest: fmt.Sprintf("%x", sha256.Sum256(key)),
+		})
+		require.NoError(t, err)
+		config.General.PQActivation = localconfig.PQActivation{}
+		registrar = NewManagedRegistrar(config, factory, fixture.Fabric, &disabled.Provider{}, fixture.Crypto, dialer, registry, nil, publish)
+	} else {
+		registrar = NewRegistrar(config, factory, fixture.Fabric, &disabled.Provider{}, fixture.Crypto, dialer, publish)
+	}
 	memberCheck := &etcdraft.Consenter{
 		Cert: members[promotionRaftID-1].GetServerTlsCert(), BCCSP: fixture.Crypto,
 		Logger: flogging.MustGetLogger("pq40d.promotion"),
@@ -168,6 +193,20 @@ func TestPQ40DProtectedParticipationPromotion(t *testing.T) {
 		}
 	})
 
+	if managed {
+		joinAnchor := fixture.JoinAnchor(t, genesis, join)
+		joinPath := filepath.Join(root, fmt.Sprintf("join-orderer-%x", channelHash))
+		_, err := registrar.JoinChannel(testfixture.ChannelID, join)
+		require.ErrorContains(t, err, "read join-orderer anchor")
+		require.Empty(t, factory.ChannelIDs(), "unauthenticated join must not create a ledger")
+		conflict := joinAnchor
+		conflict.GenesisHash = fmt.Sprintf("%064x", 1)
+		require.NoError(t, os.WriteFile(joinPath, fixture.SignedJoinAnchor(t, enrollment.OrdererJoinAnchorDomain, conflict), 0o600))
+		_, err = registrar.JoinChannel(testfixture.ChannelID, join)
+		require.ErrorContains(t, err, "conflicts with genesis")
+		require.Empty(t, factory.ChannelIDs())
+		require.NoError(t, os.WriteFile(joinPath, fixture.SignedJoinAnchor(t, enrollment.OrdererJoinAnchorDomain, joinAnchor), 0o600))
+	}
 	info, err := registrar.JoinChannel(testfixture.ChannelID, join)
 	require.NoError(t, err)
 	require.Equal(t, types.ConsensusRelationFollower, info.ConsensusRelation)

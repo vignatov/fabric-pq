@@ -4,6 +4,7 @@ package activation
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -125,13 +126,13 @@ func (c *Channel) ValidateBlockShape(block *cb.Block) error {
 // RecoverOrdererLedger authenticates the ledger and repairs an interrupted
 // checkpoint write without opening admission or discarding a prepared block.
 func (c *Channel) RecoverOrdererLedger() error {
-	return c.recover(false, true)
+	return c.recover(false, true, false)
 }
 
 // CompleteOrdererReplay is called by the Raft application owner after it has
 // reconciled the persisted log and a quorum read barrier.
 func (c *Channel) CompleteOrdererReplay() error {
-	return c.recover(true, true)
+	return c.recover(true, true, false)
 }
 
 func (c *Channel) Ready() bool {
@@ -175,16 +176,21 @@ func (c *Channel) record(previous, next configuration, current checkpoint, auth 
 
 // PrepareOrdererProposal binds approved configuration content to the leader's
 // proposed header. The apply path still checks the actual predecessor block.
-func (c *Channel) PrepareOrdererProposal(block *cb.Block) error {
+func (c *Channel) PrepareOrdererProposal(block *cb.Block, expected context.Context) error {
 	s := c.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := c.checkQuarantine(); err != nil {
 		return err
 	}
-	if !c.Ready() {
+	_, _, release, ok := c.Gate.AcquireMatching(expected)
+	if !ok {
 		return errors.New("protected channel is recovering")
 	}
+	// The store serializes durable preparation and activation. Keep the
+	// queued, cancellable lease outside this lock because corrupt state can
+	// require draining the serving generation before returning.
+	release()
 	previous, err := c.latest()
 	if err != nil {
 		return err
@@ -221,7 +227,7 @@ func (c *Channel) PrepareOrdererProposal(block *cb.Block) error {
 // ApplyOrdererConfig guards an ordered block even while admission is closed
 // for replay. The caller serializes it with other native applications.
 func (c *Channel) ApplyOrdererConfig(block *cb.Block, commit func() error) error {
-	err := c.apply(block, Authorization{}, commit, true)
+	err := c.apply(block, Authorization{}, commit, true, false)
 	if errors.Is(err, ErrNativeRecovery) {
 		return err
 	}
@@ -265,8 +271,17 @@ func (c *Channel) AuthorizeGenesis(block *cb.Block) error {
 	if err := c.VerifyGenesis(block); err != nil {
 		return err
 	}
+	return c.AuthorizeBootstrapConfig(block)
+}
+
+// AuthorizeBootstrapConfig checks the signed checkpoint binding for an
+// independently authenticated genesis or snapshot configuration.
+func (c *Channel) AuthorizeBootstrapConfig(block *cb.Block) error {
 	c.Store.mu.Lock()
 	defer c.Store.mu.Unlock()
+	if err := c.checkQuarantine(); err != nil {
+		return err
+	}
 	saved, err := readRecord[checkpoint](c.Store.dir, "checkpoint")
 	if err != nil {
 		return c.quarantineNode(err)
@@ -278,6 +293,11 @@ func (c *Channel) AuthorizeGenesis(block *cb.Block) error {
 	cfg, err := c.config(block)
 	if err != nil {
 		return err
+	}
+	if c.Validate != nil {
+		if err := c.Validate(cfg.bundle); err != nil {
+			return err
+		}
 	}
 	return c.match(policy, cfg)
 }

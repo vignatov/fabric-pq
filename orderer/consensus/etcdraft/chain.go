@@ -140,9 +140,10 @@ type Options struct {
 }
 
 type submit struct {
-	req      *orderer.SubmitRequest
-	leader   chan uint64
-	proposal chan error
+	req        *orderer.SubmitRequest
+	leader     chan uint64
+	proposal   chan error
+	generation context.Context
 }
 
 type gc struct {
@@ -472,11 +473,30 @@ func (c *Chain) Configure(env *common.Envelope, configSeq uint64) error {
 	return c.Submit(&orderer.SubmitRequest{LastValidationSeq: configSeq, Payload: env, Channel: c.channelID}, 0)
 }
 
+func (c *Chain) OrderWithGeneration(generation context.Context, env *common.Envelope, configSeq uint64) error {
+	c.Metrics.NormalProposalsReceived.Add(1)
+	return c.submitWithGeneration(&orderer.SubmitRequest{LastValidationSeq: configSeq, Payload: env, Channel: c.channelID}, generation)
+}
+
+func (c *Chain) ConfigureWithGeneration(generation context.Context, env *common.Envelope, configSeq uint64) error {
+	c.Metrics.ConfigProposalsReceived.Add(1)
+	return c.submitWithGeneration(&orderer.SubmitRequest{LastValidationSeq: configSeq, Payload: env, Channel: c.channelID}, generation)
+}
+
 // WaitReady blocks when the chain:
 // - is catching up with other nodes using snapshot
 //
 // In any other case, it returns right away.
 func (c *Chain) WaitReady() error {
+	return c.WaitReadyWithGeneration(context.Background())
+}
+
+// WaitReadyWithGeneration cancels a blocked readiness handoff when the
+// generation that validated the request stops admitting work.
+func (c *Chain) WaitReadyWithGeneration(generation context.Context) error {
+	if err := generation.Err(); err != nil {
+		return err
+	}
 	if err := c.isRunning(); err != nil {
 		return err
 	}
@@ -488,6 +508,11 @@ func (c *Chain) WaitReady() error {
 	case c.submitC <- nil:
 	case <-c.doneC:
 		return errors.Errorf("chain is stopped")
+	case <-generation.Done():
+		return generation.Err()
+	}
+	if err := generation.Err(); err != nil {
+		return err
 	}
 	if c.activation != nil && !c.activation.Ready() {
 		return errors.New("protected channel admission is closed")
@@ -630,30 +655,61 @@ func (c *Chain) Consensus(req *orderer.ConsensusRequest, sender uint64) error {
 // - the actual leader via the transport mechanism
 // The call fails if there's no leader elected yet.
 func (c *Chain) Submit(req *orderer.SubmitRequest, sender uint64) error {
-	if c.activation != nil && !c.activation.Ready() {
+	if c.activation == nil {
+		return c.submit(req, nil)
+	}
+	_, generation, release, ok := c.activation.Gate.Acquire()
+	if !ok {
 		return errors.New("protected channel admission is closed")
 	}
+	defer release()
+	return c.submit(req, generation)
+}
+
+func (c *Chain) submitWithGeneration(req *orderer.SubmitRequest, expected context.Context) error {
+	if c.activation == nil {
+		return errors.New("protected order handoff requires an activation controller")
+	}
+	_, generation, release, ok := c.activation.Gate.AcquireMatching(expected)
+	if !ok {
+		return errors.New("protected channel admission is closed or stale")
+	}
+	defer release()
+	return c.submit(req, generation)
+}
+
+func (c *Chain) submit(req *orderer.SubmitRequest, generation context.Context) error {
 	if err := c.isRunning(); err != nil {
 		c.Metrics.ProposalFailures.Add(1)
 		return err
 	}
 
 	leadC := make(chan uint64, 1)
-	request := &submit{req: req, leader: leadC}
-	if c.activation != nil {
-		if config, _ := c.isConfig(req.GetPayload()); config {
-			request.proposal = make(chan error, 1)
-		}
+	request := &submit{req: req, leader: leadC, generation: generation}
+	var closed <-chan struct{}
+	if generation != nil {
+		closed = generation.Done()
+		request.proposal = make(chan error, 1)
 	}
 	select {
 	case c.submitC <- request:
-		lead := <-leadC
+		var lead uint64
+		select {
+		case lead = <-leadC:
+		case <-closed:
+			return generation.Err()
+		case <-c.doneC:
+			return ErrChainHalting
+		}
 		if lead == raft.None {
 			c.Metrics.ProposalFailures.Add(1)
 			return errors.Errorf("no Raft leader")
 		}
 
 		if lead != c.raftID {
+			if generation != nil {
+				return c.forwardProtectedToLeader(lead, req, generation)
+			}
 			if err := c.forwardToLeader(lead, req); err != nil {
 				return err
 			}
@@ -661,11 +717,15 @@ func (c *Chain) Submit(req *orderer.SubmitRequest, sender uint64) error {
 			select {
 			case err := <-request.proposal:
 				return err
+			case <-closed:
+				return generation.Err()
 			case <-c.doneC:
 				return ErrChainHalting
 			}
 		}
 
+	case <-closed:
+		return generation.Err()
 	case <-c.doneC:
 		c.Metrics.ProposalFailures.Add(1)
 		return errors.Errorf("chain is stopped")
@@ -713,6 +773,39 @@ func (c *Chain) forwardToLeader(lead uint64, req *orderer.SubmitRequest) error {
 	return nil
 }
 
+// forwardProtectedToLeader binds the remote send to the generation that
+// admitted the submission. The caller holds its lease until the stream has
+// accepted the handoff or the send stops.
+func (c *Chain) forwardProtectedToLeader(lead uint64, req *orderer.SubmitRequest, generation context.Context) error {
+	sender, ok := c.rpc.(interface {
+		SendSubmitWithGeneration(context.Context, *activation.Gate, context.Context, uint64, *orderer.SubmitRequest, func(error)) error
+	})
+	if !ok {
+		return errors.New("cluster transport does not support protected generation sends")
+	}
+	if generation == nil || generation.Err() != nil {
+		return errors.New("protected channel admission is closed")
+	}
+	ctx, cancel := context.WithTimeout(generation, c.opts.RPCTimeout)
+	defer cancel()
+	reported := make(chan error, 1)
+	if err := sender.SendSubmitWithGeneration(ctx, c.activation.Gate, generation, lead, req, func(err error) { reported <- err }); err != nil {
+		c.Metrics.ProposalFailures.Add(1)
+		return err
+	}
+	select {
+	case err := <-reported:
+		if err != nil {
+			c.Metrics.ProposalFailures.Add(1)
+		}
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.doneC:
+		return errors.New("chain is stopped")
+	}
+}
+
 type apply struct {
 	entries []*raftpb.Entry
 	soft    *raft.SoftState
@@ -755,18 +848,36 @@ func (c *Chain) run() {
 	var soft raft.SoftState
 	submitC := c.submitC
 	var bc *blockCreator
+	var proposalGeneration context.Context
 
-	var propC chan<- *common.Block
+	var propC chan<- raftProposal
+	var pendingGeneration *queuedGeneration
+	discardPending := func() {
+		_ = c.support.BlockCutter().Cut()
+		stopTimer()
+		if pendingGeneration != nil {
+			pendingGeneration.release()
+			pendingGeneration = nil
+		}
+	}
 	var cancelProp context.CancelFunc
+	var leaderContext context.Context
+	var retryInFlight atomic.Bool
+	var retryTicks <-chan time.Time
+	if c.activation != nil {
+		retryTicker := time.NewTicker(time.Second)
+		defer retryTicker.Stop()
+		retryTicks = retryTicker.C
+	}
 	cancelProp = func() {} // no-op as initial value
 
-	becomeLeader := func() (chan<- *common.Block, context.CancelFunc) {
+	becomeLeader := func() (chan<- raftProposal, context.CancelFunc) {
 		c.Metrics.IsLeader.Set(1)
 
 		c.blockInflight = 0
 		c.justElected = true
 		submitC = nil
-		ch := make(chan *common.Block, c.opts.MaxInflightBlocks)
+		ch := make(chan raftProposal, c.opts.MaxInflightBlocks)
 
 		// if there is unfinished ConfChange, we should resume the effort to propose it as
 		// new leader, and wait for it to be committed before start serving new requests.
@@ -786,48 +897,84 @@ func (c *Chain) run() {
 		// if node is leaderless (this can happen when leader steps down in a heavily
 		// loaded network). We need to make sure applyC can still be consumed properly.
 		ctx, cancel := context.WithCancel(context.Background())
-		go func(ctx context.Context, ch <-chan *common.Block) {
+		leaderContext = ctx
+		go func() {
 			for {
 				select {
-				case b := <-ch:
-					data := protoutil.MarshalOrPanic(b)
-					if err := c.Node.Propose(ctx, data); err != nil {
-						c.logger.Errorf("Failed to propose block [%d] to raft and discard %d blocks in queue: %s", b.GetHeader().GetNumber(), len(ch), err)
+				case proposal := <-ch:
+					number := proposal.block.GetHeader().GetNumber()
+					if err := c.proposeToRaft(ctx, proposal); err != nil {
+						if proposal.generation != nil && proposal.generation.Err() != nil && ctx.Err() == nil {
+							continue
+						}
+						c.logger.Errorf("Failed to propose block [%d] to raft and discard %d blocks in queue: %s", number, len(ch), err)
 						return
 					}
-					c.logger.Debugf("Proposed block [%d] to raft consensus", b.GetHeader().GetNumber())
+					c.logger.Debugf("Proposed block [%d] to raft consensus", number)
 
 				case <-ctx.Done():
 					c.logger.Debugf("Quit proposing blocks, discarded %d blocks in the queue", len(ch))
 					return
 				}
 			}
-		}(ctx, ch)
+		}()
 
-		return ch, cancel
+		return ch, func() {
+			cancel()
+			for {
+				select {
+				case proposal := <-ch:
+					if proposal.generation != nil {
+						proposal.generation.release()
+					}
+				default:
+					return
+				}
+			}
+		}
 	}
 
 	becomeFollower := func() {
 		cancelProp()
+		leaderContext = nil
 		c.blockInflight = 0
 		if c.activation != nil && c.confChangeInProgress == nil {
 			c.configInflight = false
 		}
-		_ = c.support.BlockCutter().Cut()
-		stopTimer()
+		discardPending()
 		submitC = c.submitC
 		bc = nil
+		proposalGeneration = nil
 		c.Metrics.IsLeader.Set(0)
 	}
 
 	for {
 		select {
+		case <-pendingGeneration.done():
+			discardPending()
+		case <-retryTicks:
+			// Raft can silently ignore a membership proposal while an older
+			// configuration entry is not yet applied. Retry only the change
+			// already derived from the committed, authorized config block;
+			// keep admission closed until Raft applies it normally.
+			if soft.Lead != c.raftID || leaderContext == nil || c.confChangeInProgress == nil || !retryInFlight.CompareAndSwap(false, true) {
+				continue
+			}
+			change := proto.CloneOf(c.confChangeInProgress)
+			ctx := leaderContext
+			c.logger.Infof("Retrying committed membership change for node %d", change.GetNodeId())
+			go func() {
+				defer retryInFlight.Store(false)
+				if err := c.Node.ProposeConfChange(ctx, change); err != nil && ctx.Err() == nil {
+					c.logger.Warnf("Failed to retry authorized configuration update: %s", err)
+				}
+			}()
 		case s := <-submitC:
 			if s == nil {
 				// polled by `WaitReady`
 				continue
 			}
-			if c.activation != nil && !c.activation.Ready() {
+			if s.generation != nil && s.generation.Err() != nil {
 				s.leader <- raft.None
 				continue
 			}
@@ -842,7 +989,11 @@ func (c *Chain) run() {
 				continue
 			}
 
-			batches, pending, err := c.ordered(s.req)
+			if pendingGeneration != nil && pendingGeneration.Err() != nil {
+				discardPending()
+			}
+			proposalGeneration = s.generation
+			batches, pending, err := c.ordered(s.req, s.generation)
 			if err != nil {
 				if s.proposal != nil {
 					s.proposal <- err
@@ -858,13 +1009,25 @@ func (c *Chain) run() {
 				continue
 			}
 
+			if pending && s.generation != nil && pendingGeneration == nil {
+				pendingGeneration = parkGeneration(c.activation.Gate, s.generation)
+				if pendingGeneration == nil {
+					discardPending()
+					s.proposal <- context.Canceled
+					continue
+				}
+			}
 			if pending {
 				startTimer() // no-op if timer is already started
 			} else {
 				stopTimer()
 			}
 
-			err = c.propose(propC, bc, batches...)
+			err = c.propose(propC, bc, s.generation, batches...)
+			if !pending && pendingGeneration != nil {
+				pendingGeneration.release()
+				pendingGeneration = nil
+			}
 			if s.proposal != nil {
 				s.proposal <- err
 			}
@@ -952,6 +1115,16 @@ func (c *Chain) run() {
 				continue
 			}
 
+			if proposalGeneration != nil && proposalGeneration.Err() != nil && c.activation.Ready() {
+				// The old worker may have discarded queued blocks during
+				// closure. Rebuild from applied Raft state before cutting
+				// another block under the reopened generation.
+				discardPending()
+				proposalGeneration = nil
+				c.blockInflight = 0
+				c.justElected = true
+				submitC = nil
+			}
 			if c.justElected {
 				msgInflight := c.Node.lastIndex() > c.appliedIndex
 				if msgInflight {
@@ -989,10 +1162,23 @@ func (c *Chain) run() {
 			}
 
 			c.logger.Debugf("Batch timer expired, creating block")
-			c.propose(propC, bc, batch) // we are certain this is normal block, no need to block
+			var generation context.Context
+			if pendingGeneration != nil {
+				generation = pendingGeneration.Context
+			}
+			c.propose(propC, bc, generation, batch) // batch contains normal messages
+			if pendingGeneration != nil {
+				pendingGeneration.release()
+				pendingGeneration = nil
+			}
 
 		case request := <-c.snapshotRequests:
-			request.result <- c.stepProtectedSnapshot(request.message)
+			err, fatal := c.stepProtectedSnapshot(request.message)
+			if fatal {
+				c.failProtectedAndNotify(err, func() { request.result <- err })
+			} else {
+				request.result <- err
+			}
 
 		case sn := <-c.snapC:
 			if c.activation != nil {
@@ -1026,7 +1212,11 @@ func (c *Chain) run() {
 			if c.activation != nil {
 				c.activation.Suspend()
 			}
-			stopTimer()
+			if pendingGeneration != nil {
+				discardPending()
+			} else {
+				stopTimer()
+			}
 			cancelProp()
 
 			select {
@@ -1100,7 +1290,14 @@ func (c *Chain) writeBlockUnchecked(block *common.Block, index uint64) {
 //	-- err error; the error encountered, if any.
 //
 // It takes care of config messages as well as the revalidation of messages if the config sequence has advanced.
-func (c *Chain) ordered(msg *orderer.SubmitRequest) (batches [][]*common.Envelope, pending bool, err error) {
+func (c *Chain) ordered(msg *orderer.SubmitRequest, generation context.Context) (batches [][]*common.Envelope, pending bool, err error) {
+	if generation != nil {
+		_, _, release, ok := c.activation.Gate.AcquireMatching(generation)
+		if !ok {
+			return nil, false, context.Canceled
+		}
+		defer release()
+	}
 	seq := c.support.Sequence()
 
 	isconfig, err := c.isConfig(msg.GetPayload())
@@ -1120,16 +1317,32 @@ func (c *Chain) ordered(msg *orderer.SubmitRequest) (batches [][]*common.Envelop
 		}
 
 		if c.checkForEvictionNCertRotation(msg.GetPayload()) {
+			var retryLease *queuedGeneration
+			if generation != nil {
+				retryLease = parkGeneration(c.activation.Gate, generation)
+				if retryLease == nil {
+					return nil, false, context.Canceled
+				}
+			}
 			if !c.leadershipTransferInProgress.CompareAndSwap(0, 1) {
+				if retryLease != nil {
+					retryLease.release()
+				}
 				c.logger.Warnf("A reconfiguration transaction is already in progress, ignoring a subsequent transaction")
 				return
 			}
 
 			go func() {
 				defer c.leadershipTransferInProgress.Store(0)
+				if retryLease != nil {
+					defer retryLease.release()
+				}
 
 				abdicated := false
 				for attempt := 1; attempt <= AbdicationMaxAttempts; attempt++ {
+					if retryLease != nil && retryLease.Err() != nil {
+						return
+					}
 					if err := c.Node.abdicateLeadership(); err != nil {
 						// If there is no leader, abort and do not retry.
 						// Return early to prevent re-submission of the transaction
@@ -1162,7 +1375,12 @@ func (c *Chain) ordered(msg *orderer.SubmitRequest) (batches [][]*common.Envelop
 				timeout := time.After(EvictionConfigTxForwardingTimeOut)
 				retryInterval := EvictionConfigTxForwardingTimeOut / 64
 				for {
-					err := c.Submit(msg, 0)
+					var err error
+					if retryLease != nil {
+						err = c.submitWithGeneration(msg, retryLease.Context)
+					} else {
+						err = c.Submit(msg, 0)
+					}
 					if err == nil {
 						c.logger.Warnf("Reconfiguration transaction forwarded successfully")
 						break
@@ -1176,6 +1394,8 @@ func (c *Chain) ordered(msg *orderer.SubmitRequest) (batches [][]*common.Envelop
 						continue
 					case <-timeout:
 						c.logger.Warnf("Reconfiguration transaction forwarding failed with timeout after %s", EvictionConfigTxForwardingTimeOut)
+						return
+					case <-retryLease.done():
 						return
 					}
 				}
@@ -1203,12 +1423,20 @@ func (c *Chain) ordered(msg *orderer.SubmitRequest) (batches [][]*common.Envelop
 	return batches, pending, nil
 }
 
-func (c *Chain) propose(ch chan<- *common.Block, bc *blockCreator, batches ...[]*common.Envelope) error {
+func (c *Chain) propose(ch chan<- raftProposal, bc *blockCreator, generation context.Context, batches ...[]*common.Envelope) error {
 	for _, batch := range batches {
+		var parked *queuedGeneration
+		if c.activation != nil {
+			parked = parkGeneration(c.activation.Gate, generation)
+			if parked == nil {
+				return context.Canceled
+			}
+		}
 		trial := *bc
 		b := trial.createNextBlock(batch)
-		if c.activation != nil && protoutil.IsConfigBlock(b) {
-			if err := c.activation.PrepareOrdererProposal(b); err != nil {
+		if parked != nil && protoutil.IsConfigBlock(b) {
+			if err := c.activation.PrepareOrdererProposal(b, generation); err != nil {
+				parked.release()
 				c.logger.Warningf("Protected configuration proposal rejected: %s", err)
 				return err
 			}
@@ -1217,7 +1445,7 @@ func (c *Chain) propose(ch chan<- *common.Block, bc *blockCreator, batches ...[]
 		c.logger.Infof("Created block [%d], there are %d blocks in flight", b.GetHeader().GetNumber(), c.blockInflight)
 
 		select {
-		case ch <- b:
+		case ch <- raftProposal{block: b, generation: parked}:
 		default:
 			c.logger.Panic("Programming error: limit of in-flight blocks does not properly take effect or block is proposed by follower")
 		}
@@ -1362,14 +1590,13 @@ func (c *Chain) apply(ents []*raftpb.Entry) error {
 	}
 
 	var position int
+	var snapshotCandidate bool
 	for i := range ents {
 		switch ents[i].GetType() {
 		case raftpb.EntryNormal:
 			if len(ents[i].GetData()) == 0 {
 				break
 			}
-
-			position = i
 			if c.activation == nil {
 				c.accDataSize += uint32(len(ents[i].GetData()))
 			}
@@ -1402,6 +1629,8 @@ func (c *Chain) apply(ents []*raftpb.Entry) error {
 			if err := c.writeBlock(block, ents[i].GetIndex()); err != nil {
 				return err
 			}
+			position = i
+			snapshotCandidate = true
 			if c.activation != nil {
 				c.accDataSize += uint32(len(ents[i].GetData()))
 			}
@@ -1476,9 +1705,9 @@ func (c *Chain) apply(ents []*raftpb.Entry) error {
 		}
 	}
 
-	// at position==0, ents[position].Type is ambiguous, it can be either of {raftpb.EntryNormal, raftpb.EntryConfChange}
-	// take a snapshot only for ents[position].Type == raftpb.EntryNormal
-	if c.accDataSize >= c.sizeLimit && ents[position].GetType() == raftpb.EntryNormal && len(ents[position].GetData()) > 0 {
+	// Only a newly applied Fabric block can supply snapshot data. A replayed
+	// block may precede the ledger's applied index and the in-memory Raft tip.
+	if snapshotCandidate && c.accDataSize >= c.sizeLimit {
 		b := protoutil.UnmarshalBlockOrPanic(ents[position].GetData())
 		if c.activation != nil {
 			if syncer, ok := c.support.(interface{ WaitForBlockCommit() uint64 }); ok {

@@ -94,30 +94,34 @@ func (c *Chain) authorizeIncomingSnapshot(message *raftpb.Message) error {
 	case err := <-req.result:
 		return err
 	case <-c.doneC:
-		return ErrChainHalting
+		// Prefer a result already reported before the node stopped, without
+		// waiting for a possibly blocked application loop on external halt.
+		select {
+		case err := <-req.result:
+			return err
+		default:
+			return ErrChainHalting
+		}
 	}
 }
 
-func (c *Chain) stepProtectedSnapshot(message *raftpb.Message) error {
+func (c *Chain) stepProtectedSnapshot(message *raftpb.Message) (error, bool) {
 	status := c.Node.Status()
 	snapshot := message.GetSnapshot()
 	if raft.IsEmptySnap(snapshot) {
-		return errSnapshotEvidence
+		return errSnapshotEvidence, false
 	}
 	if message.GetTerm() < status.GetTerm() || snapshot.GetMetadata().GetIndex() <= status.GetCommit() {
-		return nil
+		return nil, false
 	}
 	c.activation.Suspend()
 	c.snapshotPending = max(c.snapshotPending, snapshot.GetMetadata().GetIndex())
 	blocks, err := c.protectedSnapshotBlocks(snapshot, false)
 	if err != nil {
-		if !errors.Is(err, errSnapshotEvidence) {
-			c.failProtected(err)
-		}
-		return err
+		return err, !errors.Is(err, errSnapshotEvidence)
 	}
 	c.stagedSnapshot = &verifiedSnapshot{snapshot: snapshot, blocks: blocks}
-	return c.Node.Step(context.Background(), message)
+	return c.Node.Step(context.Background(), message), false
 }
 
 // protectedSnapshotBlocks authenticates the snapshot against durable local

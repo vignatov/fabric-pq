@@ -7,13 +7,16 @@ SPDX-License-Identifier: Apache-2.0
 package gateway
 
 import (
+	"context"
 	"errors"
 	"io"
+	"sync"
 
 	gp "github.com/hyperledger/fabric-protos-go-apiv2/gateway"
 	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/gateway/event"
 	"github.com/hyperledger/fabric/internal/pkg/gateway/ledger"
 	"github.com/hyperledger/fabric/protoutil"
@@ -35,6 +38,20 @@ func (gs *Server) ChaincodeEvents(signedRequest *gp.SignedChaincodeEventsRequest
 	request := &gp.ChaincodeEventsRequest{}
 	if err := proto.Unmarshal(signedRequest.GetRequest(), request); err != nil {
 		return status.Errorf(codes.InvalidArgument, "invalid chaincode events request: %v", err)
+	}
+
+	var generation context.Context
+	if gs.acquireAdmission != nil {
+		var release func()
+		var admitted bool
+		generation, release, admitted = gs.acquireAdmission(request.GetChannelId())
+		if !admitted {
+			return status.Error(codes.Unavailable, "protected channel admission is closed")
+		}
+		if generation != nil && !comm.RetainProtectedStream(stream.Context(), generation, release) {
+			release()
+			return status.Error(codes.Unavailable, "protected chaincode events require a revocable strict transport")
+		}
 	}
 
 	signedData := &protoutil.SignedData{
@@ -64,10 +81,25 @@ func (gs *Server) ChaincodeEvents(signedRequest *gp.SignedChaincodeEventsRequest
 	}
 
 	eventsIter := event.NewChaincodeEventsIterator(ledgerIter)
-	defer eventsIter.Close()
+	closeIterator := sync.OnceFunc(eventsIter.Close)
+	defer closeIterator()
+	if generation != nil {
+		// Close interrupts a committed-block wait. Transport revocation
+		// also unblocks any send waiting for the client to read.
+		stopRPC := context.AfterFunc(stream.Context(), closeIterator)
+		defer stopRPC()
+		stopGeneration := context.AfterFunc(generation, closeIterator)
+		defer stopGeneration()
+	}
 
 	for {
+		if generation != nil && generation.Err() != nil {
+			return status.Error(codes.Unavailable, "protected channel admission is closed")
+		}
 		response, err := eventsIter.Next()
+		if generation != nil && generation.Err() != nil {
+			return status.Error(codes.Unavailable, "protected channel admission is closed")
+		}
 		if err != nil {
 			return status.Error(codes.Aborted, err.Error())
 		}
@@ -85,6 +117,9 @@ func (gs *Server) ChaincodeEvents(signedRequest *gp.SignedChaincodeEventsRequest
 
 		response.Events = matchingEvents
 
+		if generation != nil && generation.Err() != nil {
+			return status.Error(codes.Unavailable, "protected channel admission is closed")
+		}
 		if err := stream.Send(response); err != nil {
 			if errors.Is(err, io.EOF) {
 				// Stream closed by the client

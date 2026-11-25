@@ -10,6 +10,7 @@ import (
 	"math"
 	"path"
 	"testing"
+	"time"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	db "github.com/hyperledger/fabric/common/ledger"
@@ -17,6 +18,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/confighistory/confighistorytest"
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
 	btltestutil "github.com/hyperledger/fabric/core/ledger/pvtdatapolicy/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -303,19 +305,22 @@ func TestPvtdataStoreCreatedFromSnapshot(t *testing.T) {
 			m,
 		)
 
-		// commit 100 blocks and the bootkvhashes should expire
-		store.purgeInterval = 10
-		for i := range 100 {
-			require.NoError(t, store.Commit(uint64(26+i), nil, nil, nil))
+		// Schedule one purge after both collections have expired. Commit
+		// returns before the purger has deleted the hashes.
+		const purgeBlock = 125
+		store.purgeInterval = purgeBlock
+		for block := uint64(26); block <= purgeBlock; block++ {
+			require.NoError(t, store.Commit(block, nil, nil, nil))
 		}
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			eligible, err := store.FetchBootKVHashes(20, 200, "ns", "eligible-coll")
+			require.NoError(c, err)
+			require.Empty(c, eligible)
 
-		m, err = store.FetchBootKVHashes(20, 200, "ns", "eligible-coll")
-		require.NoError(t, err)
-		require.Empty(t, m)
-
-		m, err = store.FetchBootKVHashes(21, 210, "ns", "ineligible-coll")
-		require.NoError(t, err)
-		require.Empty(t, m)
+			ineligible, err := store.FetchBootKVHashes(21, 210, "ns", "ineligible-coll")
+			require.NoError(c, err)
+			require.Empty(c, ineligible)
+		}, 5*time.Second, 10*time.Millisecond)
 	})
 }
 

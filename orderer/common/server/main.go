@@ -9,7 +9,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // This is essentially the main package for the orderer
@@ -36,6 +38,8 @@ import (
 	"github.com/hyperledger/fabric/core/operations"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/orderer/common/channelparticipation"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
@@ -82,6 +86,28 @@ func Main() {
 		os.Exit(1)
 	}
 	initializeLogging()
+	registry, err := enrollment.LoadManaged("orderer")
+	if err != nil {
+		logger.Panicf("Managed orderer enrollment rejected: %s", err)
+	}
+	var transportPolicy *pqtransport.Policy
+	if registry != nil {
+		if err := registry.CheckLedgerRoot(conf.FileLedger.Location); err != nil {
+			logger.Panicf("Managed orderer ledger rejected: %s", err)
+		}
+		if !conf.General.TLS.Enabled || !conf.General.TLS.ClientAuthRequired {
+			logger.Panic("Managed protected orderer requires mutual TLS on its shared listener")
+		}
+		if conf.General.Profile.Enabled {
+			logger.Panic("Managed protected orderer forbids the profiling listener")
+		}
+		transportPolicy = registry.TransportPolicy()
+		if _, err := adminTLS(conf.Admin, transportPolicy).Config(); err != nil {
+			logger.Panicf("Managed orderer participation admin rejected: %s", err)
+		}
+	} else if err := multichannel.CheckProtectedStartup(conf.General.PQActivation); err != nil {
+		logger.Panicf("Protected startup rejected before listener initialization: %s", err)
+	}
 
 	prettyPrintStruct(conf)
 
@@ -92,7 +118,7 @@ func Main() {
 		logger.Panicf("Failed to get local MSP identity: %s", signErr)
 	}
 
-	opsSystem := newOperationsSystem(conf.Operations, conf.Metrics)
+	opsSystem := newOperationsSystem(conf.Operations, conf.Metrics, transportPolicy)
 	if err = opsSystem.Start(); err != nil {
 		logger.Panicf("failed to start operations subsystem: %s", err)
 	}
@@ -102,6 +128,7 @@ func Main() {
 	flogging.SetObserver(logObserver)
 
 	serverConfig := initializeServerConfig(conf, metricsProvider)
+	serverConfig.SecOpts.TransportPolicy = transportPolicy
 	serverConfig.HealthCheckEnabled = true
 	grpcServer := initializeGrpcServer(conf, serverConfig)
 	caMgr := &caManager{
@@ -138,6 +165,12 @@ func Main() {
 
 	logger.Infof("Setting up cluster")
 	clusterClientConfig, reuseGrpcListener = initializeClusterClientConfig(conf)
+	clusterClientConfig.SecOpts.TransportPolicy = serverConfig.SecOpts.TransportPolicy
+	if transportPolicy != nil {
+		if _, err := clusterClientConfig.SecOpts.TLSConfig(); err != nil {
+			logger.Panicf("Managed orderer cluster client rejected: %s", err)
+		}
+	}
 	clusterDialer = &cluster.PredicateDialer{
 		Config: clusterClientConfig,
 	}
@@ -174,6 +207,15 @@ func Main() {
 	}
 
 	tlsCallback := func(bundle *channelconfig.Bundle) {
+		if registry != nil {
+			// Protected bindings publish through the activation owner below.
+			if !registry.RequiresProtection(bundle.ConfigtxValidator().ChannelID()) {
+				if err := caMgr.publishManagedTrust(bundle, clusterDialer, clusterClientConfig.SecOpts.ServerRootCAs, serversToUpdate); err != nil {
+					logger.Warningf("Failed publishing managed orderer TLS roots: %s", err)
+				}
+			}
+			return
+		}
 		logger.Debug("Executing callback to update root CAs")
 		caMgr.updateTrustedRoots(bundle, serversToUpdate...)
 		caMgr.updateClusterDialer(
@@ -181,10 +223,13 @@ func Main() {
 			clusterClientConfig.SecOpts.ServerRootCAs,
 		)
 	}
+	protectedTLS := func(bundle *channelconfig.Bundle) error {
+		return caMgr.publishManagedTrust(bundle, clusterDialer, clusterClientConfig.SecOpts.ServerRootCAs, serversToUpdate)
+	}
 
-	manager := initializeMultichannelRegistrar(clusterDialer, clusterServerConfig, clusterGRPCServer, conf, signer, metricsProvider, lf, cryptoProvider, tlsCallback)
+	manager := initializeMultichannelRegistrar(clusterDialer, clusterServerConfig, clusterGRPCServer, conf, signer, metricsProvider, lf, cryptoProvider, registry, protectedTLS, tlsCallback)
 
-	adminServer := newAdminServer(conf.Admin)
+	adminServer := newAdminServer(conf.Admin, transportPolicy)
 	adminServer.RegisterHandler(
 		channelparticipation.URLBaseV1,
 		channelparticipation.NewHTTPHandler(conf.ChannelParticipation, manager),
@@ -388,6 +433,7 @@ func configureClusterListener(conf *localconfig.TopLevel, generalConf comm.Serve
 			Certificate:       cert,
 			UseTLS:            true,
 			Key:               key,
+			TransportPolicy:   generalConf.SecOpts.TransportPolicy,
 		},
 	}
 
@@ -620,6 +666,8 @@ func initializeMultichannelRegistrar(
 	metricsProvider metrics.Provider,
 	lf blockledger.Factory,
 	bccsp bccsp.BCCSP,
+	registry *enrollment.Registry,
+	protectedPublish func(*channelconfig.Bundle) error,
 	callbacks ...channelconfig.BundleActor,
 ) *multichannel.Registrar {
 	dpmr := &DynamicPolicyManagerRegistry{}
@@ -629,7 +677,12 @@ func initializeMultichannelRegistrar(
 	}
 	callbacks = append(callbacks, policyManagerCallback)
 
-	registrar := multichannel.NewRegistrar(*conf, lf, signer, metricsProvider, bccsp, clusterDialer, callbacks...)
+	var registrar *multichannel.Registrar
+	if registry == nil {
+		registrar = multichannel.NewRegistrar(*conf, lf, signer, metricsProvider, bccsp, clusterDialer, callbacks...)
+	} else {
+		registrar = multichannel.NewManagedRegistrar(*conf, lf, signer, metricsProvider, bccsp, clusterDialer, registry, protectedPublish, callbacks...)
+	}
 
 	consenters := map[string]consensus.Consenter{}
 
@@ -642,7 +695,7 @@ func initializeMultichannelRegistrar(
 	return registrar
 }
 
-func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics) *operations.System {
+func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics, policy *pqtransport.Policy) *operations.System {
 	return operations.NewSystem(operations.Options{
 		Logger:        flogging.MustGetLogger("orderer.operations"),
 		ListenAddress: ops.ListenAddress,
@@ -652,6 +705,7 @@ func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics
 			KeyFile:            ops.TLS.PrivateKey,
 			ClientCertRequired: ops.TLS.ClientAuthRequired,
 			ClientCACertFiles:  ops.TLS.ClientRootCAs,
+			TransportPolicy:    policy,
 		},
 		Metrics: operations.MetricsOptions{
 			Provider: metrics.Provider,
@@ -666,19 +720,24 @@ func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics
 	})
 }
 
-func newAdminServer(admin localconfig.Admin) *fabhttp.Server {
+func newAdminServer(admin localconfig.Admin, policy *pqtransport.Policy) *fabhttp.Server {
 	return fabhttp.NewServer(fabhttp.Options{
 		Logger:        flogging.MustGetLogger("orderer.admin"),
 		ListenAddress: admin.ListenAddress,
-		TLS: fabhttp.TLS{
-			Enabled:            admin.TLS.Enabled,
-			CertFile:           admin.TLS.Certificate,
-			KeyFile:            admin.TLS.PrivateKey,
-			ClientCertRequired: admin.TLS.ClientAuthRequired,
-			ClientCACertFiles:  admin.TLS.ClientRootCAs,
-			TimeShift:          admin.TLS.TLSHandshakeTimeShift,
-		},
+		TLS:           adminTLS(admin, policy),
 	})
+}
+
+func adminTLS(admin localconfig.Admin, policy *pqtransport.Policy) fabhttp.TLS {
+	return fabhttp.TLS{
+		Enabled:            admin.TLS.Enabled,
+		CertFile:           admin.TLS.Certificate,
+		KeyFile:            admin.TLS.PrivateKey,
+		ClientCertRequired: admin.TLS.ClientAuthRequired,
+		ClientCACertFiles:  admin.TLS.ClientRootCAs,
+		TimeShift:          admin.TLS.TLSHandshakeTimeShift,
+		TransportPolicy:    policy,
+	}
 }
 
 // caMgr manages certificate authorities scoped by channel
@@ -689,15 +748,7 @@ type caManager struct {
 	clientRootCAs         [][]byte
 }
 
-func (mgr *caManager) updateTrustedRoots(
-	cm channelconfig.Resources,
-	servers ...*comm.GRPCServer,
-) {
-	mgr.Lock()
-	defer mgr.Unlock()
-
-	appRootCAs := [][]byte{}
-	ordererRootCAs := [][]byte{}
+func channelTrustRoots(cm channelconfig.Resources) (appRootCAs, ordererRootCAs [][]byte, err error) {
 	appOrgMSPs := make(map[string]struct{})
 	ordOrgMSPs := make(map[string]struct{})
 
@@ -728,8 +779,7 @@ func (mgr *caManager) updateTrustedRoots(
 	logger.Debugf("updating root CAs for channel [%s]", cid)
 	msps, err := cm.MSPManager().GetMSPs()
 	if err != nil {
-		logger.Errorf("Error getting root CAs for channel %s (%s)", cid, err)
-		return
+		return nil, nil, err
 	}
 	for k, v := range msps {
 		// check to see if this is a FABRIC MSP
@@ -760,6 +810,18 @@ func (mgr *caManager) updateTrustedRoots(
 			}
 		}
 	}
+	return appRootCAs, ordererRootCAs, nil
+}
+
+func (mgr *caManager) updateTrustedRoots(cm channelconfig.Resources, servers ...*comm.GRPCServer) {
+	mgr.Lock()
+	defer mgr.Unlock()
+	cid := cm.ConfigtxValidator().ChannelID()
+	appRootCAs, ordererRootCAs, err := channelTrustRoots(cm)
+	if err != nil {
+		logger.Errorf("Error getting root CAs for channel %s (%s)", cid, err)
+		return
+	}
 	mgr.appRootCAsByChain[cid] = appRootCAs
 	mgr.ordererRootCAsByChain[cid] = ordererRootCAs
 
@@ -788,17 +850,64 @@ func (mgr *caManager) updateTrustedRoots(
 	}
 }
 
+// publishManagedTrust validates every listener and dialer candidate before
+// mutating the shared trust maps. For protected channels it runs with
+// admission closed. Baseline updates in a managed process share this lock.
+func (mgr *caManager) publishManagedTrust(cm channelconfig.Resources, dialer *cluster.PredicateDialer, localClusterRoots [][]byte, servers []*comm.GRPCServer) error {
+	app, orderers, err := channelTrustRoots(cm)
+	if err != nil {
+		return err
+	}
+	id := cm.ConfigtxValidator().ChannelID()
+	mgr.Lock()
+	defer mgr.Unlock()
+	appByChannel := maps.Clone(mgr.appRootCAsByChain)
+	orderersByChannel := maps.Clone(mgr.ordererRootCAsByChain)
+	appByChannel[id], orderersByChannel[id] = app, orderers
+	clusterRoots := aggregateClusterRoots(orderersByChannel, localClusterRoots)
+	pool := x509.NewCertPool()
+	for _, root := range clusterRoots {
+		if !pool.AppendCertsFromPEM(root) {
+			return fmt.Errorf("invalid managed cluster root for channel %s", id)
+		}
+	}
+	trusted := append([][]byte(nil), mgr.clientRootCAs...)
+	for _, roots := range appByChannel {
+		trusted = append(trusted, roots...)
+	}
+	for _, roots := range orderersByChannel {
+		trusted = append(trusted, roots...)
+	}
+	publishers := make([]func(), 0, len(servers))
+	for _, server := range servers {
+		publish, err := server.PrepareClientRootCAs(trusted)
+		if err != nil {
+			return err
+		}
+		publishers = append(publishers, publish)
+	}
+	mgr.appRootCAsByChain, mgr.ordererRootCAsByChain = appByChannel, orderersByChannel
+	for _, publish := range publishers {
+		publish()
+	}
+	dialer.UpdateRootCAs(clusterRoots)
+	return nil
+}
+
 func (mgr *caManager) updateClusterDialer(
 	clusterDialer *cluster.PredicateDialer,
 	localClusterRootCAs [][]byte,
 ) {
 	mgr.Lock()
 	defer mgr.Unlock()
+	clusterDialer.UpdateRootCAs(aggregateClusterRoots(mgr.ordererRootCAsByChain, localClusterRootCAs))
+}
 
+func aggregateClusterRoots(orderersByChannel map[string][][]byte, localClusterRootCAs [][]byte) [][]byte {
 	// Iterate over all orderer root CAs for all chains and add them
 	// to the root CAs
 	clusterRootCAs := make(cluster.StringSet)
-	for _, orgRootCAs := range mgr.ordererRootCAsByChain {
+	for _, orgRootCAs := range orderersByChannel {
 		for _, rootCA := range orgRootCAs {
 			clusterRootCAs[string(rootCA)] = struct{}{}
 		}
@@ -815,8 +924,7 @@ func (mgr *caManager) updateClusterDialer(
 		clusterRootCAsBytes = append(clusterRootCAsBytes, []byte(root))
 	}
 
-	// Update the cluster config with the new root CAs
-	clusterDialer.UpdateRootCAs(clusterRootCAsBytes)
+	return clusterRootCAsBytes
 }
 
 func prettyPrintStruct(i any) {

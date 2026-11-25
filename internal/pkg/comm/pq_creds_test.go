@@ -5,6 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 package comm
 
 import (
+	"context"
 	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,12 +18,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric/internal/pkg/comm/testpb"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
 
-func TestStrictServerCredentialsClone(t *testing.T) {
+func strictServerFixture(t *testing.T) (SecureOptions, *x509.CertPool) {
+	t.Helper()
 	signer, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	require.NoError(t, err)
 	public, ok := signer.Public().(*mldsa.PublicKey)
@@ -57,13 +63,15 @@ func TestStrictServerCredentialsClone(t *testing.T) {
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	root := x509.NewCertPool()
 	require.True(t, root.AppendCertsFromPEM(certPEM))
+	return SecureOptions{UseTLS: true, Certificate: certPEM, Key: keyPEM, TransportPolicy: policy}, root
+}
 
+func TestStrictServerCredentialsClone(t *testing.T) {
+	options, root := strictServerFixture(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
-	server, err := NewGRPCServerFromListener(listener, ServerConfig{SecOpts: SecureOptions{
-		UseTLS: true, Certificate: certPEM, Key: keyPEM, TransportPolicy: policy,
-	}})
+	server, err := NewGRPCServerFromListener(listener, ServerConfig{SecOpts: options})
 	require.NoError(t, err)
 	original := NewServerTransportCredentials(server.tls, nil)
 	directFactoryConfig := server.tls.Config()
@@ -129,5 +137,77 @@ func TestStrictServerCredentialsClone(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+type protectedStreamingService struct {
+	testpb.UnimplementedEmptyServiceServer
+	generation context.Context
+	sending    chan struct{}
+	released   chan struct{}
+	admitted   chan bool
+}
+
+func (s *protectedStreamingService) EmptyStream(stream testpb.EmptyService_EmptyStreamServer) error {
+	ok := RetainProtectedStream(stream.Context(), s.generation, func() { close(s.released) })
+	s.admitted <- ok
+	if !ok {
+		return context.Canceled
+	}
+	payload := &cb.Envelope{Payload: make([]byte, 1<<20)}
+	if err := stream.SendMsg(payload); err != nil {
+		return err
+	}
+	close(s.sending)
+	// With no client reads, this write waits for stream flow control.
+	return stream.SendMsg(payload)
+}
+
+func TestPQ40EStrictStreamRevocationUnblocksSend(t *testing.T) {
+	options, roots := strictServerFixture(t)
+	server, err := NewGRPCServer("127.0.0.1:0", ServerConfig{
+		SecOpts: options, ServerStatsHandler: NewServerStatsHandler(&disabled.Provider{}),
+	})
+	require.NoError(t, err)
+	generation, revoke := context.WithCancel(t.Context())
+	defer revoke()
+	service := &protectedStreamingService{
+		generation: generation, sending: make(chan struct{}), released: make(chan struct{}), admitted: make(chan bool, 1),
+	}
+	testpb.RegisterEmptyServiceServer(server.Server(), service)
+	go server.Start()
+	t.Cleanup(server.Stop)
+	tlsConfig, err := pqtransport.ClientTLSConfig(&tls.Config{RootCAs: roots, ServerName: "pq.example"}, options.TransportPolicy)
+	require.NoError(t, err)
+	client, err := grpc.NewClient(server.Address(), grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		grpc.WithStaticStreamWindowSize(64<<10))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	stream, err := testpb.NewEmptyServiceClient(client).EmptyStream(ctx)
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&testpb.Empty{}))
+	select {
+	case admitted := <-service.admitted:
+		require.True(t, admitted, "strict transport did not expose revocation")
+	case <-ctx.Done():
+		t.Fatal("protected stream did not reach the server")
+	}
+	select {
+	case <-service.sending:
+	case <-ctx.Done():
+		t.Fatal("first message did not enter the HTTP/2 queue")
+	}
+	select {
+	case <-service.released:
+		t.Fatal("stream released admission while the client was stalled")
+	default:
+	}
+	revoke()
+	select {
+	case <-service.released:
+	case <-ctx.Done():
+		t.Fatal("transport did not drain the blocked send on generation closure")
 	}
 }

@@ -162,6 +162,13 @@ func ValidateConfigForActivation(conf channelconfig.Orderer) error {
 }
 
 func (c *Chain) failProtected(cause error) {
+	c.failProtectedAndNotify(cause, nil)
+}
+
+// failProtectedAndNotify records the failure and closes admission before
+// notifying the caller, but notifies before stopping the Raft node.
+func (c *Chain) failProtectedAndNotify(cause error, notify func()) {
+	notified := false
 	c.protectedStopOnce.Do(func() {
 		c.activation.Suspend()
 		if !errors.Is(cause, activation.ErrNativeRecovery) {
@@ -171,8 +178,15 @@ func (c *Chain) failProtected(cause error) {
 		c.statusReportMutex.Lock()
 		c.status = types.StatusFailed
 		c.statusReportMutex.Unlock()
+		if notify != nil {
+			notify()
+			notified = true
+		}
 		close(c.protectedStop)
 	})
+	if notify != nil && !notified {
+		notify()
+	}
 }
 
 func (c *Chain) verifyReplayedBlock(block *common.Block, index uint64) error {

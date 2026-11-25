@@ -71,14 +71,15 @@ type gossip interface {
 }
 
 type puller struct {
-	logger        util.Logger
-	metrics       *metrics.PrivdataMetrics
-	pubSub        *util.PubSub
-	stopChan      chan struct{}
-	msgChan       <-chan protoext.ReceivedMessage
-	channel       string
-	cs            privdata.CollectionStore
-	btlPullMargin uint64
+	logger           util.Logger
+	metrics          *metrics.PrivdataMetrics
+	pubSub           *util.PubSub
+	stopChan         chan struct{}
+	msgChan          <-chan protoext.ReceivedMessage
+	channel          string
+	cs               privdata.CollectionStore
+	btlPullMargin    uint64
+	acquireAdmission protoext.ChannelAdmission
 	gossip
 	PrivateDataRetriever
 	CollectionAccessFactory
@@ -87,6 +88,7 @@ type puller struct {
 // NewPuller creates new private data puller
 func NewPuller(metrics *metrics.PrivdataMetrics, cs privdata.CollectionStore, g gossip,
 	dataRetriever PrivateDataRetriever, factory CollectionAccessFactory, channel string, btlPullMargin uint64,
+	acquireAdmission protoext.ChannelAdmission,
 ) *puller {
 	p := &puller{
 		logger:                  logger.With("channel", channel),
@@ -99,6 +101,7 @@ func NewPuller(metrics *metrics.PrivdataMetrics, cs privdata.CollectionStore, g 
 		gossip:                  g,
 		PrivateDataRetriever:    dataRetriever,
 		CollectionAccessFactory: factory,
+		acquireAdmission:        acquireAdmission,
 	}
 	_, p.msgChan = p.Accept(func(o any) bool {
 		msg := o.(protoext.ReceivedMessage).GetGossipMessage()
@@ -133,8 +136,13 @@ func (p *puller) listen() {
 }
 
 func (p *puller) handleRequest(message protoext.ReceivedMessage) {
+	generation, release, admitted := p.acquireAdmission.Acquire()
+	if !admitted {
+		return
+	}
+	defer release()
 	p.logger.Debug("Got", message.GetGossipMessage(), "from", message.GetConnectionInfo().Endpoint)
-	message.Respond(&protosgossip.GossipMessage{
+	protoext.RespondInGeneration(message, &protosgossip.GossipMessage{
 		Channel: []byte(p.channel),
 		Tag:     protosgossip.GossipMessage_CHAN_ONLY,
 		Nonce:   message.GetGossipMessage().Nonce,
@@ -143,7 +151,7 @@ func (p *puller) handleRequest(message protoext.ReceivedMessage) {
 				Elements: p.createResponse(message),
 			},
 		},
-	})
+	}, generation)
 }
 
 func (p *puller) createResponse(message protoext.ReceivedMessage) []*protosgossip.PvtDataElement {

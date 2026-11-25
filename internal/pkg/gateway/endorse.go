@@ -21,7 +21,7 @@ import (
 
 // Endorse will collect endorsements by invoking the transaction function specified in the SignedProposal against
 // sufficient Peers to satisfy the endorsement policy.
-func (gs *Server) Endorse(ctx context.Context, request *gp.EndorseRequest) (*gp.EndorseResponse, error) {
+func (gs *Server) Endorse(ctx context.Context, request *gp.EndorseRequest) (result *gp.EndorseResponse, err error) {
 	if request == nil {
 		return nil, status.Error(codes.InvalidArgument, "an endorse request is required")
 	}
@@ -51,6 +51,11 @@ func (gs *Server) Endorse(ctx context.Context, request *gp.EndorseRequest) (*gp.
 	}
 
 	channel := channelHeader.GetChannelId()
+	ctx, admission, err := gs.admitUnary(ctx, channel, true)
+	if err != nil {
+		return nil, err
+	}
+	defer finishUnary(admission, &result, &err)
 	chaincodeID := spec.GetChaincodeSpec().GetChaincodeId().GetName()
 	hasTransientData := len(payload.GetTransientMap()) > 0
 
@@ -82,7 +87,7 @@ func (gs *Server) Endorse(ctx context.Context, request *gp.EndorseRequest) (*gp.
 		// send to all the endorsers
 		waitCh := make(chan string, len(endorsers))
 		for _, e := range endorsers {
-			go func(e *endorser) {
+			launchGatewayWork(ctx, func() {
 				var g string
 				for e != nil {
 					if gs.processProposal(ctx, plan, e, signedProposal, logger) {
@@ -91,7 +96,7 @@ func (gs *Server) Endorse(ctx context.Context, request *gp.EndorseRequest) (*gp.
 					e, g = plan.nextPeerInGroup(e)
 				}
 				waitCh <- g
-			}(e)
+			})
 		}
 
 		groups := make([]string, 0, len(endorsers))
@@ -134,14 +139,14 @@ type ppResponse struct {
 func (gs *Server) processProposal(ctx context.Context, plan *plan, endorser *endorser, signedProposal *peer.SignedProposal, logger *flogging.FabricLogger) bool {
 	var response *peer.ProposalResponse
 	done := make(chan *ppResponse, 1) // buffered so the goroutine can exit if the caller has already returned on timeout
-	go func() {
+	launchGatewayWork(ctx, func() {
 		defer close(done)
 		logger.Debugw("Sending to endorser:", "MSPID", endorser.mspid, "endpoint", endorser.address)
 		ctx, cancel := context.WithTimeout(ctx, gs.options.EndorsementTimeout) // timeout of individual endorsement
 		defer cancel()
 		response, err := endorser.client.ProcessProposal(ctx, signedProposal)
 		done <- &ppResponse{response: response, err: err}
-	}()
+	})
 	select {
 	case resp := <-done:
 		// Endorser completedLayout normally
@@ -202,7 +207,7 @@ func (gs *Server) planFromFirstEndorser(ctx context.Context, channel string, cha
 
 	for firstResponse == nil && firstEndorser != nil {
 		done := make(chan struct{})
-		go func() {
+		launchGatewayWork(ctx, func() {
 			defer close(done)
 
 			ctx, cancel := context.WithTimeout(ctx, gs.options.EndorsementTimeout)
@@ -221,7 +226,7 @@ func (gs *Server) planFromFirstEndorser(ctx context.Context, channel string, cha
 				firstResponse = nil
 				plan.abandonGroupRemoveLayouts(group)
 			}
-		}()
+		})
 		select {
 		case <-done:
 			// Endorser completed normally

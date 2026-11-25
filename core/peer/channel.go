@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package peer
 
 import (
+	"context"
 	"errors"
 	"sync"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/transientstore"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/msp"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
 )
@@ -28,6 +30,8 @@ type Channel struct {
 	ledger         ledger.PeerLedger
 	store          *transientstore.Store
 	cryptoProvider bccsp.BCCSP
+	// activation must be installed before the channel is exposed to services.
+	activation *activation.Channel
 
 	// applyLock is used to serialize calls to Apply and bundle update processing.
 	applyLock sync.Mutex
@@ -40,6 +44,19 @@ type Channel struct {
 	// resources is used to acquire configuration bundle resources. The reference
 	// is maintained by callbacks from the bundleSource.
 	resources channelconfig.Resources
+}
+
+// AcquireEndorsement obtains the identity manager from the serving
+// generation and retains its lease until endorsement work has stopped.
+func (c *Channel) AcquireEndorsement() (msp.IdentityDeserializer, context.Context, func(), bool) {
+	if c.activation == nil {
+		return c.MSPManager(), context.Background(), func() {}, true
+	}
+	bundle, generation, release, ok := c.activation.Gate.Acquire()
+	if !ok {
+		return nil, nil, nil, false
+	}
+	return bundle.MSPManager(), generation, release, true
 }
 
 // Apply is used to validate and apply configuration transactions for a channel.
@@ -150,6 +167,15 @@ func (c *Channel) Store() *transientstore.Store {
 // this channel.
 func (c *Channel) Reader() blockledger.Reader {
 	return fileledger.NewFileLedger(fileLedgerBlockStore{c.ledger})
+}
+
+// AcquireDeliveryAdmission spans the seek, ledger iterator and protected send.
+func (c *Channel) AcquireDeliveryAdmission() (context.Context, func(), bool) {
+	if c.activation == nil {
+		return nil, nil, true
+	}
+	_, generation, release, ok := c.activation.Gate.Acquire()
+	return generation, release, ok
 }
 
 // Errored returns a channel that can be used to determine if a backing

@@ -303,6 +303,11 @@ func (g *GossipService) DistributePrivateData(channelID string, txID string, pri
 	if !exists {
 		return errors.Errorf("No private data handler for %s", channelID)
 	}
+	_, release, admitted := handler.support.AcquireAdmission.Acquire()
+	if !admitted {
+		return errors.New("protected channel admission is closed")
+	}
+	defer release()
 
 	if err := handler.distributor.Distribute(txID, privData, blkHt); err != nil {
 		err := errors.WithMessagef(err, "failed to distribute private collection, txID %s, channel %s", txID, channelID)
@@ -331,6 +336,7 @@ type Support struct {
 	CollectionStore      privdata.CollectionStore
 	IdDeserializeFactory gossipprivdata.IdentityDeserializerFactory
 	CapabilityProvider   gossipprivdata.CapabilityProvider
+	AcquireAdmission     protoext.ChannelAdmission
 }
 
 // InitializeChannel allocates the state provider and should be invoked once per channel per execution
@@ -352,7 +358,7 @@ func (g *GossipService) InitializeChannel(
 	dataRetriever := gossipprivdata.NewDataRetriever(channelID, store, support.Committer)
 	collectionAccessFactory := gossipprivdata.NewCollectionAccessFactory(support.IdDeserializeFactory)
 	fetcher := gossipprivdata.NewPuller(g.metrics.PrivdataMetrics, support.CollectionStore, g.gossipSvc, dataRetriever,
-		collectionAccessFactory, channelID, g.serviceConfig.BtlPullMargin)
+		collectionAccessFactory, channelID, g.serviceConfig.BtlPullMargin, support.AcquireAdmission)
 
 	coordinatorConfig := gossipprivdata.CoordinatorConfig{
 		TransientBlockRetention:        g.serviceConfig.TransientstoreMaxBlockRetention,
@@ -391,6 +397,7 @@ func (g *GossipService) InitializeChannel(
 
 	blockingMode := !g.serviceConfig.NonBlockingCommitMode
 	stateConfig := state.GlobalConfig()
+	stateConfig.AcquireAdmission = support.AcquireAdmission
 	g.chains[channelID] = state.NewGossipStateProvider(
 		flogging.MustGetLogger(util.StateLogger),
 		channelID,

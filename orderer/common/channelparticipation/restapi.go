@@ -120,6 +120,8 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 	//      description: Successfully removed channel.
 	//    '400':
 	//      description: Bad request.
+	//    '403':
+	//      description: Protected removal requires operator decommissioning.
 	//    '404':
 	//      description: The channel does not exist.
 	//    '409':
@@ -212,6 +214,8 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 	//      description: The client is trying to update a channel that is currently being removed.
 	//    '500':
 	//      description: Removal of channel failed.
+	//    '503':
+	//      description: The protected channel has no serving generation.
 	// consumes:
 	//   - multipart/form-data
 
@@ -243,6 +247,8 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 	//         type: file
 	//    '400':
 	//      description: Bad request.
+	//    '403':
+	//      description: Protected block retrieval is available through Deliver.
 	//    '404':
 	//      description: The channel or block does not exist.
 
@@ -332,6 +338,10 @@ func (h *HTTPHandler) serveFetchBlock(resp http.ResponseWriter, req *http.Reques
 
 	block, err := h.registrar.FetchBlock(channelID, blockID)
 	if err != nil {
+		if errors2.Is(err, types.ErrProtectedOperationUnavailable) {
+			h.sendResponseJsonError(resp, http.StatusForbidden, err)
+			return
+		}
 		h.sendResponseJsonError(resp, http.StatusNotFound, err)
 		return
 	}
@@ -585,6 +595,8 @@ func (h *HTTPHandler) sendUpdateError(err error, resp http.ResponseWriter) {
 		h.sendResponseJsonError(resp, http.StatusMethodNotAllowed, errors.WithMessage(err, "cannot update"))
 	case errors2.Is(err, types.ErrChannelNotReady):
 		h.sendResponseJsonError(resp, http.StatusForbidden, errors.WithMessage(err, "cannot update"))
+	case errors2.Is(err, types.ErrProtectedAdmissionClosed):
+		h.sendResponseJsonError(resp, http.StatusServiceUnavailable, errors.WithMessage(err, "cannot update"))
 	default:
 		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.WithMessage(err, "cannot update"))
 	}
@@ -615,6 +627,8 @@ func (h *HTTPHandler) serveRemove(resp http.ResponseWriter, req *http.Request) {
 	switch {
 	case errors2.Is(err, types.ErrSystemChannelExists):
 		h.sendResponseNotAllowed(resp, errors.WithMessage(err, "cannot remove"), http.MethodGet)
+	case errors2.Is(err, types.ErrProtectedOperationUnavailable):
+		h.sendResponseJsonError(resp, http.StatusForbidden, errors.WithMessage(err, "cannot remove"))
 	case errors2.Is(err, types.ErrChannelNotExist):
 		h.sendResponseJsonError(resp, http.StatusNotFound, errors.WithMessage(err, "cannot remove"))
 	case errors2.Is(err, types.ErrChannelPendingRemoval):
