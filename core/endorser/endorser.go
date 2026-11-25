@@ -103,6 +103,9 @@ type Endorser struct {
 	Support                Support
 	PvtRWSetAssembler      PvtRWSetAssembler
 	Metrics                *Metrics
+	// AdmitSystemQuery retains the generation for a system query's target
+	// when that target differs from the proposal channel.
+	AdmitSystemQuery func(context.Context, *UnpackedProposal) (context.Context, error)
 }
 
 // call specified chaincode (system or user)
@@ -361,6 +364,21 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 	if err != nil {
 		endorserLogger.Warnw("Failed to preProcess proposal", "error", err.Error())
 		return &pb.ProposalResponse{Response: &pb.Response{Status: 500, Message: err.Error()}}, err
+	}
+
+	if e.AdmitSystemQuery != nil {
+		generation, err := e.AdmitSystemQuery(ctx, up)
+		if err != nil {
+			return &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: err.Error()}}, nil
+		}
+		if generation != nil {
+			defer func() {
+				if generation.Err() != nil {
+					response = &pb.ProposalResponse{Response: &pb.Response{Status: 503, Message: "protected channel generation closed"}}
+					responseErr = nil
+				}
+			}()
+		}
 	}
 
 	defer func() {

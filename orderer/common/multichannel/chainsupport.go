@@ -98,6 +98,10 @@ func (cs *ChainSupport) WaitReadyWithGeneration(generation context.Context) erro
 	return cs.WaitReady()
 }
 
+func (cs *ChainSupport) AcquireDeliveryAdmission() (context.Context, func(), bool) {
+	return cs.AcquireBroadcastAdmission()
+}
+
 func (cs *ChainSupport) RequiredDeliveryAdmission() <-chan struct{} {
 	if cs.activation == nil {
 		return nil

@@ -1,8 +1,9 @@
 # PQ4.0E bootstrap and admission: INCOMPLETE
 
-This development checkpoint demonstrates authenticated enrollment of native
-node subprocesses. PQ4.0E and the PQ4.0B enforcement gate remain incomplete
-pending the deployment and runtime evidence below.
+This development checkpoint covers authenticated enrollment and bounded
+admission on native peers and Raft orderers. PQ4.0E acceptance is pending
+production verification and independent review of the final commit. The
+PQ4.0B network enforcement gate remains incomplete.
 
 ## Current boundary
 
@@ -20,11 +21,10 @@ handoff rejects startup before listener initialization. A managed process
 gets its startup security floor from verified enrollment. Unmanaged startup
 with activation settings absent follows the legacy path.
 
-**Critical unresolved downgrade:** ordinary local configuration can still
-remove *all* activation settings when Fabric is started directly. The new
-Linux launcher verifies signed enrollment and history and rejects invalid
-protected startup evidence. Non-bypassability depends on the trusted VM
-provisioner and service manager controlling every authorized node launch.
+The Linux launcher verifies signed enrollment and history and rejects invalid
+protected startup evidence. The trusted VM provisioner and service manager
+must control authorized launches. The direct Fabric binary still supports
+legacy unmanaged startup with activation settings absent.
 The hosted VM test exercises the fixed systemd unit with a native orderer and
 test enrollment. Production VM provisioning and network exposure require
 deployment-specific verification.
@@ -50,8 +50,8 @@ configuration to replace the service unit. The history must be updated by the
 trusted provisioner before a new manifest becomes active, preserving
 `protected_ever`; an interrupted update must fail closed. The launcher rejects
 provisioning evidence inside the resolved runtime state or ledger directories.
-These installation and permission requirements are not yet implemented or
-verified by deployment automation. Unmanaged Fabric remains a separate path.
+The disposable VM test verifies the repository installer and service unit.
+Production provisioning and control of authorized launches remain pending.
 
 The repository includes `sampleconfig/fabric-pq-managed.service` for the
 managed service. It fixes the launcher and evidence paths in the root-owned
@@ -94,21 +94,48 @@ without a protected handoff. Linux is the supported managed platform.
 | Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
-| Orderer service, stream and follower integration under strict transport | Incomplete |
+| Orderer service, stream and follower integration under strict transport | Native Broadcast, Deliver, participation update and separately tested authenticated follower promotion |
 | Orderer broadcast validation generation lease | Broadcast holds the validated generation through cancellable readiness and submission |
 | Cluster send cancellation and shutdown reporting | Forwarding retains the exact submit generation through the stream handoff |
 | Orderer Raft generation lease | Local submission transfers admission through the pending batch and proposal queue to the Raft proposal call |
 | Protected Raft membership retry | Implemented; focused race and repeated promotion tests passed |
-| Staged shared TLS resources and crash/restart reconstruction | Incomplete |
+| Staged shared TLS resources and crash/restart reconstruction | Mixed-peer real-ledger and strict gRPC proof, with focused orderer multi-listener staging tests |
 | Peer credential roots preparation and publication failure | Fallible cache retirement precedes TLS and endpoint installation while protected admission is closed |
 | Gateway cache publication and admission | Protected unary admission, strict routed transport and revocable event streams wired |
 | Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
-| Full service-path and shared-resource inventory | Incomplete |
+| Runtime service coverage | Recorded below, including endpoints disabled for enrolled channels and network-wide enforcement gaps |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | All hosted jobs passed at `fec4e82`; later changes require their own exact-commit runs |
+| Full regression, integration and final-head CI evidence | Verified historical runs below. The PR records evidence for its current commit |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
+
+### Service and publication inventory
+
+| Runtime path | Admission and publication boundary | Evidence or open dependency |
+| --- | --- | --- |
+| Peer ledger load and CSCC join | The authenticated registry selects protected channels. Genesis and supported non-genesis snapshot provenance are verified before ledger creation. The controller restores the private validation bundle and serving resources before publication. | Native genesis join/restart. Real-ledger test for a signed non-genesis snapshot at a configuration block. Other snapshot targets require additional signed state-transfer evidence. |
+| Peer endorsement, CSCC config reads and QSCC ledger reads | Endorsement retains the serving generation through unary gRPC completion. CSCC and QSCC acquire the target channel separately when the query names a channel outside the proposal header. Node-local channel and join-status listing use local ACLs. | Native protected queries before and after restart, and refusal with persisted quarantine. Component test for blocked unary response serialization. |
+| Peer block, filtered and private-data Deliver | All three RPCs share the protected seek admission and retain it through iteration, ACL checks and sends. Revocation closes a waiting iterator or aborts a blocked send. | Mixed-channel best-effort Deliver with protected cancellation, continued baseline streaming, and protected recovery. Existing filtered and private-data response tests exercise the data formats. |
+| Peer Gateway | Evaluate, Endorse, Submit, CommitStatus and ChaincodeEvents use the protected generation. Ordered cache retirement precedes installation of staged endpoints and roots. Routed protected calls use the strict client policy. | Registry and RPC tests cover failure, cache reconstruction, unary completion and event-stream drain. Network-wide external Gateway topology is deferred. |
+| Peer discovery | Per-channel queries acquire separate leases through the unary response. Local membership is node-scoped and uses its local policy. | Strict gRPC mixed-query test across failure and restart. |
+| Peer gossip, block delivery and private data | Shared listener and managed outbound clients use the strict profile. Protected block commit, state-transfer replies, private-data storage, pulls and distribution honor channel admission. An in-flight protected reply can force reconnect. | Mixed real-ledger commit and TLS restart proof, plus focused queue and private-data tests. End-to-end authenticated gossip topology across independently managed nodes is deferred. |
+| Peer chaincode registration, execution and CCAAS | Strict registration with a local ML-DSA-65 CA, and strict authenticated external connection setup for managed peers. Protected invocation takes admission before lifecycle lookup. Cross-channel calls retain target admission through the source shim response. | Focused lease, queued and in-flight revocation, restart and live external connection-abort tests. A complete deployed CCAAS topology is deferred. |
+| Peer snapshot export | Generate, Cancel and QueryPendings reject enrolled channels. A scheduled export can run after its RPC returns and requires a generation-aware worker. | Native signed protected Generate rejection. Baseline snapshot service stays enabled. Signed snapshot import has its own provenance and remains supported. |
+| Orderer Broadcast and Raft | The validated generation survives readiness, forwarding, batching and the Raft proposal call. Native replay and quarantine gate user traffic. | Native mixed Broadcast/Deliver restart and controlled proposal-queue tests. |
+| Orderer AtomicBroadcast Deliver | Both normal and best-effort seeks hold admission through iteration, ACLs and block sends. In-flight revocation can force reconnect on the affected transport. | Native best-effort stream cancellation, baseline continuity and restart. |
+| Orderer cluster and follower | Shared or configured dedicated cluster transports use the strict profile. Application submission carries the generation. Authenticated Raft replication and follower verification can proceed for recovery while application admission is closed. | Strict authenticated Cluster Step and Raft Submit tests, native replay/quarantine and signed non-genesis follower promotion. Managed protected channels require Raft. Full SmartBFT protection is deferred. |
+| Orderer participation admin | Strict mTLS on all routes. Join verifies signed provenance. Update validates and submits in one generation. List and status report node metadata. Protected HTTP block export and channel deletion are disabled. | Native strict admin update, protected export and deletion rejection, baseline block export and restart. Protected block retrieval is available via Deliver. Protected deletion requires the decommissioning process below. |
+| Shared TLS and configuration callbacks | Peer validates roots and retires caches before publishing roots/endpoints. Orderer prepares every affected listener pool and cluster dialer trust before installing either. Fabric MSP, bundle and gossip state publish through the activation callback. | Mixed native ledger and strict listener proof, including unrelated baseline traffic and recovery after failure. Orderer trust-pool failure coverage is focused. |
+| Node-wide operations, health, profiling | Operations HTTP health, metrics, log specification and version use mandatory strict mTLS on managed nodes. gRPC health uses the configured server transport. Managed startup rejects the separate profiling listener. | Native listener tests and disposable VM orderer socket inventory. Production routing, firewalls and actual listener exposure remain pending. |
+
+Normal channel configuration and participation deletion cannot decommission
+a protected enrollment. An authorized provisioner must retire the managed
+service and its credentials, archive or securely dispose of the ledger under
+the deployment's retention policy, and preserve the signed enrollment history.
+A replacement with different protection requirements must use separate trusted
+provisioning and separate ledger state. This phase supplies no automated
+decommissioning operation.
 
 ## Authenticated non-genesis onboarding
 
@@ -250,11 +277,10 @@ publication failure, recovery and reconstruction with new peer
 objects after ledger reopen in the same process. Channel creation checks the
 genesis anchor and reconciles the committed config block against world state
 before exposing the serving channel. The real-ledger join test also checks
-that an unapproved genesis never creates a ledger. Enrolled peers reject
-snapshot imports until their provenance can be checked before import.
-Trusted startup must supply the registry and open the ledger manager at the
-manifest's ledger directory. Managed protected startup and a fresh-process
-reconstruction test remain pending.
+that an unapproved genesis never creates a ledger. Managed peers authenticate
+the supported signed snapshot format before scheduling import. Trusted startup
+supplies the registry and opens the ledger manager at the manifest's ledger
+directory.
 Staged peer configuration failures close admission while the store is locked,
 and the lifecycle publisher resets the private validation source to the
 authenticated committed bundle before admission can reopen. Malformed block
@@ -267,9 +293,12 @@ dispatch. For protected calls,
 the peer gRPC stats handler retains the lease through the server RPC end after
 the unary send; a missing or streaming response scope fails closed. A real
 gRPC component test holds response serialization open after the handler returns and checks an
-authenticated activation gate cannot drain until the send stops. Endorsement
-tests exercise the handoff. A protected
-process-level response and interrupted-transition test remains required.
+authenticated activation gate cannot drain until the send stops. The native
+peer test makes signed QSCC and channel-less CSCC queries, kills the peer,
+and leaves a durable commit-pending journal using a failed commit callback.
+The restarted peer aborts that transition, serves the original configuration,
+and stops serving protected queries on a subsequent restart with persisted
+quarantine.
 
 `comm.PrepareTrustedRootsForChain` now builds an isolated per-channel TLS-root
 snapshot and `PublishTrustedRootsForChain` installs it explicitly. Preparation
@@ -343,15 +372,22 @@ block and retains its active lease until the cancellable Raft proposal call
 returns. Raft can still apply entries it has already accepted. Durable config
 preparation checks the expected generation under the activation store lock,
 and replay still reconciles committed entries before reopening admission.
-A managed subprocess proof uses a native orderer to submit an approved config
-update over strict TLS, cancel a prior-generation Deliver stream, recover the
-updated ledger after restart, and reject startup with a missing checkpoint.
+A managed subprocess proof submits approved config updates to a native
+orderer through Broadcast and participation HTTP over strict TLS. It cancels
+prior-generation Deliver streams, recovers the updated ledger after restart,
+and rejects startup with a missing checkpoint.
 The proof also rejects classical key exchange on participation admin.
 A native managed peer joins an enrolled genesis over strict mutual TLS and
 reloads the protected channel after restart. These tests run as subprocesses
 without installing or starting the systemd service on a VM.
 
 ## Hosted CI evidence
+
+On `97432ab056573751706bf836b29b29f512554940`, [Verify Build](https://github.com/vignatov/fabric-pq/actions/runs/45642425332)
+passed all 16 jobs, including four gossip specs and protected cross-channel
+shim revocation. [PQ3 isolated acceptance](https://github.com/vignatov/fabric-pq/actions/runs/45642425434)
+also passed. The workflow records Go, FIPS mode, Linux runner and managed
+binary hashes in [the PQ4.0E job](https://github.com/vignatov/fabric-pq/actions/runs/45642425332/job/139304362418).
 
 On `fec4e82450d596eedb397afd46c91b3f0aa2182b`, [Verify
 Build](https://github.com/vignatov/fabric-pq/actions/runs/45611609486) passed

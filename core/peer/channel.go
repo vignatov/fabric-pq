@@ -169,6 +169,15 @@ func (c *Channel) Reader() blockledger.Reader {
 	return fileledger.NewFileLedger(fileLedgerBlockStore{c.ledger})
 }
 
+// AcquireDeliveryAdmission spans the seek, ledger iterator and protected send.
+func (c *Channel) AcquireDeliveryAdmission() (context.Context, func(), bool) {
+	if c.activation == nil {
+		return nil, nil, true
+	}
+	_, generation, release, ok := c.activation.Gate.Acquire()
+	return generation, release, ok
+}
+
 // Errored returns a channel that can be used to determine if a backing
 // resource has errored. At this point in time, the peer does not have any
 // error conditions that lead to this function signaling that an error has

@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/mldsa"
 	"crypto/sha256"
@@ -14,7 +15,9 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -29,20 +32,26 @@ import (
 	mb "github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
+	peerpb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/ledger/blockledger/fileledger"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	coreledger "github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/core/scc/cscc"
+	"github.com/hyperledger/fabric/core/scc/qscc"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
+	"github.com/hyperledger/fabric/orderer/common/channelparticipation"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -107,6 +116,10 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 	authorization, err := json.Marshal(fixture.Authorize(t, 1, base, update.GetConfig()))
 	require.NoError(t, err)
 	write(filepath.Join("state", "approval-"+hex.EncodeToString(channelHash[:])+"-2"), authorization)
+	adminUpdate := fixture.Update(t, update.GetConfig())
+	adminApproval, err := json.Marshal(fixture.Authorize(t, 2, update.GetConfig(), adminUpdate.GetConfig()))
+	require.NoError(t, err)
+	write(filepath.Join("state", "approval-"+hex.EncodeToString(channelHash[:])+"-3"), adminApproval)
 	environment := append(managedEvidence(t, root, state, ledger, binary, []string{"start"}, fixture, store),
 		"FABRIC_CFG_PATH="+configtest.GetDevConfigDir(), "ORDERER_GENERAL_BOOTSTRAPMETHOD=none",
 		"ORDERER_GENERAL_LOCALMSPDIR="+configtest.GetDevMspDir(), "ORDERER_GENERAL_LISTENADDRESS=127.0.0.1",
@@ -145,7 +158,8 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 	}
 	t.Cleanup(transport.CloseIdleConnections)
 	client := &http.Client{Transport: transport, Timeout: time.Second}
-	url := "https://127.0.0.1:" + adminPort + "/participation/v1/channels/" + testfixture.ChannelID
+	adminURL := "https://127.0.0.1:" + adminPort + "/participation/v1/channels"
+	url := adminURL + "/" + testfixture.ChannelID
 	for run := range 2 {
 		cmd := command()
 		log, err := os.CreateTemp(root, "orderer-*.log")
@@ -182,12 +196,27 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 		}
 		classical.CloseIdleConnections()
 		require.Error(t, err)
+		for _, tc := range []struct {
+			method, endpoint string
+			status           int
+		}{
+			{http.MethodGet, url + "/blocks/config", http.StatusForbidden},
+			{http.MethodDelete, url, http.StatusForbidden},
+			{http.MethodGet, adminURL + "/" + baseline + "/blocks/config", http.StatusOK},
+		} {
+			request, err := http.NewRequestWithContext(t.Context(), tc.method, tc.endpoint, nil)
+			require.NoError(t, err)
+			response, err := client.Do(request)
+			require.NoError(t, err)
+			require.NoError(t, response.Body.Close())
+			require.Equal(t, tc.status, response.StatusCode, tc.endpoint)
+		}
 		connection, err := grpc.NewClient("127.0.0.1:"+mainPort, grpc.WithTransportCredentials(credentials.NewTLS(transport.TLSClientConfig.Clone())))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = connection.Close() })
 		atomicBroadcast := ab.NewAtomicBroadcastClient(connection)
 		clientHash := sha256.Sum256(cert.Certificate[0])
-		deliver, block := managedDeliver(t, atomicBroadcast, fixture, testfixture.ChannelID, uint64(run), clientHash[:])
+		deliver, block := managedDeliver(t, atomicBroadcast, fixture, testfixture.ChannelID, uint64(run)*2, clientHash[:])
 		baselineStream, baselineBlock := managedDeliver(t, atomicBroadcast, fixture, baseline, uint64(run), clientHash[:])
 		if run == 0 {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -201,7 +230,7 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 			revoked, err := deliver.Recv()
 			require.NoError(t, err)
 			require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, revoked.GetStatus(), "old Deliver stream survived generation closure")
-			_, block = managedDeliver(t, atomicBroadcast, fixture, testfixture.ChannelID, 1, clientHash[:])
+			deliver, _ = managedDeliver(t, atomicBroadcast, fixture, testfixture.ChannelID, 1, clientHash[:])
 			require.NoError(t, broadcast.Send(baselineUpdate.GetLastUpdate()))
 			ack, err = broadcast.Recv()
 			require.NoError(t, err)
@@ -210,8 +239,13 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 			require.NoError(t, err)
 			baselineBlock = response.GetBlock()
 			require.NotNil(t, baselineBlock, "baseline Deliver must stay active through protected generation closure")
+			updateViaManagedAdmin(t, client, adminURL, adminUpdate.GetLastUpdate())
+			revoked, err = deliver.Recv()
+			require.NoError(t, err)
+			require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, revoked.GetStatus())
+			_, block = managedDeliver(t, atomicBroadcast, fixture, testfixture.ChannelID, 2, clientHash[:])
 		}
-		require.EqualValues(t, 1, testfixture.Config(t, block).GetSequence())
+		require.EqualValues(t, 2, testfixture.Config(t, block).GetSequence())
 		require.EqualValues(t, 1, testfixture.Config(t, baselineBlock).GetSequence())
 		require.NoError(t, connection.Close())
 		transport.CloseIdleConnections()
@@ -227,6 +261,24 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 	output, err := command().CombinedOutput()
 	require.Error(t, err)
 	require.Contains(t, string(output), "checkpoint")
+}
+
+func updateViaManagedAdmin(t *testing.T, client *http.Client, url string, env *cb.Envelope) {
+	t.Helper()
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	file, err := form.CreateFormFile(channelparticipation.FormDataConfigUpdateEnvelopeKey, "update.pb")
+	require.NoError(t, err)
+	_, err = file.Write(protoutil.MarshalOrPanic(env))
+	require.NoError(t, err)
+	require.NoError(t, form.Close())
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPut, url, &body)
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", form.FormDataContentType())
+	response, err := client.Do(request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusCreated, response.StatusCode)
 }
 
 func managedDeliver(t *testing.T, client ab.AtomicBroadcastClient, fixture testfixture.Fixture, channel string, start uint64, hash []byte) (ab.AtomicBroadcast_DeliverClient, *cb.Block) {
@@ -374,9 +426,47 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 		cmd.Env = append(env, evidence...)
 		return cmd
 	}
+	creator, err := fixture.Fabric.Serialize()
+	require.NoError(t, err)
+	query := func(client peerpb.EndorserClient, chaincode, function, headerChannel string) *peerpb.Response {
+		t.Helper()
+		proposal, _, err := protoutil.CreateChaincodeProposal(cb.HeaderType_ENDORSER_TRANSACTION, headerChannel, &peerpb.ChaincodeInvocationSpec{
+			ChaincodeSpec: &peerpb.ChaincodeSpec{
+				ChaincodeId: &peerpb.ChaincodeID{Name: chaincode},
+				Input:       &peerpb.ChaincodeInput{Args: [][]byte{[]byte(function), []byte(testfixture.ChannelID)}},
+			},
+		}, creator)
+		require.NoError(t, err)
+		signed, err := protoutil.GetSignedProposal(proposal, fixture.Fabric)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		result, err := client.ProcessProposal(ctx, signed)
+		require.NoError(t, err)
+		require.NotNil(t, result.GetResponse())
+		return result.GetResponse()
+	}
+	base := testfixture.Config(t, genesis)
+	candidate := fixture.Update(t, base)
+	nextBlock := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
+	nextBlock.Data.Data = [][]byte{protoutil.MarshalOrPanic(fixture.Envelope(t, candidate))}
+	nextBlock.Header.DataHash = protoutil.ComputeBlockDataHash(nextBlock.GetData())
+	interrupt := errors.New("test interrupted the transition before ledger commit")
+	prepareTransition := func() activation.Channel {
+		t.Helper()
+		store, err := activation.OpenStore(state, nil)
+		require.NoError(t, err)
+		channel := fixture.Channel(store, activation.Ledger{
+			LatestConfig: func() (*cb.Block, error) { return genesis, nil },
+			Height:       func() (uint64, error) { return 1, nil },
+			Block:        func(uint64) (*cb.Block, error) { return genesis, nil },
+		})
+		require.NoError(t, channel.Recover(true))
+		return channel
+	}
 	requireManagedStartupRejected(t, command(), "CORE_OPERATIONS_TLS_ENABLED=false", "protected HTTP listener requires TLS")
 	requireManagedStartupRejected(t, command(), "CORE_PEER_PROFILE_ENABLED=true", "forbids the profiling listener")
-	for attempt := range 2 {
+	for attempt := range 3 {
 		cmd := command()
 		log, err := os.CreateTemp(root, "peer-*.log")
 		require.NoError(t, err)
@@ -404,13 +494,76 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 		if attempt == 0 {
 			peerCLI("channel", "join", "-b", genesisPath)
 		}
-		require.Contains(t, peerCLI("channel", "list"), testfixture.ChannelID)
-		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		conn, err := grpc.NewClient(peerAddress, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig.Clone())))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		endorser := peerpb.NewEndorserClient(conn)
+		if attempt < 2 {
+			require.Contains(t, peerCLI("channel", "list"), testfixture.ChannelID)
+			result := query(endorser, "qscc", qscc.GetChainInfo, testfixture.ChannelID)
+			require.Equal(t, int32(200), result.GetStatus(), result.GetMessage())
+			info := &cb.BlockchainInfo{}
+			require.NoError(t, proto.Unmarshal(result.GetPayload(), info))
+			require.Equal(t, uint64(1), info.GetHeight())
+			result = query(endorser, "cscc", cscc.GetChannelConfig, "")
+			require.Equal(t, int32(200), result.GetStatus(), result.GetMessage())
+			config := &cb.Config{}
+			require.NoError(t, proto.Unmarshal(result.GetPayload(), config))
+			require.True(t, proto.Equal(base, config), "the interrupted candidate must stay unpublished")
+
+			snapshotReq := protoutil.MarshalOrPanic(&peerpb.SnapshotRequest{
+				SignatureHeader: &cb.SignatureHeader{Creator: creator}, ChannelId: testfixture.ChannelID,
+			})
+			signature, err := fixture.Fabric.Sign(snapshotReq)
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			_, err = peerpb.NewSnapshotClient(conn).Generate(ctx, &peerpb.SignedSnapshotRequest{Request: snapshotReq, Signature: signature})
+			cancel()
+			require.Equal(t, codes.FailedPrecondition, status.Code(err), "%v", err)
+		} else {
+			require.NotContains(t, peerCLI("channel", "list"), testfixture.ChannelID)
+			result := query(endorser, "cscc", cscc.GetChannelConfig, "")
+			require.Equal(t, int32(503), result.GetStatus(), result.GetMessage())
+			require.Contains(t, result.GetMessage(), "protected channel admission is closed")
+			require.Empty(t, result.GetPayload())
+			result = query(endorser, "qscc", qscc.GetChainInfo, "")
+			require.Equal(t, int32(503), result.GetStatus(), result.GetMessage())
+			require.Empty(t, result.GetPayload())
+		}
+		signal := syscall.SIGTERM
+		if attempt == 0 {
+			signal = syscall.SIGKILL
+		}
+		require.NoError(t, cmd.Process.Signal(signal))
 		select {
 		case err := <-done:
-			require.NoError(t, err)
+			if attempt == 0 {
+				require.ErrorContains(t, err, "signal: killed")
+			} else {
+				require.NoError(t, err)
+			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("managed peer did not stop")
+		}
+		switch attempt {
+		case 0:
+			channel := prepareTransition()
+			approval := fixture.Authorize(t, 1, base, candidate.GetConfig())
+			require.ErrorIs(t, channel.Apply(nextBlock, approval, func() error { return interrupt }), interrupt)
+			require.False(t, channel.Ready())
+		case 1:
+			journal, err := os.ReadFile(filepath.Join(state, "journal"))
+			require.NoError(t, err)
+			var durable struct{ Phase string }
+			require.NoError(t, json.Unmarshal(journal, &durable))
+			require.Equal(t, "ABORTED", durable.Phase)
+			// Build persistent quarantine through the native activation controller.
+			channel := prepareTransition()
+			err = channel.ApplyPeerConfig(nextBlock, func() error {
+				t.Fatal("a transition without operator approval reached the ledger")
+				return nil
+			})
+			require.ErrorContains(t, err, "load operator approval")
 		}
 	}
 }

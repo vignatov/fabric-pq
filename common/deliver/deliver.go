@@ -13,6 +13,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
@@ -22,6 +23,7 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/common/util"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
@@ -233,12 +235,26 @@ func (h *Handler) deliverBlocks(ctx context.Context, srv *Server, envelope *cb.E
 	}
 
 	erroredChan := chain.Errored()
+	var generation context.Context
 	var requiredAdmission <-chan struct{}
-	if guarded, ok := chain.(interface{ RequiredDeliveryAdmission() <-chan struct{} }); ok {
-		requiredAdmission = guarded.RequiredDeliveryAdmission()
-		if requiredAdmission != nil {
-			erroredChan = requiredAdmission
+	if guarded, ok := chain.(interface {
+		AcquireDeliveryAdmission() (context.Context, func(), bool)
+	}); ok {
+		var release func()
+		var admitted bool
+		generation, release, admitted = guarded.AcquireDeliveryAdmission()
+		if !admitted {
+			return cb.Status_SERVICE_UNAVAILABLE, nil
 		}
+		if generation != nil {
+			defer release()
+			requiredAdmission = generation.Done()
+		}
+	} else if guarded, ok := chain.(interface{ RequiredDeliveryAdmission() <-chan struct{} }); ok {
+		requiredAdmission = guarded.RequiredDeliveryAdmission()
+	}
+	if requiredAdmission != nil {
+		erroredChan = requiredAdmission
 	}
 	if seekInfo.GetErrorResponse() == ab.SeekInfo_BEST_EFFORT {
 		// In a 'best effort' delivery of blocks, we should ignore consenter errors
@@ -271,7 +287,8 @@ func (h *Handler) deliverBlocks(ctx context.Context, srv *Server, envelope *cb.E
 	logger.Debugf("[channel: %s] Received seekInfo (%p) %v from %s", chdr.GetChannelId(), seekInfo, seekInfo, addr)
 
 	cursor, number := chain.Reader().Iterator(seekInfo.GetStart())
-	defer cursor.Close()
+	closeCursor := sync.OnceFunc(cursor.Close)
+	defer closeCursor()
 	var stopNum uint64
 	switch stop := seekInfo.GetStop().GetType().(type) {
 	case *ab.SeekPosition_Oldest:
@@ -313,9 +330,17 @@ func (h *Handler) deliverBlocks(ctx context.Context, srv *Server, envelope *cb.E
 
 		select {
 		case <-ctx.Done():
+			if generation != nil {
+				closeCursor()
+				<-iterCh
+			}
 			logger.Debugf("Context canceled, aborting wait for next block")
 			return cb.Status_INTERNAL_SERVER_ERROR, errors.Wrapf(ctx.Err(), "context finished before block retrieved")
 		case <-erroredChan:
+			if generation != nil {
+				closeCursor()
+				<-iterCh
+			}
 			// TODO, today, the only user of the errorChan is the orderer consensus implementations.  If the peer ever reports
 			// this error, we will need to update this error message, possibly finding a way to signal what error text to return.
 			logger.Warningf("Aborting deliver for request because the backing consensus implementation indicates an error")
@@ -360,7 +385,9 @@ func (h *Handler) deliverBlocks(ctx context.Context, srv *Server, envelope *cb.E
 			return cb.Status_SERVICE_UNAVAILABLE, nil
 		default:
 		}
-		if err := srv.SendBlockResponse(block2send, chdr.GetChannelId(), chain, signedData); err != nil {
+		if err := sendBlockInGeneration(ctx, generation, func() error {
+			return srv.SendBlockResponse(block2send, chdr.GetChannelId(), chain, signedData)
+		}); err != nil {
 			logger.Warningf("[channel: %s] Error sending to %s: %s", chdr.GetChannelId(), addr, err)
 			return cb.Status_INTERNAL_SERVER_ERROR, err
 		}
@@ -375,6 +402,29 @@ func (h *Handler) deliverBlocks(ctx context.Context, srv *Server, envelope *cb.E
 	logger.Debugf("[channel: %s] Done delivering to %s for (%p)", chdr.GetChannelId(), addr, seekInfo)
 
 	return cb.Status_SUCCESS, nil
+}
+
+func sendBlockInGeneration(ctx, generation context.Context, send func() error) error {
+	if generation == nil {
+		return send()
+	}
+	if err := generation.Err(); err != nil {
+		return err
+	}
+	aborted := make(chan struct{})
+	stop := context.AfterFunc(generation, func() {
+		defer close(aborted)
+		comm.AbortProtectedConnection(ctx)
+	})
+	defer func() {
+		if !stop() {
+			<-aborted
+		}
+	}()
+	if err := generation.Err(); err != nil {
+		return err
+	}
+	return send()
 }
 
 func (h *Handler) parseEnvelope(ctx context.Context, envelope *cb.Envelope) (*cb.Payload, *cb.ChannelHeader, *cb.SignatureHeader, error) {

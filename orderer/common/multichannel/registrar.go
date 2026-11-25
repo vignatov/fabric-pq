@@ -782,6 +782,9 @@ func (r *Registrar) FetchBlock(channelID string, blockID string) (*cb.Block, err
 	r.lock.RLock()
 	defer r.lock.RUnlock()
 
+	if r.protected.contains(channelID) {
+		return nil, errors.Wrap(types.ErrProtectedOperationUnavailable, "use the protected Deliver service for block retrieval")
+	}
 	if status, ok := r.pendingRemoval[channelID]; ok {
 		if status.Status == types.StatusFailed {
 			return nil, types.ErrChannelRemovalFailure
@@ -923,21 +926,49 @@ func (r *Registrar) UpdateChannel(channelID string, envelope *cb.Envelope) (info
 	}
 
 	cs, ok := r.chains[channelID]
+	protected := r.protected.contains(channelID)
 	r.lock.Unlock()
 	if !ok {
+		if protected {
+			return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+		}
 		return types.ChannelInfo{}, types.ErrChannelNotExist
 	}
 
+	generation, release, admitted := cs.AcquireBroadcastAdmission()
+	if !admitted {
+		return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+	}
+	defer release()
+
 	config, configSeq, err := cs.ProcessConfigUpdateMsg(envelope)
+	if generation != nil && generation.Err() != nil {
+		return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+	}
 	if err != nil {
 		return types.ChannelInfo{}, errors.WithMessagef(err, "failed update config of channel %s", channelID)
 	}
 
-	if err = cs.WaitReady(); err != nil {
+	if generation == nil {
+		err = cs.WaitReady()
+	} else {
+		err = cs.WaitReadyWithGeneration(generation)
+		if generation.Err() != nil {
+			return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+		}
+	}
+	if err != nil {
 		return types.ChannelInfo{}, errors.WithMessagef(err, "failed update config of channel %s with SERVICE_UNAVAILABLE: rejected by Consenter", channelID)
 	}
 
-	err = cs.Configure(config, configSeq)
+	if generation == nil {
+		err = cs.Configure(config, configSeq)
+	} else {
+		err = cs.ConfigureWithGeneration(generation, config, configSeq)
+		if err != nil && generation.Err() != nil {
+			return types.ChannelInfo{}, types.ErrProtectedAdmissionClosed
+		}
+	}
 	if err != nil {
 		return types.ChannelInfo{}, errors.WithMessagef(err, "failed update config of channel %s with SERVICE_UNAVAILABLE: rejected by Configure", channelID)
 	}
@@ -1041,6 +1072,9 @@ func (r *Registrar) createFollower(
 func (r *Registrar) RemoveChannel(channelID string) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
+	if r.protected.contains(channelID) {
+		return errors.Wrap(types.ErrProtectedOperationUnavailable, "protected removal requires operator decommissioning")
+	}
 
 	status, ok := r.pendingRemoval[channelID]
 	if ok && status.Status != types.StatusFailed {

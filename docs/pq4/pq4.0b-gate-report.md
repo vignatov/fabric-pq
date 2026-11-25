@@ -1,7 +1,8 @@
 # PQ4.0B gate report: INCOMPLETE
 
-The partial PQ4.0E registry work and its unresolved bootstrap downgrade are
-tracked in [PQ4.0E status](pq4.0e-status.md); they do not change this gate.
+PQ4.0E demonstrates authenticated managed startup, bounded channel admission
+and staging. Production verification and the broader network transport proof
+remain open. [PQ4.0E status and service inventory](pq4.0e-status.md)
 
 **Recommendation: stop for architecture review; do not accept or merge the
 gate.** The focused `comm` and signed-policy components are not a protected

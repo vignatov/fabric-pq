@@ -46,6 +46,16 @@ type guardedDeliverChain struct {
 	admission <-chan struct{}
 }
 
+type admittedDeliverChain struct {
+	deliver.Chain
+	generation context.Context
+	release    func()
+}
+
+func (c admittedDeliverChain) AcquireDeliveryAdmission() (context.Context, func(), bool) {
+	return c.generation, c.release, true
+}
+
 func (c guardedDeliverChain) RequiredDeliveryAdmission() <-chan struct{} {
 	return c.admission
 }
@@ -298,6 +308,30 @@ var _ = Describe("Deliver", func() {
 
 			Expect(fakeStreamsClosed.AddCallCount()).To(Equal(1))
 			Expect(fakeStreamsClosed.AddArgsForCall(0)).To(BeNumerically("~", 1.0))
+		})
+
+		It("drains a revoked block send before releasing delivery admission", func() {
+			generation, revoke := context.WithCancel(context.Background())
+			defer revoke()
+			started, finish, released := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			fakeChainManager.GetChainReturns(admittedDeliverChain{
+				Chain: fakeChain, generation: generation, release: func() { close(released) },
+			})
+			fakeResponseSender.SendBlockResponseCalls(func(*cb.Block, string, deliver.Chain, *protoutil.SignedData) error {
+				close(started)
+				<-finish
+				return io.ErrClosedPipe
+			})
+			result := make(chan error, 1)
+			go func() { result <- handler.Handle(context.Background(), server) }()
+			DeferCleanup(func() { close(finish) })
+			Eventually(started).Should(BeClosed())
+			revoke()
+			Expect(released).NotTo(BeClosed())
+			finish <- struct{}{}
+			Eventually(released).Should(BeClosed())
+			Eventually(result).Should(Receive(MatchError(io.ErrClosedPipe)))
+			Expect(fakeBlockIterator.CloseCallCount()).To(Equal(1))
 		})
 
 		It("validates the channel header with the binding inspector", func() {

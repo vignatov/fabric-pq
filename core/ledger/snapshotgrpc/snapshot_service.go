@@ -17,14 +17,17 @@ import (
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // Snapshot Service implements SnapshotServer grpc interface
 type SnapshotService struct {
-	LedgerGetter LedgerGetter
-	ACLProvider  ACLProvider
+	LedgerGetter       LedgerGetter
+	ACLProvider        ACLProvider
+	RequiresProtection func(string) bool
 }
 
 // LedgerGetter gets the PeerLedger associated with a channel.
@@ -134,6 +137,10 @@ func (s *SnapshotService) checkACL(resName string, signatureHdr *cb.SignatureHea
 func (s *SnapshotService) getLedger(channelID string) (ledger.PeerLedger, error) {
 	if channelID == "" {
 		return nil, errors.New("missing channel ID")
+	}
+	if s.RequiresProtection != nil && s.RequiresProtection(channelID) {
+		// Snapshot export outlives the RPC and can execute at a future block.
+		return nil, status.Error(codes.FailedPrecondition, "snapshot export is unavailable for protected channels")
 	}
 
 	lgr := s.LedgerGetter.GetLedger(channelID)

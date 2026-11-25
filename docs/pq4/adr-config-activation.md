@@ -1,7 +1,10 @@
 # ADR: PQ transport policy and Fabric configuration activation
 
-The partial PQ4.0E registry and its missing trusted-enrollment boundary are
-described in [PQ4.0E status](pq4.0e-status.md).
+PQ4.0E authenticates channel selection before managed startup. Protected
+services consume the activation generation and hold it through the relevant
+handoff or response. Shared roots and Gateway endpoints publish after staged
+validation and cache retirement. The service inventory and deployment
+boundary are tracked in [PQ4.0E status](pq4.0e-status.md).
 
 **Status: proposed for architecture review. PQ4.0B enforcement remains INCOMPLETE.**
 

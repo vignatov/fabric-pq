@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,10 +29,12 @@ import (
 	gossipproto "github.com/hyperledger/fabric-protos-go-apiv2/gossip"
 	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset"
 	mb "github.com/hyperledger/fabric-protos-go-apiv2/msp"
+	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	tspb "github.com/hyperledger/fabric-protos-go-apiv2/transientstore"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
+	"github.com/hyperledger/fabric/common/deliver"
 	fabricerrors "github.com/hyperledger/fabric/common/errors"
 	discservice "github.com/hyperledger/fabric/discovery"
 	discconfig "github.com/hyperledger/fabric/discovery/support/config"
@@ -164,6 +167,12 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 			}, nil
 		}))
 		p.Initialize(nil, server, nil, nil, nil, nil, 1)
+		pb.RegisterDeliverServer(server.Server(), &DeliverServer{
+			DeliverHandler: deliver.NewHandler(&DeliverChainManager{Peer: p}, time.Minute, true, deliver.NewMetrics(&disabled.Provider{}), false),
+			PolicyCheckerProvider: func(string) deliver.PolicyCheckerFunc {
+				return func(*cb.Envelope, string) error { return nil }
+			},
+		})
 		dp.RegisterDiscoveryServer(server.Server(), discservice.NewService(discservice.Config{
 			TLS: true, AuthCacheEnabled: true, AuthCacheMaxSize: 10, AuthCachePurgeRetentionRatio: 0.5,
 			AcquireAdmission: p.AcquireChannelAdmission,
@@ -223,6 +232,29 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 		}
 		require.NotNil(t, response.GetResults()[1].GetConfigResult())
 	}
+	seek := func(client *grpc.ClientConn, hash [sha256.Size]byte, cid string, start uint64) pb.Deliver_DeliverClient {
+		t.Helper()
+		env, err := protoutil.CreateSignedEnvelopeWithTLSBinding(cb.HeaderType_DELIVER_SEEK_INFO, cid, fixture.Fabric, &ab.SeekInfo{
+			Start:         &ab.SeekPosition{Type: &ab.SeekPosition_Specified{Specified: &ab.SeekSpecified{Number: start}}},
+			Stop:          &ab.SeekPosition{Type: &ab.SeekPosition_Specified{Specified: &ab.SeekSpecified{Number: math.MaxUint64}}},
+			Behavior:      ab.SeekInfo_BLOCK_UNTIL_READY,
+			ErrorResponse: ab.SeekInfo_BEST_EFFORT,
+		}, 0, 0, hash[:])
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+		t.Cleanup(cancel)
+		stream, err := pb.NewDeliverClient(client).Deliver(ctx)
+		require.NoError(t, err)
+		require.NoError(t, stream.Send(env))
+		return stream
+	}
+	checkBlock := func(stream pb.Deliver_DeliverClient, expected *cb.Block) {
+		t.Helper()
+		resp, err := stream.Recv()
+		require.NoError(t, err)
+		require.NotNil(t, resp.GetBlock(), "%v", resp)
+		require.Equal(t, protoutil.BlockHeaderHash(expected.GetHeader()), protoutil.BlockHeaderHash(resp.GetBlock().GetHeader()))
+	}
 	distribute := func(p *Peer, channel, txid string) error {
 		return p.GossipService.DistributePrivateData(channel, txid, &tspb.TxPvtReadWriteSetWithConfigInfo{
 			PvtRwset: &rwset.TxPvtReadWriteSet{},
@@ -241,6 +273,12 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	require.NoError(t, accepts(server, oldCA))
 	require.Error(t, accepts(server, candidateCA))
 	checkDiscovery(server, true)
+	client, hash := dial(server, baseCA)
+	t.Cleanup(func() { _ = client.Close() })
+	protectedDeliver := seek(client, hash, testfixture.ChannelID, 0)
+	baselineDeliver := seek(client, hash, baseline, 0)
+	checkBlock(protectedDeliver, protectedGenesis)
+	checkBlock(baselineDeliver, baselineGenesis)
 	require.NoError(t, distribute(p, testfixture.ChannelID, "protected-before"))
 	require.NoError(t, enqueue(p, testfixture.ChannelID, protectedBlock))
 	require.Eventually(t, func() bool {
@@ -255,9 +293,13 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	require.NoError(t, accepts(server, oldCA))
 	require.Error(t, accepts(server, candidateCA))
 	checkDiscovery(server, false)
+	closed, err := protectedDeliver.Recv()
+	require.NoError(t, err)
+	require.Equal(t, cb.Status_SERVICE_UNAVAILABLE, closed.GetStatus())
 	require.ErrorContains(t, distribute(p, testfixture.ChannelID, "protected-closed"), "admission is closed")
 	require.NoError(t, distribute(p, baseline, "baseline-live"))
 	require.NoError(t, enqueue(p, baseline, baselineBlock))
+	checkBlock(baselineDeliver, baselineBlock)
 	require.Eventually(t, func() bool {
 		height, err := p.Channel(baseline).Ledger().GetBlockchainInfo()
 		return err == nil && height.GetHeight() == 2
@@ -279,6 +321,9 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	require.NoError(t, accepts(server, candidateCA))
 	require.Error(t, accepts(server, oldCA))
 	checkDiscovery(server, true)
+	restartedClient, restartedHash := dial(server, baseCA)
+	t.Cleanup(func() { _ = restartedClient.Close() })
+	checkBlock(seek(restartedClient, restartedHash, testfixture.ChannelID, 1), protectedBlock)
 	require.NoError(t, distribute(p, testfixture.ChannelID, "protected-recovered"))
 	require.NoError(t, distribute(p, baseline, "baseline-recovered"))
 }

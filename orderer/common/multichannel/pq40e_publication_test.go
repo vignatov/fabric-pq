@@ -17,9 +17,26 @@ import (
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
+	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPQ40EParticipationRejectsClosedProtectedOperations(t *testing.T) {
+	const channel = testfixture.ChannelID
+	controller := &activation.Channel{Gate: &activation.Gate{}}
+	r := &Registrar{
+		protected: protectedChannels{channels: map[string]*activation.Channel{channel: controller}},
+		chains:    map[string]*ChainSupport{channel: {activation: controller}},
+	}
+	_, err := r.UpdateChannel(channel, &cb.Envelope{})
+	require.ErrorIs(t, err, types.ErrProtectedAdmissionClosed)
+	_, err = r.FetchBlock(channel, "config")
+	require.ErrorIs(t, err, types.ErrProtectedOperationUnavailable)
+	require.ErrorIs(t, r.RemoveChannel(channel), types.ErrProtectedOperationUnavailable)
+	_, err = r.UpdateChannel("baseline-unjoined", &cb.Envelope{})
+	require.ErrorIs(t, err, types.ErrChannelNotExist)
+}
 
 func TestPQ40EOrdererCallbacksWaitForAuthorization(t *testing.T) {
 	fixture := testfixture.New(t)

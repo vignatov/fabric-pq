@@ -178,6 +178,41 @@ func (e endorserChannelAdapter) Channel(channelID string) *endorser.Channel {
 	return nil
 }
 
+// admitSystemQuery covers system chaincodes that take a ledger channel as an
+// argument. Join and node-wide metadata operations have their own checks.
+func (e endorserChannelAdapter) admitSystemQuery(ctx context.Context, proposal *endorser.UnpackedProposal) (context.Context, error) {
+	args := proposal.Input.GetArgs()
+	if len(args) < 2 {
+		return nil, nil
+	}
+	switch proposal.ChaincodeName {
+	case "cscc":
+		if string(args[0]) != cscc.GetConfigBlock && string(args[0]) != cscc.GetChannelConfig {
+			return nil, nil
+		}
+	case "qscc":
+		// Every QSCC query consumes the ledger named by args[1].
+	default:
+		return nil, nil
+	}
+	target := string(args[1])
+	if target == "" || target == proposal.ChannelID() {
+		return nil, nil
+	}
+	generation, release, admitted := e.peer.AcquireChannelAdmission(target)
+	if !admitted {
+		return nil, errors.New("protected channel admission is closed")
+	}
+	if generation == nil {
+		return nil, nil
+	}
+	if generation.Err() != nil || !comm.RetainUntilRPCEnd(ctx, release) {
+		release()
+		return nil, errors.New("protected response admission is unavailable")
+	}
+	return generation, nil
+}
+
 type custodianLauncherAdapter struct {
 	launcher      chaincode.Launcher
 	streamHandler extcc.StreamHandler
@@ -792,6 +827,9 @@ func serve(args []string) error {
 		Support:                endorserSupport,
 		Metrics:                endorser.NewMetrics(metricsProvider),
 	}
+	if registry != nil {
+		serverEndorser.AdmitSystemQuery = channelFetcher.admitSystemQuery
+	}
 
 	// deploy system chaincodes
 	for _, cc := range []scc.SelfDescribingSysCC{csccInst, qsccInst, lifecycleSCC} {
@@ -953,6 +991,9 @@ func serve(args []string) error {
 
 	// register the snapshot server
 	snapshotSvc := &snapshotgrpc.SnapshotService{LedgerGetter: peerInstance, ACLProvider: aclProvider}
+	if registry != nil {
+		snapshotSvc.RequiresProtection = registry.RequiresProtection
+	}
 	pb.RegisterSnapshotServer(peerServer.Server(), snapshotSvc)
 
 	go func() {
