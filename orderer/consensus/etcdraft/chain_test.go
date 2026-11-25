@@ -324,15 +324,20 @@ var _ = Describe("Chain", func() {
 				Expect(fakeFields.fakeProposalFailures.AddCallCount()).To(Equal(1))
 				Expect(fakeFields.fakeProposalFailures.AddArgsForCall(0)).To(Equal(float64(1)))
 			})
+		})
+
+		Context("when the ordinary election timeout is far away", func() {
+			BeforeEach(func() {
+				opts.ElectionTick = 100_000
+			})
 
 			It("starts proactive campaign", func() {
-				// assert that even tick supplied are less than ELECTION_TIMEOUT,
-				// a leader can still be successfully elected.
-				for range ELECTION_TICK {
-					clock.Increment(interval)
-					time.Sleep(10 * time.Millisecond)
-				}
-				Eventually(observeC, LongEventualTimeout).Should(Receive(StateEqual(1, raft.StateLeader)))
+				// Keep the campaign ticker running while Raft applies its initial membership.
+				// Only the proactive campaign can elect a leader within this test's timeout.
+				Eventually(func() <-chan raft.SoftState {
+					clock.Increment(2 * HEARTBEAT_TICK * interval)
+					return observeC
+				}, LongEventualTimeout, 10*time.Millisecond).Should(Receive(StateEqual(1, raft.StateLeader)))
 			})
 		})
 
