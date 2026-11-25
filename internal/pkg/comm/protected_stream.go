@@ -42,6 +42,15 @@ func (l revocableListener) Accept() (net.Conn, error) {
 
 func (c *revocableConn) RemoteAddr() net.Addr { return c.remote }
 
+// AbortProtectedConnection interrupts writes on a revocable server connection.
+func AbortProtectedConnection(ctx context.Context) {
+	if p, ok := peer.FromContext(ctx); ok {
+		if address, ok := p.Addr.(*revocableAddr); ok {
+			address.abort()
+		}
+	}
+}
+
 // RetainProtectedStream transfers a lease to a streaming gRPC call on a
 // strict listener. Revocation aborts the underlying transport, including any
 // writes blocked by HTTP/2 flow control. Multiplexed calls on that connection

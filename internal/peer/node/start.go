@@ -724,6 +724,7 @@ func serve(args []string) error {
 		MaxSizeWriteBatch:      chaincodeConfig.MaxSizeWriteBatch,
 		UseGetMultipleKeys:     chaincodeConfig.UseGetMultipleKeys,
 		MaxSizeGetMultipleKeys: chaincodeConfig.MaxSizeGetMultipleKeys,
+		AcquireAdmission:       peerInstance.AcquireChannelAdmission,
 	}
 
 	custodianLauncher := custodianLauncherAdapter{
@@ -1043,10 +1044,11 @@ func createDiscoveryService(
 	}))
 	support := discsupport.NewDiscoverySupport(acl, gSup, ea, confSup, acl)
 	return discovery.NewService(discovery.Config{
-		TLS:                          peerServer.TLSEnabled(),
+		TLS:                          peerServer.MutualTLSRequired(),
 		AuthCacheEnabled:             coreConfig.DiscoveryAuthCacheEnabled,
 		AuthCacheMaxSize:             coreConfig.DiscoveryAuthCacheMaxSize,
 		AuthCachePurgeRetentionRatio: coreConfig.DiscoveryAuthCachePurgeRetentionRatio,
+		AcquireAdmission:             peerInstance.AcquireChannelAdmission,
 	}, support)
 }
 

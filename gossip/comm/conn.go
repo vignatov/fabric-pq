@@ -9,12 +9,14 @@ package comm
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	proto "github.com/hyperledger/fabric-protos-go-apiv2/gossip"
 	"github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/gossip/metrics"
 	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/gossip/util"
+	fabriccomm "github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 )
@@ -260,6 +262,39 @@ func (conn *connection) send(msg *protoext.SignedGossipMessage, onErr func(error
 	}
 }
 
+func (conn *connection) sendProtectedReply(msg *protoext.SignedGossipMessage, generation context.Context) {
+	if generation.Err() != nil {
+		return
+	}
+	reply := &protectedReply{generation: generation, done: make(chan struct{})}
+	select {
+	case <-generation.Done():
+		return
+	case <-conn.stopChan:
+		return
+	case conn.outBuff <- &msgSending{envelope: msg.Envelope, protected: reply}:
+	}
+	select {
+	case <-reply.done:
+		return
+	case <-conn.stopChan:
+	case <-generation.Done():
+	}
+	if reply.state.CompareAndSwap(replyQueued, replyDiscarded) {
+		return
+	}
+	select {
+	case <-reply.done:
+		return
+	default:
+	}
+	// An admitted write has started. Closing the connection unblocks the
+	// client stream or causes the server RPC to return and release its writer.
+	conn.close()
+	fabriccomm.AbortProtectedConnection(conn.gossipStream.Context())
+	<-reply.done
+}
+
 func (conn *connection) serviceConnection() error {
 	errChan := make(chan error, 1)
 	msgChan := make(chan *protoext.SignedGossipMessage, conn.recvBuffSize)
@@ -290,9 +325,29 @@ func (conn *connection) writeToStream() {
 	for {
 		select {
 		case m := <-conn.outBuff:
+			if m.protected != nil {
+				reply := m.protected
+				if !reply.state.CompareAndSwap(replyQueued, replyWriting) {
+					continue
+				}
+				var err error
+				if reply.generation.Err() == nil {
+					err = stream.Send(m.envelope)
+					if err == nil {
+						conn.metrics.SentMessages.Add(1)
+					}
+				}
+				close(reply.done)
+				if err != nil {
+					conn.close()
+					return
+				}
+				continue
+			}
 			err := stream.Send(m.envelope)
 			if err != nil {
 				go m.onErr(err)
+				conn.close()
 				return
 			}
 			conn.metrics.SentMessages.Add(1)
@@ -332,8 +387,21 @@ func (conn *connection) readFromStream(errChan chan error, msgChan chan *protoex
 }
 
 type msgSending struct {
-	envelope *proto.Envelope
-	onErr    func(error)
+	envelope  *proto.Envelope
+	onErr     func(error)
+	protected *protectedReply
+}
+
+const (
+	replyQueued uint32 = iota
+	replyWriting
+	replyDiscarded
+)
+
+type protectedReply struct {
+	generation context.Context
+	state      atomic.Uint32
+	done       chan struct{}
 }
 
 //go:generate mockery -dir . -name MockStream -case underscore -output mocks/

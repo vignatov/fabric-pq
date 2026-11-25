@@ -17,6 +17,7 @@ import (
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/discovery/protoext"
 	common2 "github.com/hyperledger/fabric/gossip/common"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
@@ -46,6 +47,7 @@ type Config struct {
 	AuthCacheEnabled             bool
 	AuthCacheMaxSize             int
 	AuthCachePurgeRetentionRatio float64
+	AcquireAdmission             func(string) (context.Context, func(), bool)
 }
 
 // String returns a string representation of this Config
@@ -62,6 +64,7 @@ type peerMapping map[string]*discovery.Peer
 // NewService creates a new discovery service instance
 func NewService(config Config, sup Support) *Service {
 	s := &Service{
+		config: config,
 		auth: newAuthCache(sup, authCacheConfig{
 			enabled:             config.AuthCacheEnabled,
 			maxCacheSize:        config.AuthCacheMaxSize,
@@ -90,13 +93,47 @@ func (s *Service) Discover(ctx context.Context, request *discovery.SignedRequest
 	}
 	logger.Debugf("Processing request from %s: %v", addr, req)
 	var res []*discovery.QueryResult
+	admitted := make(map[string]context.Context)
+	denied := make(map[string]bool)
 	for _, q := range req.GetQueries() {
+		channel := q.GetChannel()
+		generation, known := admitted[channel]
+		if channel != "" && s.config.AcquireAdmission != nil && !known && !denied[channel] {
+			var ok bool
+			generation, ok = s.admit(ctx, channel)
+			if ok {
+				admitted[channel] = generation
+			} else {
+				denied[channel] = true
+			}
+		}
+		if denied[channel] || generation != nil && generation.Err() != nil {
+			res = append(res, accessDenied)
+			continue
+		}
 		res = append(res, s.processQuery(q, request, req.GetAuthentication().GetClientIdentity(), addr))
+	}
+	for i, q := range req.GetQueries() {
+		if generation := admitted[q.GetChannel()]; generation != nil && generation.Err() != nil {
+			res[i] = accessDenied
+		}
 	}
 	logger.Debugf("Returning to %s a response containing: %v", addr, res)
 	return &discovery.Response{
 		Results: res,
 	}, nil
+}
+
+func (s *Service) admit(ctx context.Context, channel string) (context.Context, bool) {
+	generation, release, ok := s.config.AcquireAdmission(channel)
+	if !ok || generation == nil {
+		return generation, ok
+	}
+	if !comm.RetainUntilRPCEnd(ctx, release) {
+		release()
+		return nil, false
+	}
+	return generation, true
 }
 
 func (s *Service) processQuery(query *discovery.Query, request *discovery.SignedRequest, identity []byte, addr string) *discovery.QueryResult {

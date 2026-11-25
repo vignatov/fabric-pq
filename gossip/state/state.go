@@ -325,6 +325,11 @@ func (s *GossipStateProviderImpl) privateDataMessage(msg protoext.ReceivedMessag
 			string(msg.GetGossipMessage().Channel), "while expecting channel", s.chainID, "skipping request...")
 		return
 	}
+	generation, release, admitted := s.config.AcquireAdmission.Acquire()
+	if !admitted {
+		return
+	}
+	defer release()
 
 	gossipMsg := msg.GetGossipMessage()
 	pvtDataMsg := gossipMsg.GetPrivateData()
@@ -365,11 +370,11 @@ func (s *GossipStateProviderImpl) privateDataMessage(msg protoext.ReceivedMessag
 
 	if err := s.ledger.StorePvtData(txID, txPvtRwSetWithConfig, pvtDataMsg.GetPayload().GetPrivateSimHeight()); err != nil {
 		s.logger.Errorf("Wasn't able to persist private data for collection %s, due to %s", collectionName, err)
-		msg.Ack(err) // Sending NACK to indicate failure of storing collection
+		protoext.AckInGeneration(msg, err, generation)
 		return
 	}
 
-	msg.Ack(nil)
+	protoext.AckInGeneration(msg, nil, generation)
 	s.logger.Debug("Private data for collection", collectionName, "has been stored")
 }
 
@@ -423,6 +428,11 @@ func (s *GossipStateProviderImpl) handleStateRequest(msg protoext.ReceivedMessag
 	if msg == nil || s.protectedRecoveryRequired.Load() {
 		return
 	}
+	generation, release, admitted := s.config.AcquireAdmission.Acquire()
+	if !admitted {
+		return
+	}
+	defer release()
 	request := msg.GetGossipMessage().GetStateRequest()
 
 	if err := s.requestValidator.validate(request, s.config.StateBatchSize); err != nil {
@@ -489,13 +499,13 @@ func (s *GossipStateProviderImpl) handleStateRequest(msg protoext.ReceivedMessag
 		return
 	}
 	// Sending back response with missing blocks
-	msg.Respond(&proto.GossipMessage{
+	protoext.RespondInGeneration(msg, &proto.GossipMessage{
 		// Copy nonce field from the request, so it will be possible to match response
 		Nonce:   msg.GetGossipMessage().Nonce,
 		Tag:     proto.GossipMessage_CHAN_OR_ORG,
 		Channel: []byte(s.chainID),
 		Content: &proto.GossipMessage_StateResponse{StateResponse: response},
-	})
+	}, generation)
 }
 
 func (s *GossipStateProviderImpl) handleStateResponse(msg protoext.ReceivedMessage) (uint64, error) {

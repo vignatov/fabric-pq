@@ -8,6 +8,7 @@ package privdata
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"sync"
 	"testing"
@@ -190,6 +191,68 @@ func (msg *receivedMsg) Respond(message *proto.GossipMessage) {
 	msg.responseChan <- &receivedMsg{SignedGossipMessage: m, RemotePeer: &comm.RemotePeer{}}
 }
 
+type generationPullRequest struct{ *receivedMsg }
+
+func (msg generationPullRequest) RespondWithGeneration(response *proto.GossipMessage, generation context.Context) {
+	if generation.Err() == nil {
+		msg.Respond(response)
+	}
+}
+
+func TestPQ40EMixedPrivatePullAdmissionAndRestart(t *testing.T) {
+	digest := &proto.PvtDataDigest{TxId: "tx", Namespace: "cc", Collection: "collection", BlockSeq: 1}
+	payload := []byte("private simulation")
+	makePuller := func(channel string, admit protoext.ChannelAdmission) (*puller, *dataRetrieverMock) {
+		retriever := &dataRetrieverMock{}
+		retriever.On("CollectionRWSet", []*proto.PvtDataDigest{digest}, uint64(1)).Return(Dig2PvtRWSetWithConfig{
+			*toDigKey(digest): {RWSet: []util.PrivateRWSet{payload}},
+		}, false, nil)
+		policy := &mocks.CollectionAccessPolicy{}
+		policy.On("AccessFilter").Return(privdata.Filter(func(protoutil.SignedData) bool { return true }))
+		factory := &mocks.CollectionAccessFactory{}
+		factory.On("AccessPolicy", mock.Anything, channel).Return(policy, nil)
+		return &puller{
+			channel: channel, logger: logger,
+			metrics:          metrics.NewGossipMetrics(&disabled.Provider{}).PrivdataMetrics,
+			acquireAdmission: admit, PrivateDataRetriever: retriever, CollectionAccessFactory: factory,
+		}, retriever
+	}
+	ask := func(p *puller) []*proto.PvtDataElement {
+		message, err := protoext.NoopSign(&proto.GossipMessage{
+			Channel: []byte(p.channel),
+			Content: &proto.GossipMessage_PrivateReq{PrivateReq: &proto.RemotePvtDataRequest{Digests: []*proto.PvtDataDigest{digest}}},
+		})
+		require.NoError(t, err)
+		replies := make(chan protoext.ReceivedMessage, 1)
+		p.handleRequest(generationPullRequest{&receivedMsg{responseChan: replies, RemotePeer: &comm.RemotePeer{}, SignedGossipMessage: message}})
+		select {
+		case reply := <-replies:
+			return reply.GetGossipMessage().GetPrivateRes().GetElements()
+		default:
+			return nil
+		}
+	}
+	open := func(generation context.Context) protoext.ChannelAdmission {
+		return func() (context.Context, func(), bool) { return generation, func() {}, generation.Err() == nil }
+	}
+	generation, revoke := context.WithCancel(t.Context())
+	defer revoke()
+	protected, reads := makePuller("protected", open(generation))
+	baseline, _ := makePuller("baseline", nil)
+	check := func(p *puller) {
+		results := ask(p)
+		require.Len(t, results, 1)
+		require.Equal(t, [][]byte{payload}, results[0].GetPayload())
+	}
+	check(protected)
+	revoke()
+	require.Empty(t, ask(protected))
+	reads.AssertNumberOfCalls(t, "CollectionRWSet", 1)
+	check(baseline)
+	recovered, _ := makePuller("protected", open(t.Context()))
+	check(recovered)
+}
+
 func (msg *receivedMsg) GetGossipMessage() *protoext.SignedGossipMessage {
 	return msg.SignedGossipMessage
 }
@@ -291,7 +354,7 @@ func (gn *gossipNetwork) newPullerWithMetrics(metrics *metrics.PrivdataMetrics, 
 	g.network = gn
 	g.On("PeersOfChannel", mock.Anything).Return(knownMembers)
 
-	p := NewPuller(metrics, ps, g, &dataRetrieverMock{}, factory, "A", 10)
+	p := NewPuller(metrics, ps, g, &dataRetrieverMock{}, factory, "A", 10, nil)
 	gn.peers = append(gn.peers, g)
 	return p
 }

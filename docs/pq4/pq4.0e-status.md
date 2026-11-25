@@ -105,7 +105,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
 | Full service-path and shared-resource inventory | Incomplete |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | All hosted jobs passed at `1d72a34`; later changes require their own exact-commit runs |
+| Full regression, integration and final-head CI evidence | All hosted jobs passed at `fec4e82`; later changes require their own exact-commit runs |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
@@ -187,6 +187,35 @@ committing on the baseline channel. Restart reconstructs both ledgers and
 publishes the committed roots. A separate Gateway registry test rebuilds
 orderer endpoints from the recovered bundle while discovery advertises a
 stale endpoint.
+
+The mixed peer test also sends one authenticated discovery RPC with queries
+for both channels. A closed protected generation yields an error for its
+query while the baseline query succeeds. After restart both queries succeed.
+The discovery service keeps the generation lease through its unary response.
+The same peer test exercises private-data distribution and transient-store
+admission before failure, while the protected channel is closed, and after
+restart.
+
+Inbound private-data storage, private-data pulls and state-transfer replies
+also require the serving generation on protected channels. The gossip
+transport discards queued replies from closed generations. If revocation
+interrupts a blocked write, it closes the affected transport and waits for
+the writer to return. Other traffic on that connection reconnects. The
+transport tests cover both queued cancellation and in-flight drain.
+
+Chaincode execution acquires admission before resolving and launching the
+chaincode. The mixed-channel test exercises an outstanding invocation
+during closure, continued baseline execution, and a rebuilt handler after
+recovery. Cross-channel chaincode invocations into protected channels are
+disabled. Supporting that path requires retaining the target generation
+through the source shim's asynchronous response.
+
+The cluster test uses authenticated strict mTLS, the real Cluster Step
+service, member-certificate mapping and the Raft Submit entry point. It
+checks cancellation at the protected submission queue, rejection while
+closed, independent baseline traffic, and a fresh transport/controller
+after reopening the checkpoint. Native Raft persistence and replay are
+covered separately by the existing promotion and restart tests.
 
 ## Admission and publication dependencies
 
@@ -319,6 +348,12 @@ reloads the protected channel after restart. These tests run as subprocesses
 without installing or starting the systemd service on a VM.
 
 ## Hosted CI evidence
+
+On `fec4e82450d596eedb397afd46c91b3f0aa2182b`, [Verify
+Build](https://github.com/vignatov/fabric-pq/actions/runs/45611609486) passed
+all 16 jobs, including the disposable VM socket inventory and four gossip
+specs. [PQ3 isolated acceptance](https://github.com/vignatov/fabric-pq/actions/runs/45611607502)
+passed.
 
 On `1d72a346b63b2fbcf16a00d265775f2710133181`, [Verify
 Build](https://github.com/vignatov/fabric-pq/actions/runs/45601768505) passed all

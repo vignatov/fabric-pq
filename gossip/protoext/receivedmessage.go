@@ -7,12 +7,54 @@ SPDX-License-Identifier: Apache-2.0
 package protoext
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/gossip"
 	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/common"
 )
+
+// ChannelAdmission obtains the serving generation of a protected channel.
+// A nil admission function gives a baseline channel an unguarded scope.
+type ChannelAdmission func() (context.Context, func(), bool)
+
+func (a ChannelAdmission) Acquire() (context.Context, func(), bool) {
+	if a == nil {
+		return nil, func() {}, true
+	}
+	return a()
+}
+
+// AckInGeneration returns an acknowledgement within the same reply scope.
+func AckInGeneration(msg ReceivedMessage, err error, generation context.Context) {
+	if generation == nil {
+		msg.Ack(err)
+		return
+	}
+	ack := &gossip.Acknowledgement{}
+	if err != nil {
+		ack.Error = err.Error()
+	}
+	RespondInGeneration(msg, &gossip.GossipMessage{
+		Nonce:   msg.GetGossipMessage().GetNonce(),
+		Content: &gossip.GossipMessage_Ack{Ack: ack},
+	}, generation)
+}
+
+// RespondInGeneration sends a response before the caller releases admission.
+// A protected reply requires a transport that can abort a blocked send.
+func RespondInGeneration(msg ReceivedMessage, response *gossip.GossipMessage, generation context.Context) {
+	if generation == nil {
+		msg.Respond(response)
+		return
+	}
+	if sender, ok := msg.(interface {
+		RespondWithGeneration(*gossip.GossipMessage, context.Context)
+	}); ok {
+		sender.RespondWithGeneration(response, generation)
+	}
+}
 
 // ReceivedMessage is a GossipMessage wrapper that
 // enables the user to send a message to the origin from which

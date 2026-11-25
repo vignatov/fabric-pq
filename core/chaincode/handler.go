@@ -139,6 +139,7 @@ type Handler struct {
 	UseGetMultipleKeys bool
 	// MaxSizeGetMultipleKeys maximum size of batches with get multiple keys
 	MaxSizeGetMultipleKeys uint32
+	RequiresProtection     func(string) bool
 
 	// stateLock is used to read and set State.
 	stateLock sync.RWMutex
@@ -1359,6 +1360,10 @@ func (h *Handler) HandleInvokeChaincode(msg *pb.ChaincodeMessage, txContext *Tra
 	if targetInstance.ChannelID == "" {
 		// use caller's channel as the called chaincode is in the same channel
 		targetInstance.ChannelID = txContext.ChannelID
+	}
+	if targetInstance.ChannelID != txContext.ChannelID &&
+		h.RequiresProtection != nil && h.RequiresProtection(targetInstance.ChannelID) {
+		return nil, errors.New("cross-channel invocation into a protected channel is disabled")
 	}
 	chaincodeLogger.Debugf("[%s] C-call-C %s on channel %s", shorttxid(msg.GetTxid()), targetInstance.ChaincodeName, targetInstance.ChannelID)
 

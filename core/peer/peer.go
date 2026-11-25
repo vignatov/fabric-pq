@@ -34,6 +34,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/ledgermgmt"
 	"github.com/hyperledger/fabric/core/transientstore"
 	"github.com/hyperledger/fabric/gossip/api"
+	"github.com/hyperledger/fabric/gossip/protoext"
 	gossipservice "github.com/hyperledger/fabric/gossip/service"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
@@ -554,6 +555,13 @@ func (p *Peer) createChannel(
 		return p.Channel(channelID).MSPManager()
 	}
 	simpleCollectionStore := privdata.NewSimpleCollectionStore(l, deployedCCInfoProvider, idDeserializerFactory)
+	var gossipAdmission protoext.ChannelAdmission
+	if controller != nil {
+		gossipAdmission = func() (context.Context, func(), bool) {
+			_, generation, release, admitted := controller.Gate.Acquire()
+			return generation, release, admitted
+		}
+	}
 
 	p.GossipService.InitializeChannel(
 		bundle.ConfigtxValidator().ChannelID(),
@@ -565,6 +573,7 @@ func (p *Peer) createChannel(
 			CollectionStore:      simpleCollectionStore,
 			IdDeserializeFactory: idDeserializerFactory,
 			CapabilityProvider:   channel,
+			AcquireAdmission:     gossipAdmission,
 		},
 		chanConf,
 		p.CryptoProvider,

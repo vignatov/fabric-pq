@@ -22,13 +22,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	dp "github.com/hyperledger/fabric-protos-go-apiv2/discovery"
 	gossipproto "github.com/hyperledger/fabric-protos-go-apiv2/gossip"
+	"github.com/hyperledger/fabric-protos-go-apiv2/ledger/rwset"
 	mb "github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	tspb "github.com/hyperledger/fabric-protos-go-apiv2/transientstore"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	fabricerrors "github.com/hyperledger/fabric/common/errors"
+	discservice "github.com/hyperledger/fabric/discovery"
+	discconfig "github.com/hyperledger/fabric/discovery/support/config"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
@@ -134,6 +140,7 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 			UseTLS: true, RequireClientCert: true, Certificate: node.Cert, Key: node.Key,
 			ClientRootCAs: [][]byte{nodeCA.CertBytes()}, TransportPolicy: registry.TransportPolicy(),
 		}}
+		p.ServerConfig.ServerStatsHandler = comm.NewServerStatsHandler(&disabled.Provider{})
 		server, err := comm.NewGRPCServer("127.0.0.1:0", p.ServerConfig)
 		require.NoError(t, err)
 		closePeer := sync.OnceFunc(func() {
@@ -157,10 +164,14 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 			}, nil
 		}))
 		p.Initialize(nil, server, nil, nil, nil, nil, 1)
+		dp.RegisterDiscoveryServer(server.Server(), discservice.NewService(discservice.Config{
+			TLS: true, AuthCacheEnabled: true, AuthCacheMaxSize: 10, AuthCachePurgeRetentionRatio: 0.5,
+			AcquireAdmission: p.AcquireChannelAdmission,
+		}, mixedDiscoverySupport{peer: p}))
 		go server.Start()
 		return p, server, &cacheSequence, closePeer
 	}
-	accepts := func(server *comm.GRPCServer, clientCA tlsgen.CA) error {
+	dial := func(server *comm.GRPCServer, clientCA tlsgen.CA) (*grpc.ClientConn, [sha256.Size]byte) {
 		t.Helper()
 		key, err := clientCA.NewClientCertKeyPair()
 		require.NoError(t, err)
@@ -173,11 +184,49 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 			RootCAs: roots, Certificates: []tls.Certificate{cert},
 		})))
 		require.NoError(t, err)
+		return client, sha256.Sum256(cert.Certificate[0])
+	}
+	accepts := func(server *comm.GRPCServer, clientCA tlsgen.CA) error {
+		t.Helper()
+		client, _ := dial(server, clientCA)
 		defer client.Close()
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
-		_, err = health.NewHealthClient(client).Check(ctx, &health.HealthCheckRequest{})
+		_, err := health.NewHealthClient(client).Check(ctx, &health.HealthCheckRequest{})
 		return err
+	}
+	checkDiscovery := func(server *comm.GRPCServer, protectedAvailable bool) {
+		t.Helper()
+		client, hash := dial(server, baseCA)
+		defer client.Close()
+		identity, err := fixture.Fabric.Serialize()
+		require.NoError(t, err)
+		request := &dp.Request{
+			Authentication: &dp.AuthInfo{ClientIdentity: identity, ClientTlsCertHash: hash[:]},
+			Queries: []*dp.Query{
+				{Channel: testfixture.ChannelID, Query: &dp.Query_ConfigQuery{ConfigQuery: &dp.ConfigQuery{}}},
+				{Channel: baseline, Query: &dp.Query_ConfigQuery{ConfigQuery: &dp.ConfigQuery{}}},
+			},
+		}
+		payload := protoutil.MarshalOrPanic(request)
+		signature, err := fixture.Fabric.Sign(payload)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+		defer cancel()
+		response, err := dp.NewDiscoveryClient(client).Discover(ctx, &dp.SignedRequest{Payload: payload, Signature: signature})
+		require.NoError(t, err)
+		require.Len(t, response.GetResults(), 2)
+		if protectedAvailable {
+			require.NotNil(t, response.GetResults()[0].GetConfigResult(), "%v", response.GetResults()[0])
+		} else {
+			require.Equal(t, "access denied", response.GetResults()[0].GetError().GetContent())
+		}
+		require.NotNil(t, response.GetResults()[1].GetConfigResult())
+	}
+	distribute := func(p *Peer, channel, txid string) error {
+		return p.GossipService.DistributePrivateData(channel, txid, &tspb.TxPvtReadWriteSetWithConfigInfo{
+			PvtRwset: &rwset.TxPvtReadWriteSet{},
+		}, 1)
 	}
 	enqueue := func(p *Peer, channel string, block *cb.Block) error {
 		return p.GossipService.AddPayload(channel, &gossipproto.Payload{
@@ -191,6 +240,8 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	require.NoError(t, accepts(server, baseCA))
 	require.NoError(t, accepts(server, oldCA))
 	require.Error(t, accepts(server, candidateCA))
+	checkDiscovery(server, true)
+	require.NoError(t, distribute(p, testfixture.ChannelID, "protected-before"))
 	require.NoError(t, enqueue(p, testfixture.ChannelID, protectedBlock))
 	require.Eventually(t, func() bool {
 		return errors.Is(enqueue(p, testfixture.ChannelID, protectedBlock), fabricerrors.ErrProtectedChannelRecovery)
@@ -203,6 +254,9 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	require.NoError(t, accepts(server, baseCA))
 	require.NoError(t, accepts(server, oldCA))
 	require.Error(t, accepts(server, candidateCA))
+	checkDiscovery(server, false)
+	require.ErrorContains(t, distribute(p, testfixture.ChannelID, "protected-closed"), "admission is closed")
+	require.NoError(t, distribute(p, baseline, "baseline-live"))
 	require.NoError(t, enqueue(p, baseline, baselineBlock))
 	require.Eventually(t, func() bool {
 		height, err := p.Channel(baseline).Ledger().GetBlockchainInfo()
@@ -224,4 +278,30 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	require.NoError(t, accepts(server, baseCA))
 	require.NoError(t, accepts(server, candidateCA))
 	require.Error(t, accepts(server, oldCA))
+	checkDiscovery(server, true)
+	require.NoError(t, distribute(p, testfixture.ChannelID, "protected-recovered"))
+	require.NoError(t, distribute(p, baseline, "baseline-recovered"))
+}
+
+type mixedDiscoverySupport struct {
+	discservice.Support
+	peer *Peer
+}
+
+func (s mixedDiscoverySupport) ChannelExists(id string) bool {
+	return s.peer.Channel(id) != nil
+}
+
+func (s mixedDiscoverySupport) EligibleForService(string, protoutil.SignedData) error { return nil }
+
+func (s mixedDiscoverySupport) ConfigSequence(id string) uint64 {
+	return s.peer.Channel(id).Sequence()
+}
+
+func (s mixedDiscoverySupport) Config(id string) (*dp.ConfigResult, error) {
+	support := discconfig.NewDiscoverySupport(discconfig.CurrentConfigGetterFunc(func(channel string) *cb.Config {
+		config, _ := RetrievePersistedChannelConfig(s.peer.Channel(channel).Ledger())
+		return config
+	}))
+	return support.Config(id)
 }

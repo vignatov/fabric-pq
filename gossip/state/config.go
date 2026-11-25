@@ -9,6 +9,7 @@ package state
 import (
 	"time"
 
+	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/spf13/viper"
 )
 
@@ -32,6 +33,7 @@ type StateConfig struct {
 	StateEnabled         bool
 	UseLeaderElection    bool
 	OrgLeader            bool
+	AcquireAdmission     protoext.ChannelAdmission
 }
 
 func GlobalConfig() *StateConfig {
