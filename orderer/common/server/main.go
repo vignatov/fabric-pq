@@ -96,6 +96,9 @@ func Main() {
 		if !conf.General.TLS.Enabled || !conf.General.TLS.ClientAuthRequired {
 			logger.Panic("Managed protected orderer requires mutual TLS on its shared listener")
 		}
+		if conf.General.Profile.Enabled {
+			logger.Panic("Managed protected orderer forbids the profiling listener")
+		}
 		transportPolicy = registry.TransportPolicy()
 		if _, err := adminTLS(conf.Admin, transportPolicy).Config(); err != nil {
 			logger.Panicf("Managed orderer participation admin rejected: %s", err)
@@ -113,7 +116,7 @@ func Main() {
 		logger.Panicf("Failed to get local MSP identity: %s", signErr)
 	}
 
-	opsSystem := newOperationsSystem(conf.Operations, conf.Metrics)
+	opsSystem := newOperationsSystem(conf.Operations, conf.Metrics, transportPolicy)
 	if err = opsSystem.Start(); err != nil {
 		logger.Panicf("failed to start operations subsystem: %s", err)
 	}
@@ -677,7 +680,7 @@ func initializeMultichannelRegistrar(
 	return registrar
 }
 
-func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics) *operations.System {
+func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics, policy *pqtransport.Policy) *operations.System {
 	return operations.NewSystem(operations.Options{
 		Logger:        flogging.MustGetLogger("orderer.operations"),
 		ListenAddress: ops.ListenAddress,
@@ -687,6 +690,7 @@ func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics
 			KeyFile:            ops.TLS.PrivateKey,
 			ClientCertRequired: ops.TLS.ClientAuthRequired,
 			ClientCACertFiles:  ops.TLS.ClientRootCAs,
+			TransportPolicy:    policy,
 		},
 		Metrics: operations.MetricsOptions{
 			Provider: metrics.Provider,

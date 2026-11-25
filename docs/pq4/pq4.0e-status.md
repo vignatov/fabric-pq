@@ -1,8 +1,8 @@
 # PQ4.0E bootstrap and admission: INCOMPLETE
 
-This is a development checkpoint, not an authenticated node-enrollment
-implementation or a protected deployment. Do not accept PQ4.0E or mark the
-PQ4.0B enforcement gate complete on this evidence.
+This development checkpoint demonstrates authenticated enrollment of native
+node subprocesses. PQ4.0E and the PQ4.0B enforcement gate remain incomplete
+pending the deployment and runtime evidence below.
 
 ## Current boundary
 
@@ -15,19 +15,17 @@ registry rejects corrupt journals and durable channel records that no longer
 correspond to a policy binding. Channel recovery, replay readiness and
 quarantine remain separate requirements.
 
-The orderer process currently rejects configured protected startup before
-listener initialization because strict transport is not integrated across
-all required endpoints. Direct registrar tests do not establish protected
-process readiness. Baseline startup with all activation settings absent keeps
-its previous path.
+An orderer configured for protected activation without a verified managed
+handoff rejects startup before listener initialization. A managed process
+gets its startup security floor from verified enrollment. Unmanaged startup
+with activation settings absent follows the legacy path.
 
 **Critical unresolved downgrade:** ordinary local configuration can still
 remove *all* activation settings when Fabric is started directly. The new
-Linux launcher verifies signed enrollment and history and refuses protected
-startup. A fixed systemd unit is provided, but it has not been installed or
-verified on a managed VM. Therefore
-the registry is not non-bypassable in a deployed VM, and this change must not
-be treated as a security boundary.
+Linux launcher verifies signed enrollment and history and rejects invalid
+protected startup evidence. Non-bypassability depends on the trusted VM
+provisioner and service manager controlling every authorized node launch.
+The fixed systemd unit has yet to be installed and verified on a managed VM.
 
 ## Managed launcher contract
 
@@ -66,6 +64,13 @@ drop-ins, and does not enable or start the service. It requires `getfacl` and
 must be run as root on the VM. The unit and installer are deployment artifacts;
 placing it in this repository does not install or enforce it on a VM.
 
+The development threat model trusts the host kernel, service manager and
+privileged provisioner. It allows node configuration errors and interruption
+during provisioning. Arbitrary process execution under the service account is
+outside the current proof. A deployment that includes that threat needs OS
+controls that prevent the account from launching an alternate peer or orderer
+against the same ledger and credentials, and a test of those controls.
+
 For protected mode, the launcher verifies the pinned policy signer and
 authenticates the active checkpoint before executing the signed `peer node
 start` or `orderer start` command. The node independently verifies the
@@ -97,7 +102,8 @@ without a protected handoff. Linux is the supported managed platform.
 | Gateway cache publication and admission | Protected unary admission, strict routed transport and revocable event streams wired |
 | Orderer protected bundle callbacks | Focused Linux race test passed; TLS and cache publication proof incomplete |
 | Full service-path and shared-resource inventory | Incomplete |
-| Full regression, integration and final-head CI evidence | Incomplete; see focused evidence below |
+| Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
+| Full regression, integration and final-head CI evidence | All hosted jobs passed at `ca69d0b`; later changes require their own exact-commit runs |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
@@ -184,6 +190,13 @@ The chaincode listener uses a local ML-DSA-65 CA and mutual TLS, including the
 issued shim credentials. External chaincode clients require strict mutual TLS.
 Protected participation admin requires a strict ML-DSA-65 endpoint and
 verified client certificates.
+The managed operations HTTP listener uses the same authenticated transport
+profile. Configure an ML-DSA-65 serving certificate and key, enable required
+client authentication, and provide trusted client roots. TLS 1.3 with
+X25519MLKEM768 and a verified ML-DSA-65 client identity are required for all
+operations requests, including health, metrics and version. Managed peers and
+orderers reject an enabled Go profiling listener during startup. Network
+exposure and the full endpoint inventory still require deployment validation.
 
 Gateway prepares orderer endpoints separately from publication. Its orderer
 cache is scoped by channel, MSP and TLS roots. Publication retires stale
@@ -222,7 +235,35 @@ A native managed peer joins an enrolled genesis over strict mutual TLS and
 reloads the protected channel after restart. These tests run as subprocesses
 without installing or starting the systemd service on a VM.
 
-## Focused evidence
+## Hosted CI evidence
+
+On `ca69d0bfa9fadabf665fc9c1e3de51881fdbe289`, [Verify
+Build](https://github.com/vignatov/fabric-pq/actions/runs/45538028549) passed all
+16 jobs, including Basic Checks, focused PQ4 jobs, unit tests and all nine
+integration groups. All four gossip specs passed. [PQ3 isolated
+acceptance](https://github.com/vignatov/fabric-pq/actions/runs/45538028547)
+passed. The PQ4.0E job built native peer and orderer binaries and ran the
+managed restart tests with Go 1.27.4, `GOFIPS140=off` on Ubuntu 24.04 amd64.
+The job did not record native binary hashes. [Independent
+review](https://github.com/vignatov/fabric-pq/pull/12#pullrequestreview-6055170765)
+confirmed the results and left the milestone gates incomplete.
+
+## Managed operations regression evidence
+
+On 2026-11-25, the isolated Ubuntu Linux/amd64 runner used Go 1.27.4 with
+`GOFIPS140=off` for the managed operations follow-up. Both native restart
+tests verified strict mTLS on the operations listener before and after
+restart, classical key exchange and missing client certificate rejection,
+and startup rejection for disabled operations TLS and enabled profiling.
+Race-enabled launcher, HTTP, operations, peer startup and orderer server
+packages passed, as did vet for those packages.
+
+| Native test binary | SHA-256 |
+| --- | --- |
+| Peer | `ba71e76c768670d26faf3e49fbb297032e1a929cf2354c697b5e856eb7d9195e` |
+| Orderer | `0ed86c4049f92c3f10b4593ad297aeaacd0cefe86c801c11fc5ecbed2ea9f6b1` |
+
+## Earlier focused evidence
 
 On 2026-11-24, a Linux/amd64 Ubuntu WSL2 copy of the dirty worktree based on
 `f1e604f01c1ce4899466e91ae4a5fc62711cb6bc` used Go 1.27.4 and
@@ -235,8 +276,8 @@ feasibility, broadcast, deliver, follower and etcdraft package tests passed.
 Affected-package `go vet` passed. These are local results, not final-commit CI
 evidence. The PQ4.0D run failed with the attempted Raft cancellation change;
 the full focused PQ4.0D regression passed once after that change was removed,
-but subsequent promotion tests also failed without the change. Full
-Verify Build, integration and PQ3 acceptance have not run.
+but subsequent promotion tests also failed without the change. That local
+session did not run the full Verify Build, integration or PQ3 suites.
 
 After adding the bounded broadcast validation lease, the broadcast race tests
 and affected-package vet passed; full peer, endorser and Gateway package race
@@ -268,9 +309,8 @@ enabled for the temporary WSL test distribution. An isolated container with
 the existing Docker socket ran the baseline Raft participation case for a
 non-genesis consenter join successfully. One initial attempt failed during
 setup because the container user could not access the socket; rerunning as root
-passed. This does not exercise protected peer or orderer admission, and the
-full Docker-dependent integration suites remain unrun. Automatic approval
-review rejected a full Raft-suite attempt because it combined a root container,
+passed. This did not exercise protected peer or orderer admission. Automatic
+approval review rejected a full Raft-suite attempt because it combined a root container,
 the host Docker socket and a broad writable host `/tmp` mount. An appropriately
 isolated Linux runner with Docker integration is needed for that matrix.
 After explicit user approval, the development checkpoint was uploaded as draft

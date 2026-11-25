@@ -76,7 +76,7 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 	require.NoError(t, os.Mkdir(state, 0o700))
 	require.NoError(t, os.Mkdir(ledger, 0o700))
 
-	mainPort, adminPort := unusedPort(t), unusedPort(t)
+	mainPort, adminPort, operationsPort := unusedPort(t), unusedPort(t), unusedPort(t)
 	fixture := testfixture.New(t)
 	genesis := managedGenesis(t, fixture, ca.CertBytes(), node.Cert, mainPort)
 	factory, err := fileledger.New(ledger, coreledger.GoLevelDB, &disabled.Provider{})
@@ -107,7 +107,10 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 		"ORDERER_ADMIN_LISTENADDRESS=127.0.0.1:"+adminPort, "ORDERER_ADMIN_TLS_ENABLED=true",
 		"ORDERER_ADMIN_TLS_CERTIFICATE="+certFile, "ORDERER_ADMIN_TLS_PRIVATEKEY="+keyFile,
 		"ORDERER_ADMIN_TLS_CLIENTAUTHREQUIRED=true", "ORDERER_ADMIN_TLS_CLIENTROOTCAS="+caFile,
-		"ORDERER_OPERATIONS_LISTENADDRESS=127.0.0.1:0", "ORDERER_CONSENSUS_WALDIR="+filepath.Join(ledger, "wal"),
+		"ORDERER_OPERATIONS_LISTENADDRESS=127.0.0.1:"+operationsPort, "ORDERER_OPERATIONS_TLS_ENABLED=true",
+		"ORDERER_OPERATIONS_TLS_CERTIFICATE="+certFile, "ORDERER_OPERATIONS_TLS_PRIVATEKEY="+keyFile,
+		"ORDERER_OPERATIONS_TLS_CLIENTAUTHREQUIRED=true", "ORDERER_OPERATIONS_TLS_CLIENTROOTCAS="+caFile,
+		"ORDERER_CONSENSUS_WALDIR="+filepath.Join(ledger, "wal"),
 		"ORDERER_CONSENSUS_SNAPDIR="+filepath.Join(ledger, "snap"),
 	)
 	command := func() *exec.Cmd {
@@ -115,6 +118,8 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 		cmd.Env = append(os.Environ(), environment...)
 		return cmd
 	}
+	requireManagedStartupRejected(t, command(), "ORDERER_OPERATIONS_TLS_ENABLED=false", "protected HTTP listener requires TLS")
+	requireManagedStartupRejected(t, command(), "ORDERER_GENERAL_PROFILE_ENABLED=true", "forbids the profiling listener")
 
 	cert, err := tls.X509KeyPair(clientKey.Cert, clientKey.Key)
 	require.NoError(t, err)
@@ -158,6 +163,7 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 				json.NewDecoder(response.Body).Decode(&info) == nil && info.Name == testfixture.ChannelID &&
 				info.Status == types.StatusActive
 		}, 15*time.Second, 100*time.Millisecond)
+		verifyManagedOperations(t, "127.0.0.1:"+operationsPort, transport.TLSClientConfig)
 		classical := transport.Clone()
 		classical.TLSClientConfig.CurvePreferences = []tls.CurveID{tls.X25519}
 		rejected, err := (&http.Client{Transport: classical, Timeout: time.Second}).Get(url)
@@ -307,6 +313,8 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 	evidence := managedEvidence(t, root, state, ledgerRoot, binary, []string{"node", "start"}, fixture, store)
 	peerAddress := "127.0.0.1:" + unusedPort(t)
 	ccAddress := "127.0.0.1:" + unusedPort(t)
+	operationsAddress := "127.0.0.1:" + unusedPort(t)
+	certFile, keyFile, caFile := write("peer.crt", serverKey.Cert), write("peer.key", serverKey.Key), write("ca.crt", rootCA.CertBytes())
 	env := append(os.Environ(),
 		"FABRIC_CFG_PATH="+configtest.GetDevConfigDir(),
 		"CORE_PEER_MSPCONFIGPATH="+configtest.GetDevMspDir(), "CORE_PEER_LOCALMSPID=SampleOrg",
@@ -315,11 +323,14 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 		"CORE_PEER_LISTENADDRESS="+peerAddress, "CORE_PEER_ADDRESSAUTODETECT=false",
 		"CORE_PEER_CHAINCODELISTENADDRESS="+ccAddress, "CORE_PEER_CHAINCODEADDRESS="+ccAddress,
 		"CORE_PEER_TLS_ENABLED=true", "CORE_PEER_TLS_CLIENTAUTHREQUIRED=true",
-		"CORE_PEER_TLS_CERT_FILE="+write("peer.crt", serverKey.Cert), "CORE_PEER_TLS_KEY_FILE="+write("peer.key", serverKey.Key),
+		"CORE_PEER_TLS_CERT_FILE="+certFile, "CORE_PEER_TLS_KEY_FILE="+keyFile,
 		"CORE_PEER_TLS_CLIENTCERT_FILE="+write("client.crt", clientKey.Cert), "CORE_PEER_TLS_CLIENTKEY_FILE="+write("client.key", clientKey.Key),
-		"CORE_PEER_TLS_ROOTCERT_FILE="+write("ca.crt", rootCA.CertBytes()), "CORE_PEER_TLS_CLIENTROOTCAS_FILES="+filepath.Join(root, "ca.crt"),
+		"CORE_PEER_TLS_ROOTCERT_FILE="+caFile, "CORE_PEER_TLS_CLIENTROOTCAS_FILES="+caFile,
 		"CORE_PEER_GOSSIP_USELEADERELECTION=false", "CORE_PEER_GOSSIP_ORGLEADER=false",
-		"CORE_OPERATIONS_LISTENADDRESS=127.0.0.1:0", "CORE_VM_ENDPOINT=unix:///var/run/docker.sock",
+		"CORE_OPERATIONS_LISTENADDRESS="+operationsAddress, "CORE_OPERATIONS_TLS_ENABLED=true",
+		"CORE_OPERATIONS_TLS_CERT_FILE="+certFile, "CORE_OPERATIONS_TLS_KEY_FILE="+keyFile,
+		"CORE_OPERATIONS_TLS_CLIENTAUTHREQUIRED=true", "CORE_OPERATIONS_TLS_CLIENTROOTCAS_FILES="+caFile,
+		"CORE_VM_ENDPOINT=unix:///var/run/docker.sock",
 	)
 	cert, err := tls.X509KeyPair(clientKey.Cert, clientKey.Key)
 	require.NoError(t, err)
@@ -338,9 +349,15 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 		require.NoError(t, err, "%s", output)
 		return string(output)
 	}
-	for attempt := range 2 {
+	command := func() *exec.Cmd {
 		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPQ40EManagedOrdererRestart$")
 		cmd.Env = append(env, evidence...)
+		return cmd
+	}
+	requireManagedStartupRejected(t, command(), "CORE_OPERATIONS_TLS_ENABLED=false", "protected HTTP listener requires TLS")
+	requireManagedStartupRejected(t, command(), "CORE_PEER_PROFILE_ENABLED=true", "forbids the profiling listener")
+	for attempt := range 2 {
+		cmd := command()
 		log, err := os.CreateTemp(root, "peer-*.log")
 		require.NoError(t, err)
 		cmd.Stdout, cmd.Stderr = log, log
@@ -363,6 +380,7 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 			defer conn.Close()
 			return conn.ConnectionState().CurveID == tls.X25519MLKEM768
 		}, 15*time.Second, 100*time.Millisecond)
+		verifyManagedOperations(t, operationsAddress, tlsConfig)
 		if attempt == 0 {
 			peerCLI("channel", "join", "-b", genesisPath)
 		}
@@ -374,6 +392,45 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("managed peer did not stop")
 		}
+	}
+}
+
+func requireManagedStartupRejected(t *testing.T, cmd *exec.Cmd, setting, reason string) {
+	t.Helper()
+	cmd.Env = append(cmd.Env, setting)
+	output, err := cmd.CombinedOutput()
+	require.Error(t, err)
+	require.Contains(t, string(output), reason)
+}
+
+func verifyManagedOperations(t *testing.T, address string, config *tls.Config) {
+	t.Helper()
+	url := "https://" + address + "/version"
+	transport := &http.Transport{TLSClientConfig: config.Clone()}
+	defer transport.CloseIdleConnections()
+	response, err := (&http.Client{Transport: transport, Timeout: time.Second}).Get(url)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, uint16(tls.VersionTLS13), response.TLS.Version)
+	require.Equal(t, tls.X25519MLKEM768, response.TLS.CurveID)
+	for _, tc := range []struct {
+		name   string
+		change func(*tls.Config)
+	}{
+		{"classical key exchange", func(cfg *tls.Config) { cfg.CurvePreferences = []tls.CurveID{tls.X25519} }},
+		{"missing client identity", func(cfg *tls.Config) { cfg.Certificates = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			incompatible := transport.Clone()
+			defer incompatible.CloseIdleConnections()
+			tc.change(incompatible.TLSClientConfig)
+			rejected, err := (&http.Client{Transport: incompatible, Timeout: time.Second}).Get(url)
+			if rejected != nil {
+				_ = rejected.Body.Close()
+			}
+			require.Error(t, err)
+		})
 	}
 }
 

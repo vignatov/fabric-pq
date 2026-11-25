@@ -29,7 +29,7 @@ type TLS struct {
 
 func (t TLS) Config() (*tls.Config, error) {
 	if t.TransportPolicy != nil && (!t.Enabled || !t.ClientCertRequired || len(t.ClientCACertFiles) == 0) {
-		return nil, errors.New("protected participation admin requires TLS, client authentication and client roots")
+		return nil, errors.New("protected HTTP listener requires TLS, client authentication and client roots")
 	}
 	var tlsConfig *tls.Config
 
@@ -45,7 +45,7 @@ func (t TLS) Config() (*tls.Config, error) {
 				return nil, err
 			}
 			if !caCertPool.AppendCertsFromPEM(caPem) && t.TransportPolicy != nil {
-				return nil, errors.New("invalid protected admin client CA")
+				return nil, errors.New("invalid protected HTTP client CA")
 			}
 		}
 		tlsConfig = &tls.Config{

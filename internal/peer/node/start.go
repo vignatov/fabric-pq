@@ -246,12 +246,15 @@ func serve(args []string) error {
 		if !serverConfig.SecOpts.UseTLS || !serverConfig.SecOpts.RequireClientCert || chaincode.IsDevMode() {
 			return errors.New("managed protected peer requires mutual TLS and authenticated chaincode registration")
 		}
+		if coreConfig.ProfileEnabled {
+			return errors.New("managed protected peer forbids the profiling listener")
+		}
 		serverConfig.SecOpts.TransportPolicy = registry.TransportPolicy()
 	}
 
 	platformRegistry := platforms.NewRegistry(platforms.SupportedPlatforms...)
 
-	opsSystem := newOperationsSystem(coreConfig)
+	opsSystem := newOperationsSystem(coreConfig, serverConfig.SecOpts.TransportPolicy)
 	err = opsSystem.Start()
 	if err != nil {
 		return errors.WithMessage(err, "failed to initialize operations subsystem")
@@ -1307,7 +1310,7 @@ func initGossipService(
 	)
 }
 
-func newOperationsSystem(coreConfig *peer.Config) *operations.System {
+func newOperationsSystem(coreConfig *peer.Config, policy *pqtransport.Policy) *operations.System {
 	return operations.NewSystem(operations.Options{
 		Logger:        flogging.MustGetLogger("peer.operations"),
 		ListenAddress: coreConfig.OperationsListenAddress,
@@ -1317,6 +1320,7 @@ func newOperationsSystem(coreConfig *peer.Config) *operations.System {
 			KeyFile:            coreConfig.OperationsTLSKeyFile,
 			ClientCertRequired: coreConfig.OperationsTLSClientAuthRequired,
 			ClientCACertFiles:  coreConfig.OperationsTLSClientRootCAs,
+			TransportPolicy:    policy,
 		},
 		Metrics: operations.MetricsOptions{
 			Provider: coreConfig.MetricsProvider,
