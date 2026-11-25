@@ -164,6 +164,9 @@
           },
           "500": {
             "description": "Removal of channel failed."
+          },
+          "503": {
+            "description": "The protected channel has no serving generation."
           }
         }
       },
@@ -274,6 +277,9 @@
           "400": {
             "description": "Bad request."
           },
+          "403": {
+            "description": "Protected removal requires operator decommissioning."
+          },
           "404": {
             "description": "The channel does not exist."
           },
@@ -318,6 +324,9 @@
           },
           "400": {
             "description": "Bad request."
+          },
+          "403": {
+            "description": "Protected block retrieval is available through Deliver."
           },
           "404": {
             "description": "The channel or block does not exist."

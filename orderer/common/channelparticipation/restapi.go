@@ -176,8 +176,6 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 	//      description: The client is trying to join a channel that is currently being removed.
 	//    '500':
 	//      description: Removal of channel failed.
-	//    '503':
-	//      description: The protected channel has no serving generation.
 	// consumes:
 	//   - multipart/form-data
 
@@ -216,6 +214,8 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 	//      description: The client is trying to update a channel that is currently being removed.
 	//    '500':
 	//      description: Removal of channel failed.
+	//    '503':
+	//      description: The protected channel has no serving generation.
 	// consumes:
 	//   - multipart/form-data
 
