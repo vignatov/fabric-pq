@@ -82,15 +82,15 @@ Each result applies to the **requested gate**, not merely the component test.
 | Actual Fabric `comm` listener rejects TLS 1.2 and classical KEM | PASS | Component test and cause-specific server diagnostics above. |
 | Approved ML-DSA server identity and hybrid KEM | PASS | Verified chain, endpoint key, TLS version and group on the component listener. |
 | Required mTLS and classical/missing client rejection | PASS | Component mTLS listener only; endpoint-specific proofs remain below. |
-| Signed bootstrap before actual node readiness and protected checkpoint | INCOMPLETE | Verifier tests only; no protected state loader or peer/orderer startup integration. |
-| Identity binding and stale/conflicting bootstrap rejection | INCOMPLETE | Caller-supplied checkpoint and identity reject these inputs in component tests; not proven against node startup and protected storage. |
-| No downgrade through clones, credentials and restarts | INCOMPLETE | Component clones, listener recreation, server-certificate replacement and direct server credential factory tested; real node restart and all credential factories untested. |
+| Signed bootstrap before actual node readiness and protected checkpoint | PASS (managed-process scope) | PQ4.0E native peer/orderer startup and disposable-VM evidence authenticate enrollment and protected checkpoint before managed service readiness; this is not network-wide PQ4 transport acceptance. |
+| Identity binding and stale/conflicting bootstrap rejection | PASS (managed-process scope) | PQ4.0E launcher, registry and restart tests bind signed manifest/history, node/network identity, pinned signer and protected checkpoint; complete privileged-host rollback remains excluded. |
+| No downgrade through clones, credentials and restarts | INCOMPLETE | PQ4.0E exercises managed restart and strict selected listeners, but not every credential factory, all connection lifetimes, or unsupported old binaries under a real PQ4 capability. |
 | Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
-| Authorized non-weakening Fabric and operator transition, durable recovery | INCOMPLETE | Operator-only synthetic-config verification; no Fabric authorization, protected journal or prepare/commit/restart proof. |
+| Authorized non-weakening Fabric and operator transition, durable recovery | PASS (native lifecycle scope) | PQ4.0C/D/E exercise real Fabric configuration authorization, separate operator authorization, durable activation recovery and native peer/orderer lifecycle paths; a distributed PQ4 network and transport-wide policy remain unproved. |
 | Older peer and orderer reject the actual capability | INCOMPLETE | No actual capability or binary provenance for this proof. Earlier unknown-name evidence is not a substitute. |
 | Actual peer and orderer listeners and outbound constructors | INCOMPLETE | No node startup, transport-policy propagation or process-level handshake test. |
-| Shared listener serving a PQ4-required channel | INCOMPLETE | Weak clients were rejected by a component listener, but it hosted no Fabric channel. |
+| Shared listener serving a PQ4-required channel | INCOMPLETE | PQ4.0E mixed-channel process tests exercise selected managed listeners; the full listener, outbound-constructor and channel-routing inventory is not covered. |
 | Real CCAAS metadata, strict mTLS and registration | INCOMPLETE | Existing CCAAS component remains a baseline feasibility test, not strict policy enforcement. |
 | Actual orderer administration and `osnadmin` strict mTLS | INCOMPLETE | Existing HTTP feasibility components are not an orderer listener or strict `osnadmin` integration. |
 | No private keys in distributable CCAAS packages | INCOMPLETE | No strict CCAAS package was created or examined. |
@@ -117,6 +117,24 @@ Each result applies to the **requested gate**, not merely the component test.
 | 12. Plaintext CCAAS metadata | INCOMPLETE | The earlier plaintext guard is test-only, not runtime enforcement. |
 | 13. Policy loss on restart or credential recreation | INCOMPLETE | Credential clone/replacement and component listener recreation are tested; process restart and policy persistence are not. |
 | 14. Weak client on a shared strict listener | INCOMPLETE | Component listener rejects weak clients but serves no hosted channel. |
+
+## PQ4.0E.1 authenticated provenance update
+
+The follow-up implementation adds a complete-history verifier and signing
+helpers that require a successful replay from the registry's protected genesis
+to a supported non-genesis configuration block. It uses Fabric's historical
+block-signature verifier and configuration authorization, checks Raft metadata
+using the native validator, and matches the result to the authenticated
+Pactway policy/checkpoint. The verifier rejects an unauthorized intermediate
+configuration even if the target block is well-formed.
+
+Focused Fabric-history and anchor-issuance tests pass on Windows/amd64, and
+the exact Linux race and vet commands pass locally in a disposable Go
+container. The Linux protected-registry test, managed non-genesis orderer
+join/promotion, and managed peer snapshot issuance/import/recovery integration
+also pass locally. The hosted CI job, disposable-VM acceptance and independent
+review are still pending. Therefore PQ4.0E.1 acceptance remains **INCOMPLETE**;
+neither this update nor the existing PQ4.0E process evidence closes PQ4.0B.
 
 ## Lifecycle review stop
 

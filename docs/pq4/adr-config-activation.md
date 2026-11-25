@@ -205,6 +205,25 @@ missing blocks per snapshot. Participation joins from a later block start
 from the provisioned genesis anchor and verify forward before changing their
 verifier or endpoints. Promotion to Raft requires the same replay barrier.
 
+## PQ4.0E.1 join-history provenance
+
+An operator signature on an orderer or peer join anchor approves the target;
+it does not establish that the target belongs to an authorized Fabric history.
+The provisioning helper replays every block from the genesis identity held by
+the authenticated protected registry. It uses the preceding configuration's
+native `BlockValidation` policy for each block, validates each configuration
+transition under the preceding bundle, checks sequence and `LAST_CONFIG`
+progression, and binds the resulting configuration digest to the local
+authenticated Pactway checkpoint before allowing anchor signing.
+
+The helper is separate from runtime admission and does not replace native
+participation-follower membership, Raft replay, or peer snapshot checks. It
+fails closed for unsupported boundaries and consensus metadata that cannot be
+validated by the supported native Raft validator. The implementation and
+operator flow are tracked in the
+[PQ4.0E.1 provenance guide](pq4.0e1-provenance.md); acceptance, Linux CI and
+independent review remain pending. This work does not close PQ4.0B.
+
 ## Admission and TLS
 
 Use a generation lease at endorsement, Gateway, discovery, gossip, delivery
