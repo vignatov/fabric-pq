@@ -290,7 +290,15 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	downgrade.Profile = "baseline"
 	require.NoError(t, os.WriteFile(joinName, fixture.SignedJoinAnchor(t, enrollment.PeerSnapshotAnchorDomain, downgrade), 0o600))
 	require.ErrorContains(t, p.CreateChannelFromSnapshot(export.Directory(), nil, nil, nil), "node policy")
-	legacyAnchor := fixture.SignedJoinAnchor(t, "fabric-pq/peer-snapshot/v1\x00", anchor)
+	legacyAnchor := fixture.SignedJoinAnchor(t, "fabric-pq/peer-snapshot/v1\x00", struct {
+		enrollment.JoinAnchor
+		SignableMetadataHash   string `json:"signable_metadata_hash"`
+		AdditionalMetadataHash string `json:"additional_metadata_hash"`
+	}{
+		JoinAnchor:             anchor.JoinAnchor,
+		SignableMetadataHash:   anchor.SignableMetadataHash,
+		AdditionalMetadataHash: anchor.AdditionalMetadataHash,
+	})
 	require.NoError(t, os.WriteFile(joinName, legacyAnchor, 0o600))
 	require.ErrorContains(t, p.CreateChannelFromSnapshot(export.Directory(), nil, nil, nil), "verify join-peer anchor")
 	partial := anchor
@@ -316,6 +324,12 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	}, 10*time.Second, 20*time.Millisecond)
 	require.EqualValues(t, 1, p.Channel(testfixture.ChannelID).Sequence())
 	closePeer()
+
+	require.NoError(t, os.WriteFile(joinName, legacyAnchor, 0o600))
+	legacyRecovery, closeLegacyRecovery := startPeer()
+	require.Nil(t, legacyRecovery.Channel(testfixture.ChannelID), "v1 approval must not recover a protected snapshot channel")
+	closeLegacyRecovery()
+	require.NoError(t, os.WriteFile(joinName, signed, 0o600))
 
 	require.NoError(t, os.Remove(joinName))
 	closed, closeClosed := startPeer()

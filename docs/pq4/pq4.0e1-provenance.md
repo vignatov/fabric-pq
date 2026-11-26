@@ -77,7 +77,10 @@ not retained as an alternate onboarding path. A self-consistent payload and
 recomputed native metadata hashes without fresh exporter authentication are
 rejected. This proves an authenticated exporter approval, not state correctness
 against a compromised exporter; arbitrary world-state correctness is not
-cryptographically derived from Fabric history.
+cryptographically derived from Fabric history. The claim that the exporter
+actually read the approved source ledger depends on the separately controlled
+provisioning workflow; see the [source-ledger trust and upgrade
+boundary](pq4.0e2-snapshot-provenance.md).
 
 The signing helpers require the private key corresponding to the authenticated
 policy signer. Keep that key in the external trusted provisioning authority;

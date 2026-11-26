@@ -84,7 +84,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | Required mTLS and classical/missing client rejection | PASS | Component mTLS listener only; endpoint-specific proofs remain below. |
 | Signed bootstrap before actual node readiness and protected checkpoint | PASS (managed-process scope) | PQ4.0E native peer/orderer startup and disposable-VM evidence authenticate enrollment and protected checkpoint before managed service readiness; this is not network-wide PQ4 transport acceptance. |
 | Identity binding and stale/conflicting bootstrap rejection | PASS (managed-process scope) | PQ4.0E launcher, registry and restart tests bind signed manifest/history, node/network identity, pinned signer and protected checkpoint; complete privileged-host rollback remains excluded. |
-| Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation present | PQ4.0E.2 adds ML-DSA-65 exporter evidence against an independently pinned key and source-ledger identity, verifies the full native snapshot inventory before operator signing, stages exact bytes, and retains authenticated evidence for recovery. Focused native tests cover substitution and tampering; final-head CI, complete acceptance evidence and independent review remain pending. |
+| Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation present | PQ4.0E.2 checks ML-DSA-65 exporter evidence against provisioner-controlled pins, verifies the full native snapshot inventory before operator signing, stages exact bytes, and retains authenticated evidence for recovery. Focused tests and an initial independent review are recorded in the [acceptance report](pq4.0e2-acceptance.md); final-head CI and evidence of real exporter/ledger controls remain pending. |
 | No downgrade through clones, credentials and restarts | INCOMPLETE | PQ4.0E exercises managed restart and strict selected listeners, but not every credential factory, all connection lifetimes, or unsupported old binaries under a real PQ4 capability. |
 | Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
@@ -95,10 +95,10 @@ Each result applies to the **requested gate**, not merely the component test.
 | Real CCAAS metadata, strict mTLS and registration | INCOMPLETE | Existing CCAAS component remains a baseline feasibility test, not strict policy enforcement. |
 | Actual orderer administration and `osnadmin` strict mTLS | INCOMPLETE | Existing HTTP feasibility components are not an orderer listener or strict `osnadmin` integration. |
 | No private keys in distributable CCAAS packages | INCOMPLETE | No strict CCAAS package was created or examined. |
-| PQ3.5 temporary/permanent acceptance | PASS | The PQ3 isolated acceptance workflow passed both `rfc5612-test-only-v1` and `pactway-hybrid-certificate-v1`, including protected-evidence verification, on this head; see run [45066471774](https://github.com/vignatov/fabric-pq/actions/runs/45066471774). |
+| PQ3.5 temporary/permanent acceptance | PASS | The PQ3 isolated acceptance workflow passed both `rfc5612-test-only-v1` and `pactway-hybrid-certificate-v1`, including protected-evidence verification, on its tested head; see run [45066471774](https://github.com/vignatov/fabric-pq/actions/runs/45066471774). |
 | Existing PQ4.0 regression | PASS | Full feasibility package passed locally with the component changes. |
 | Baseline Raft rollback characterization | INCOMPLETE | Not rerun for this worktree; its earlier observed panic is not PQ4 protection. |
-| Dedicated full acceptance CI and independent review | INCOMPLETE | The Verify Build, PQ4.0 Feasibility, PQ4.0B Component Checks and PQ3 isolated acceptance workflows passed on this head. The PQ4.0B workflow covers components only; full network acceptance and independent review have not occurred. |
+| Dedicated full acceptance CI and independent review | INCOMPLETE | Historical Verify Build, PQ4.0 Feasibility, PQ4.0B Component Checks and PQ3 isolated acceptance runs passed on their tested heads. Current PQ4.0E.2 results are in the [acceptance report](pq4.0e2-acceptance.md). The PQ4.0B workflow covers components only; full network acceptance and independent review have not occurred. |
 
 ### Negative-case accounting
 
@@ -132,15 +132,18 @@ configuration even if the target block is well-formed.
 Peer snapshot state provenance is not established by history replay or
 import-time hash checks alone. PQ4.0E.2 implements a separate trusted-exporter
 evidence flow, but this report still records the gate as **INCOMPLETE** until
-the exact final head has complete acceptance evidence and independent review.
+the exact final head has complete acceptance evidence and the remaining
+review and trusted-provisioning requirements are met.
 
 Focused Fabric-history and anchor-issuance tests pass on Windows/amd64, and
 the exact Linux race and vet commands pass locally in a disposable Go
 container. The Linux protected-registry test, managed non-genesis orderer
 join/promotion, and managed peer snapshot issuance/import/recovery integration
 also pass locally. The hosted PQ4.0E.1 job passed on commit `1b47d8bf0`, but
-Basic Checks failed and full unit/integration checks were skipped. Final-head
-CI, disposable-VM evidence and independent review remain pending. Therefore
+Basic Checks failed and full unit/integration checks were skipped. Subsequent
+PQ4.0E.2 hosted VM evidence and review are recorded in the
+[acceptance report](pq4.0e2-acceptance.md), but complete final-head evidence
+remains pending. Therefore
 PQ4.0E.1 acceptance remains **INCOMPLETE**; neither this update nor the
 existing PQ4.0E process evidence closes PQ4.0B.
 
@@ -170,17 +173,18 @@ host filesystem. A compromised trusted exporter can authenticate false state;
 hashes do not prove that snapshot world state was derived from Fabric history.
 See [PQ4.0E.2 trusted snapshot export](pq4.0e2-snapshot-provenance.md).
 
-The focused Linux race-enabled native test passed on the current working tree
-and exercises real Fabric snapshot generation, approval, import and restart;
+The focused Linux race-enabled native test exercises real Fabric snapshot
+generation, approval, import and restart;
 it rejects a self-consistent payload substitution with recomputed native
 hashes but no fresh trusted-exporter approval, as well as altered metadata,
 payload, exporter evidence, unexpected/missing files, symlinks, non-regular
 entries, an unapproved exporter key, a wrong operator key, legacy v1 approval,
-and missing evidence after restart. The changes are not yet a recorded
-final-head CI commit, and the full PQ4.0E acceptance matrix, hosted Verify
-Build, disposable-VM acceptance and independent review have not yet been
-completed. Consequently this result is not a PQ4.0E PASS and does not change
-the **INCOMPLETE** PQ4.0B decision.
+and missing evidence after restart. Initial hosted focused jobs, the managed
+disposable-VM test and an independent review are recorded in the
+[acceptance report](pq4.0e2-acceptance.md); full final-head CI and evidence of
+the independently controlled provisioning workflow remain outstanding.
+Consequently this result is not a PQ4.0E PASS and does not change the
+**INCOMPLETE** PQ4.0B decision.
 
 ## Lifecycle review stop
 

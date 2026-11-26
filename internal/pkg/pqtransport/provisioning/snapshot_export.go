@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -492,8 +493,6 @@ func equalHashes(left, right map[string]string) bool {
 
 func cloneHashes(source map[string]string) map[string]string {
 	result := make(map[string]string, len(source))
-	for name, digest := range source {
-		result[name] = digest
-	}
+	maps.Copy(result, source)
 	return result
 }

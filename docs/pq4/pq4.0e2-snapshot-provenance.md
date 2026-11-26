@@ -86,12 +86,58 @@ only that specific `.export` record suffix and still binds it to an
 authenticated channel. Snapshot recovery requires and re-verifies the same
 evidence. The normal protected snapshot-export RPC restrictions are unchanged.
 
+## Source-ledger identity and provisioning evidence
+
+`SignSnapshotExportEvidence` accepts the source-ledger and source-history
+identities as caller-supplied claims. Verification authenticates that the
+independently pinned exporter key signed those claims, checks the ledger name
+against the provisioner's pin, and matches the history identity to the
+registry-bound history report. It does not independently inspect which
+ledger the exporter actually read, attest the exporter's execution, or prove
+the correctness of the ledger's state. The native test provisions its pin
+from a fixture key and a chosen ledger name; it tests the matching and
+rejection rules, not an independently operated provisioning environment.
+
+For development-gate closure, the trusted provisioning workflow must
+separately authorize the exporter identity, public key and source-ledger
+identity before receiving the export package. It must control exporter
+execution and access to the authorized ledger and retain reviewable evidence
+linking that authorization and execution to the signed export and its
+verified history boundary. For example, an independently managed immutable
+pin and a controlled exporter audit record could provide such evidence if
+their custody and operation are verified. These controls are requirements of
+the trusted environment, not guarantees implemented or independently
+demonstrated by these helper APIs or their fixture tests.
+
+If that association cannot be evidenced, the gate remains incomplete. If the
+required assurance excludes trusting the exporter or its source ledger, this
+architecture is insufficient and the gate is blocked; signatures and hashes
+cannot establish independent world-state provenance.
+
+## Upgrade boundary for v1 snapshot-joined peers
+
+An existing protected peer bootstrapped from a v1 snapshot anchor cannot be
+assumed to recover after upgrading to v2-only verification. Recovery requires
+the retained exporter-evidence sidecar and a valid v2 anchor; a missing
+sidecar or a v1-signed anchor fails closed even when the ledger is intact.
+There is no v1 verification fallback.
+
+No in-place migration or re-approval of an existing v1 snapshot-backed ledger
+is implemented or qualified. Do not treat replacing an anchor, inventing
+export evidence, deleting protected state, or disabling protection as a
+migration. The implemented development onboarding path applies to a
+separately provisioned peer using a fresh snapshot from an authorized source,
+verified history, independently pinned exporter evidence and a v2 operator
+approval. This is not a procedure for upgrading the existing ledger.
+Existing v1 deployments require separately designed and reviewed migration
+support before upgrading; preserve their ledger and protected state while
+that support is unavailable.
+
 ## Focused validation
 
 The dedicated `make pq-snapshot-acceptance` target runs race-enabled tests for
 the transport/provenance/enrollment packages and native peer suite, followed
-by `go vet` on those packages. On this working tree, focused race tests and
-vet passed on Linux/amd64 with Go 1.27.4 and vendored dependencies. The exact
-tested source SHA and CI/binary provenance are pending a final committed head;
-see the [acceptance report](pq4.0e2-acceptance.md). This is not a full
-PQ4.0E development-gate decision.
+by `go vet` on those packages. Local and hosted results, tested revisions and
+remaining final-head evidence are recorded in the
+[acceptance report](pq4.0e2-acceptance.md). This is not a full PQ4.0E
+development-gate decision.
