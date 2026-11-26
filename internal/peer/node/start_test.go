@@ -214,7 +214,7 @@ func TestCreateChaincodeServerIPv6PeerAddress(t *testing.T) {
 	require.NoError(t, err)
 	coreConfig := &peer.Config{}
 
-	srv, ccEndpoint, err := createChaincodeServer(coreConfig, ca, "::1")
+	srv, ccEndpoint, err := createChaincodeServer(coreConfig, ca, "::1", nil)
 	require.NoError(t, err)
 	defer srv.Stop()
 
