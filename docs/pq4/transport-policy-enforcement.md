@@ -9,6 +9,8 @@ Fabric history before a trusted provisioner issues non-genesis join approval;
 PQ4.0E.2 additionally requires independently authenticated snapshot-export
 evidence before peer snapshot approval and rechecks it on recovery. Neither
 milestone certifies network-wide transport enforcement or closes PQ4.0B.
+PQ4.0E.3 demonstrates a controlled source-ledger provisioning boundary only;
+it does not add transport policy enforcement or change this gate's status.
 
 Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. PQ4.0D adds the local
 orderer configuration authorization boundary. Strict service endpoint and

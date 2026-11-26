@@ -184,6 +184,12 @@ pq-snapshot-acceptance: ## Runs PQ4.0E.2 snapshot evidence, import and recovery 
 	GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=1 ./internal/pkg/pqtransport/... ./core/peer
 	GOFIPS140=off GOFLAGS=-buildvcs=false go vet -mod=vendor ./internal/pkg/pqtransport/... ./core/peer
 
+.PHONY: pq-provisioning-acceptance
+pq-provisioning-acceptance: ## Runs PQ4.0E.3 authorization, exporter and importer regression tests
+	GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=1 ./internal/pkg/pqtransport/exportauth ./internal/pkg/pqtransport/provisioning ./internal/pkg/pqtransport/enrollment
+	GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=1 -run '^TestPQ40EControlledSnapshot|^TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery$$' ./core/peer
+	GOFIPS140=off GOFLAGS=-buildvcs=false go vet -mod=vendor ./internal/pkg/pqtransport/exportauth ./internal/pkg/pqtransport/provisioning ./internal/pkg/pqtransport/enrollment ./core/peer
+
 .PHONY: profile
 profile: export JOB_TYPE=PROFILE ## Runs unit tests for all packages in coverprofile mode (slow)
 profile: unit-test # Runs unit tests for all packages in coverprofile mode (slow)

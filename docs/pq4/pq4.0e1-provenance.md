@@ -59,11 +59,12 @@ The helper APIs are in `internal/pkg/pqtransport/provenance`,
      `fabric-pq/orderer-join/v1` domain.
    - For a peer snapshot, the authorized exporter signs
      `provisioning.SignSnapshotExportEvidence` after native export. The
-     trusted provisioner loads the exporter key and expected source-ledger
-     identity from independent configuration, calls
-     `provisioning.VerifySnapshotExport`, then passes only its opaque staged
-     result to `provisioning.SignVerifiedPeerSnapshotAnchor`. This issues the
-     versioned `fabric-pq/peer-snapshot/v2` approval.
+     trusted provisioner verifies an independently signed exporter
+     authorization and controlled execution record, derives the exporter trust
+     pin, and calls `provisioning.VerifySnapshotExport`. It passes the staged
+     result and both verified proofs to
+     `provisioning.SignVerifiedPeerSnapshotAnchor`. This issues the versioned
+     `fabric-pq/peer-snapshot/v2` approval.
 6. Provision the target configuration block, v2 anchor, and authenticated
    `_pactway_snapshot_export_evidence.json` sidecar with the native snapshot.
    The peer verifies the evidence and exact file inventory, stages only
@@ -79,8 +80,10 @@ rejected. This proves an authenticated exporter approval, not state correctness
 against a compromised exporter; arbitrary world-state correctness is not
 cryptographically derived from Fabric history. The claim that the exporter
 actually read the approved source ledger depends on the separately controlled
-provisioning workflow; see the [source-ledger trust and upgrade
-boundary](pq4.0e2-snapshot-provenance.md).
+provisioning workflow. PQ4.0E.3 demonstrates pre-export authorization and
+controlled native access to the authorized ledger path; see the
+[provisioning-boundary decision](pq4.0e3-provisioning.md) and
+[source-ledger trust and upgrade boundary](pq4.0e2-snapshot-provenance.md).
 
 The signing helpers require the private key corresponding to the authenticated
 policy signer. Keep that key in the external trusted provisioning authority;

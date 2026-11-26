@@ -101,7 +101,7 @@ func TestRegistryUsesProtectedGenesisForJoinHistory(t *testing.T) {
 	_, err = provisioning.SignVerifiedOrdererJoinAnchor(nil, signer)
 	require.ErrorContains(t, err, "verified Fabric provenance")
 
-	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, nil, signer)
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, nil, nil, nil, signer)
 	require.ErrorContains(t, err, "verified staged snapshot export")
 
 	alternateGenesis := fixture.RaftGenesis(t)
@@ -142,6 +142,6 @@ func TestRegistryUsesProtectedGenesisForJoinHistory(t *testing.T) {
 	require.ErrorContains(t, err, "independently trusted identity")
 	_, err = provisioning.SignVerifiedOrdererJoinAnchor(foreign, signer)
 	require.ErrorContains(t, err, "verified Fabric provenance")
-	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(foreign, nil, signer)
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(foreign, nil, nil, nil, signer)
 	require.ErrorContains(t, err, "verified Fabric provenance")
 }

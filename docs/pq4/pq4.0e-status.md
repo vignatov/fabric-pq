@@ -7,7 +7,9 @@ CI and independent review for merge, subject to DCO sign-off. PQ4.0E
 development acceptance remains incomplete pending its remaining acceptance
 evidence. Production deployment certification is a separate assessment and
 is not a prerequisite for development acceptance. The PQ4.0B network
-enforcement gate remains incomplete.
+enforcement gate remains incomplete. PQ4.0E.3 adds a controlled Linux
+provisioning demonstration; final-head hosted CI and independent review remain
+required before proposing a gate decision.
 
 ## Current boundary
 
@@ -94,7 +96,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Signed manifest, protected history and Linux launcher | Linux race and subprocess tests passed; managed deployment incomplete |
 | Fixed managed systemd unit and installer | Disposable systemd VM test installs and inspects the real unit |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Disposable VM test covers the trusted service-manager boundary; production validation pending |
-| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. PQ4.0E.2 adds provisioner-pinned exporter evidence, complete pre-signing inventory verification, private staging and a versioned peer snapshot anchor. Full H2 hosted CI, a disposable-VM test and an initial independent review are recorded in the [acceptance report](pq4.0e2-acceptance.md); later revisions require their own CI, and evidence for the independent provisioning boundary remains pending. PQ4.0E is INCOMPLETE. |
+| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. PQ4.0E.2 adds provisioner-pinned exporter evidence, complete pre-signing inventory verification, private staging and a versioned peer snapshot anchor. PQ4.0E.3 adds signed pre-export authorization and a Ledger A/B process/filesystem test; local evidence is recorded in the [PQ4.0E.3 gate report](pq4.0e3-development-gate.md). Final-head hosted CI and independent review remain pending. PQ4.0E is INCOMPLETE. |
 | Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
@@ -109,7 +111,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
 | Runtime service coverage | Recorded below, including endpoints disabled for enrolled channels and network-wide enforcement gaps |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | Historical Verify Build and PQ3 results are recorded below; current PQ4.0E.2 evidence is tracked in the [acceptance report](pq4.0e2-acceptance.md). PQ4.0E and PQ4.0B acceptance evidence remains incomplete |
+| Full regression, integration and final-head CI evidence | Historical Verify Build and PQ3 results are recorded below; current PQ4.0E.2 and PQ4.0E.3 evidence is tracked in the [acceptance report](pq4.0e2-acceptance.md) and [PQ4.0E.3 gate report](pq4.0e3-development-gate.md). PQ4.0E and PQ4.0B acceptance evidence remains incomplete |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
@@ -203,14 +205,21 @@ workflow uses a separate offline or isolated source-export boundary.
 The source exporter, its ledger, the trusted provisioner and operator, and the
 isolated host filesystem are trusted. A compromised trusted exporter can sign
 false state, which file hashes cannot detect. This is not a cryptographic
-commitment from Fabric block history to arbitrary world state. The APIs do
-not attest which ledger the exporter actually read; evidence of the separate
-provisioning and exporter controls is still required. The focused
-Linux race-enabled native test covers approved export, a self-consistent
-recomputed-hash substitution without fresh exporter approval, metadata and
-payload tampering, unsafe package entries, operator-key mismatch, protected
-import, restart with evidence, and restart without evidence. It does not by
-itself complete the PQ4.0E gate.
+commitment from Fabric block history to arbitrary world state. The
+PQ4.0E.2 APIs still do not attest a physical source-ledger directory;
+PQ4.0E.3 demonstrates that association through signed pre-export authorization,
+restricted path access, and controlled native ledger opening. The complete
+security boundary and limitations are documented in the
+[PQ4.0E.3 provisioning guide](pq4.0e3-provisioning.md).
+
+The focused Linux race-enabled native test covers approved export, a
+self-consistent recomputed-hash substitution without fresh exporter approval,
+metadata and payload tampering, unsafe package entries, operator-key mismatch,
+protected import, restart with evidence, and restart without evidence. The
+PQ4.0E.3 disposable-VM test additionally covers source-path substitution,
+unapproved Ledger B access, independent exporter authorization, evidence
+replacement after staging, v2 approval, peer restart recovery, and baseline
+ledger continuity. Final-head hosted CI and independent review remain required.
 
 Local validation was run on Linux/amd64 with Go 1.27.4, `GOFIPS140=off`, in a
 disposable `golang:1.27.4` container. All commands below passed:

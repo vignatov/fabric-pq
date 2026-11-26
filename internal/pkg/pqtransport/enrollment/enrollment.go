@@ -43,6 +43,13 @@ type Manifest struct {
 	PolicySignerDigest string   `json:"policy_signer_digest"`
 	StateDir           string   `json:"state_dir"`
 	LedgerDir          string   `json:"ledger_dir"`
+	SnapshotAuthority  string   `json:"snapshot_authority,omitempty"`
+	verified           *verifiedManifest
+}
+
+type verifiedManifest struct {
+	digest    [sha256.Size]byte
+	authority *mldsa.PublicKey
 }
 
 // History is stored independently of runtime state and pins the exact
@@ -124,7 +131,7 @@ func Verify(manifestBytes, historyBytes []byte, authority *mldsa.PublicKey) (*Ma
 		if history.ProtectedEver {
 			return nil, errors.New("protected enrollment cannot return to baseline")
 		}
-		if manifest.Profile != "" || manifest.PolicySigner != "" || manifest.PolicySignerDigest != "" || manifest.StateDir != "" || manifest.LedgerDir != "" {
+		if manifest.Profile != "" || manifest.PolicySigner != "" || manifest.PolicySignerDigest != "" || manifest.StateDir != "" || manifest.LedgerDir != "" || manifest.SnapshotAuthority != "" {
 			return nil, errors.New("baseline manifest contains protected settings")
 		}
 	case Protected:
@@ -139,6 +146,14 @@ func Verify(manifestBytes, historyBytes []byte, authority *mldsa.PublicKey) (*Ma
 	default:
 		return nil, errors.New("unknown enrollment mode")
 	}
+	if manifest.SnapshotAuthority != "" && (manifest.SnapshotAuthority != strings.TrimSpace(manifest.SnapshotAuthority) || strings.ContainsRune(manifest.SnapshotAuthority, '\x00')) {
+		return nil, errors.New("invalid snapshot provisioning authority identity")
+	}
+	authorityCopy, err := mldsa.NewPublicKey(mldsa.MLDSA65(), authority.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("copy verified provisioning authority: %w", err)
+	}
+	manifest.verified = &verifiedManifest{digest: digest, authority: authorityCopy}
 	return &manifest, nil
 }
 
@@ -152,13 +167,15 @@ func AuthenticateProtected(manifest *Manifest) error {
 // Registry selects channels from the authenticated checkpoint on a protected
 // node. It is constructed from an independently verified enrollment manifest.
 type Registry struct {
-	store    *activation.Store
-	key      *mldsa.PublicKey
-	policy   *pqtransport.Policy
-	network  string
-	node     string
-	root     string
-	stateDir string
+	store             *activation.Store
+	key               *mldsa.PublicKey
+	policy            *pqtransport.Policy
+	network           string
+	node              string
+	root              string
+	stateDir          string
+	snapshotAuthority string
+	authorityKey      *mldsa.PublicKey
 }
 
 // OpenProtectedRegistry validates protection state and retains the store used
@@ -166,6 +183,18 @@ type Registry struct {
 func OpenProtectedRegistry(manifest *Manifest) (*Registry, error) {
 	if manifest == nil || manifest.Mode != Protected {
 		return nil, errors.New("protected manifest required")
+	}
+	if manifest.SnapshotAuthority != "" && manifest.verified == nil {
+		return nil, errors.New("snapshot provisioning authority requires verified enrollment")
+	}
+	if manifest.verified != nil {
+		encoded, err := json.Marshal(manifest)
+		if err != nil {
+			return nil, fmt.Errorf("encode verified enrollment manifest: %w", err)
+		}
+		if sha256.Sum256(encoded) != manifest.verified.digest {
+			return nil, errors.New("verified enrollment manifest was modified")
+		}
 	}
 	raw, err := os.ReadFile(manifest.PolicySigner)
 	if err != nil {
@@ -179,6 +208,10 @@ func OpenProtectedRegistry(manifest *Manifest) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse policy signer: %w", err)
 	}
+	if manifest.verified != nil && manifest.SnapshotAuthority != "" &&
+		bytes.Equal(key.Bytes(), manifest.verified.authority.Bytes()) {
+		return nil, errors.New("snapshot provisioning authority must be independent of the policy signer")
+	}
 	store, err := activation.OpenStore(manifest.StateDir, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open protected state: %w", err)
@@ -187,10 +220,24 @@ func OpenProtectedRegistry(manifest *Manifest) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Registry{
+	registry := &Registry{
 		store: store, key: key, policy: policy, network: manifest.Network,
 		node: manifest.Node, root: manifest.LedgerDir, stateDir: manifest.StateDir,
-	}, nil
+	}
+	if manifest.verified != nil && manifest.SnapshotAuthority != "" {
+		registry.snapshotAuthority = manifest.SnapshotAuthority
+		registry.authorityKey = manifest.verified.authority
+	}
+	return registry, nil
+}
+
+// SnapshotProvisioningAuthority returns the authority pinned by the verified
+// enrollment manifest. Unsigned or legacy manifests do not enable E.3 approval.
+func (r *Registry) SnapshotProvisioningAuthority() (string, []byte) {
+	if r == nil || r.authorityKey == nil {
+		return "", nil
+	}
+	return r.snapshotAuthority, bytes.Clone(r.authorityKey.Bytes())
 }
 
 // LedgerRoot is the ledger directory pinned by the enrollment manifest.
