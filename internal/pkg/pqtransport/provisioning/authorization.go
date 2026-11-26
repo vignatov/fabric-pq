@@ -13,9 +13,11 @@ import (
 
 const ExporterAuthorizationFormat = exportauth.AuthorizationFormat
 
-type ExporterAuthorization = exportauth.Authorization
-type ExporterExecution = exportauth.Execution
-type VerifiedExporterExecution = exportauth.VerifiedExecution
+type (
+	ExporterAuthorization     = exportauth.Authorization
+	ExporterExecution         = exportauth.Execution
+	VerifiedExporterExecution = exportauth.VerifiedExecution
+)
 
 type VerifiedExporterAuthorization struct {
 	verified *exportauth.VerifiedAuthorization
