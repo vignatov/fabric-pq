@@ -1,8 +1,10 @@
 # PQ4.0E.1 Fabric provenance verification
 
-**Status: development implementation; full acceptance and independent review
-pending.** This helper does not certify production deployment and does not
-close the PQ4.0B network-enforcement gate.
+**Status: bounded development implementation reviewed as acceptable for merge
+at `0c3e9db3402dbc87d536d0959442266f4c75c256`.** Full PQ4.0E acceptance,
+independent snapshot-state provenance and production deployment certification
+remain incomplete; this helper does not close the PQ4.0B network-enforcement
+gate.
 
 ## Trust and verification boundary
 
@@ -89,11 +91,18 @@ signatures, historical policy rejection, hash-link failures, incomplete
 history, wrong genesis/channel, unauthorized config transitions, local policy
 mismatch, unsupported consensus and non-configuration targets, and
 registry-bound anchor issuance gating.
-Linux race-enabled integration tests now exercise registry-bound history
+Linux race-enabled integration tests exercise registry-bound history
 verification and gated anchor issuance through native managed orderer
-promotion and peer snapshot import/recovery. The exact race and vet commands
-passed locally in a disposable Linux container on the initial review head.
-The hosted PQ4.0E.1 job and PQ4.0E disposable-VM step passed on commit
-`1b47d8bf0`, but Basic Checks failed and full unit/integration checks were
-skipped. Final-head hosted CI, disposable-VM evidence and independent review
-remain required before PQ4.0E development acceptance can be declared complete.
+promotion and peer snapshot import/recovery.
+
+On commit `0c3e9db3402dbc87d536d0959442266f4c75c256`, [Verify Build
+run 45728658438](https://github.com/vignatov/fabric-pq/actions/runs/45728658438)
+passed all 17 jobs, including unit tests, all nine integration groups, focused
+PQ4.0E.1 tests and the PQ4.0E disposable systemd-VM proof.
+[PQ3 isolated acceptance run
+45728658316](https://github.com/vignatov/fabric-pq/actions/runs/45728658316)
+also passed. The first PR unit-test attempt hit a timeout-test failure in
+unchanged Gateway code; the same-head push unit run and PR rerun both passed.
+The independent review accepts this bounded implementation for merge, subject
+to DCO sign-off. These results do not complete PQ4.0E or PQ4.0B, prove
+independent snapshot-state provenance, or certify production deployment.
