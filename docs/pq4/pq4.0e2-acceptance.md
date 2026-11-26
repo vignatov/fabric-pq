@@ -26,6 +26,10 @@ Later PR revisions must also pass their own final-head checks.
   Its pull-request workflows checked out synthetic merge **M2**:
   `9d4aee18e968f961d79a0a39daebd81c57c53116`, merging H2 into the same
   base.
+- Evidence-only head **H3**: `ad1312a5486663a8a8bdd17f016586a9be1c8209`.
+  Its pull-request workflows checked out synthetic merge **M3**:
+  `edc3d844bed4d3fd45f931eadc224b2c3e168136`, merging H3 into the same
+  base.
 - The [current PR checks](https://github.com/vignatov/fabric-pq/pull/14/checks)
   provide the status of later runs. Compare their PR head and checkout
   revision with the current head and base before using them as final-head
@@ -138,6 +142,26 @@ orderer `08d34275b876cf4352670b81906893a3484e28ee2098c695e70da21311e2cf1c`.
   also passed all 18 jobs on H2, and
   [PQ3 isolated acceptance #45810203554](https://github.com/vignatov/fabric-pq/actions/runs/45810203554)
   passed on H2. These results do not establish the outcome for a later head.
+
+### Hosted evidence for H3/M3
+
+- The first attempt of [PR Verify Build #45816077973](https://github.com/vignatov/fabric-pq/actions/runs/45816077973)
+  passed 17 jobs but failed the
+  [PKCS11 integration group](https://github.com/vignatov/fabric-pq/actions/runs/45816077973/job/139897585313).
+  A peer could not read the SoftHSM token (`CKR_GENERAL_ERROR`); a subsequent
+  setup also encountered an occupied orderer operations port. The same
+  integration group passed in the H3 push run and both H2 runs.
+- The [H3 push Unit Tests job](https://github.com/vignatov/fabric-pq/actions/runs/45816072088/job/139897539565)
+  failed `TestLeaveChannel`; the other 17 jobs passed. The M3 PR Unit Tests
+  job and both H2 Unit Tests jobs passed. A local diagnostic delay reproduced
+  the same assertion failure: the test released its waiter before checking
+  whether the channel had been left. The follow-up test-only fix checks the
+  state before signaling and still checks every pull; 25 race-enabled
+  repetitions and the full affected package passed locally.
+- [PR PQ3 #45816078051](https://github.com/vignatov/fabric-pq/actions/runs/45816078051)
+  passed on M3, and [push PQ3 #45816072053](https://github.com/vignatov/fabric-pq/actions/runs/45816072053)
+  passed on H3. See the run links for any subsequent attempts and the
+  current PR checks for later revisions.
 
 The native peer integration test generates a real Fabric snapshot and verifies
 approved export, signed approval, protected import, recovery with retained

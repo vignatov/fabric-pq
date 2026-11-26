@@ -29,6 +29,7 @@ import (
 	"github.com/hyperledger/fabric/gossip/metrics/mocks"
 	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/gossip/util"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -456,13 +457,15 @@ func TestLeaveChannel(t *testing.T) {
 	}
 	var helloPullWG sync.WaitGroup
 	helloPullWG.Add(1)
+	var helloPullOnce sync.Once
 	configureAdapter(adapter, members...)
 	gc := NewGossipChannel(common.PKIidType("p0"), orgInChannelA, cs, channelA, adapter, jcm, disabledMetrics, nil)
 	adapter.On("Send", mock.Anything, mock.Anything).Run(func(arguments mock.Arguments) {
 		msg := arguments.Get(0).(*protoext.SignedGossipMessage)
 		if protoext.IsPullMsg(msg.GossipMessage) {
-			helloPullWG.Done()
-			require.False(t, gc.(*gossipChannel).hasLeftChannel())
+			// The waiting test can leave the channel as soon as it is signaled.
+			assert.False(t, gc.(*gossipChannel).hasLeftChannel())
+			helloPullOnce.Do(helloPullWG.Done)
 		}
 	})
 	gc.HandleMessage(&receivedMsg{PKIID: pkiIDInOrg1, msg: createStateInfoMsg(1, pkiIDInOrg1, channelA)})
