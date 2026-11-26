@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package provisioning
 
 import (
+	"bytes"
 	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,9 +15,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric/core/ledger/kvledger"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/provenance"
 	"github.com/hyperledger/fabric/protoutil"
@@ -75,38 +78,69 @@ func SignVerifiedOrdererJoinAnchor(verified *VerifiedJoinHistory, signer *mldsa.
 	return signJoinAnchor(signer, enrollment.OrdererJoinAnchorDomain, anchor)
 }
 
-// SignVerifiedPeerSnapshotAnchor signs a peer snapshot anchor only when the
-// metadata names the exact verified configuration-block boundary. The caller
-// must independently trust the exporter and snapshot state; this function does
-// not read snapshot files or establish their provenance.
-func SignVerifiedPeerSnapshotAnchor(verified *VerifiedJoinHistory, signable, additional []byte, signer *mldsa.PrivateKey) ([]byte, error) {
+// SignVerifiedPeerSnapshotAnchor signs only a snapshot that was authenticated
+// by an independently trusted exporter and copied to a private staging
+// directory by VerifySnapshotExport.
+func SignVerifiedPeerSnapshotAnchor(verified *VerifiedJoinHistory, export *VerifiedSnapshotExport, signer *mldsa.PrivateKey) ([]byte, error) {
 	joinAnchor, err := joinAnchorFromVerified(verified, signer)
 	if err != nil {
 		return nil, err
 	}
-	var metadata struct {
-		Channel     string            `json:"channel_name"`
-		BlockNumber uint64            `json:"last_block_number"`
-		BlockHash   string            `json:"last_block_hash"`
-		Files       map[string]string `json:"snapshot_files_raw_hashes"`
+	if export == nil || export.history != verified || export.stageDir == "" || export.trust == nil {
+		return nil, errors.New("verified staged snapshot export is required before peer snapshot approval")
 	}
-	if err := json.Unmarshal(signable, &metadata); err != nil {
-		return nil, fmt.Errorf("decode peer snapshot metadata: %w", err)
+	root, err := os.OpenRoot(export.stageDir)
+	if err != nil {
+		return nil, fmt.Errorf("open verified staged snapshot: %w", err)
 	}
-	if metadata.Channel != joinAnchor.Channel || metadata.BlockNumber != joinAnchor.BlockNumber ||
-		metadata.BlockHash != joinAnchor.BlockHash || len(metadata.Files) == 0 {
-		return nil, errors.New("peer snapshot metadata does not identify the verified configuration boundary")
+	defer root.Close()
+	signable, err := root.ReadFile(kvledger.SnapshotSignableMetadataFileName)
+	if err != nil {
+		return nil, err
 	}
-	for name, digest := range metadata.Files {
-		decoded, err := hex.DecodeString(digest)
-		if name == "" || err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != digest {
-			return nil, fmt.Errorf("snapshot metadata contains an invalid hash for file %q", name)
+	additional, err := root.ReadFile(kvledger.SnapshotAdditionalMetadataFileName)
+	if err != nil {
+		return nil, err
+	}
+	evidenceBytes, err := root.ReadFile(SnapshotExportEvidenceFileName)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(signable, export.signable) || !bytes.Equal(additional, export.additional) ||
+		!bytes.Equal(evidenceBytes, export.evidenceBytes) {
+		return nil, errors.New("verified staged snapshot metadata or export evidence changed before signing")
+	}
+	evidence, err := verifySnapshotExportEvidence(evidenceBytes, export.trust.publicKey)
+	if err != nil {
+		return nil, err
+	}
+	metadata, err := decodeSnapshotMetadata(signable)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateSnapshotExportBoundary(evidence, export.trust, joinAnchor, verified.Report(), metadata, signable, additional); err != nil {
+		return nil, err
+	}
+	if err := verifySnapshotDirectory(root, evidence.PayloadFiles, SnapshotExportEvidenceFileName); err != nil {
+		return nil, err
+	}
+	for name, digest := range evidence.PayloadFiles {
+		if err := verifySnapshotFile(root, name, digest); err != nil {
+			return nil, err
 		}
+	}
+	if err := verifyNativeAdditionalMetadata(signable, additional); err != nil {
+		return nil, err
 	}
 	anchor := enrollment.PeerSnapshotAnchor{
 		JoinAnchor:             joinAnchor,
+		FormatVersion:          enrollment.PeerSnapshotAnchorFormat,
 		SignableMetadataHash:   hashHex(signable),
 		AdditionalMetadataHash: hashHex(additional),
+		ExportEvidenceHash:     hashHex(evidenceBytes),
+		ExporterIdentity:       evidence.ExporterIdentity,
+		SourceLedgerIdentity:   evidence.SourceLedgerIdentity,
+		ExporterPublicKey:      bytes.Clone(export.exporterKey),
 	}
 	return signJoinAnchor(signer, enrollment.PeerSnapshotAnchorDomain, anchor)
 }

@@ -101,18 +101,8 @@ func TestRegistryUsesProtectedGenesisForJoinHistory(t *testing.T) {
 	_, err = provisioning.SignVerifiedOrdererJoinAnchor(nil, signer)
 	require.ErrorContains(t, err, "verified Fabric provenance")
 
-	snapshotMetadata, err := json.Marshal(map[string]any{
-		"channel_name": testfixture.ChannelID, "last_block_number": uint64(1),
-		"last_block_hash":           verified.Report().TargetBlockHash,
-		"snapshot_files_raw_hashes": map[string]string{"state.data": hex.EncodeToString(make([]byte, sha256.Size))},
-	})
-	require.NoError(t, err)
-	signed, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, snapshotMetadata, []byte(`{"additional":true}`), signer)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(signed, &envelope))
-	require.NoError(t, mldsa.Verify(signer.Public().(*mldsa.PublicKey), append([]byte(enrollment.PeerSnapshotAnchorDomain), envelope.Payload...), envelope.Signature, nil))
-	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, []byte(`{"channel_name":"wrong"}`), nil, signer)
-	require.ErrorContains(t, err, "metadata does not identify")
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, nil, signer)
+	require.ErrorContains(t, err, "verified staged snapshot export")
 
 	alternateGenesis := fixture.RaftGenesis(t)
 	alternateUpdate := fixture.Update(t, testfixture.Config(t, alternateGenesis))
@@ -152,6 +142,6 @@ func TestRegistryUsesProtectedGenesisForJoinHistory(t *testing.T) {
 	require.ErrorContains(t, err, "independently trusted identity")
 	_, err = provisioning.SignVerifiedOrdererJoinAnchor(foreign, signer)
 	require.ErrorContains(t, err, "verified Fabric provenance")
-	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(foreign, snapshotMetadata, nil, signer)
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(foreign, nil, signer)
 	require.ErrorContains(t, err, "verified Fabric provenance")
 }

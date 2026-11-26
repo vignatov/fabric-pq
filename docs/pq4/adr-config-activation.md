@@ -109,6 +109,13 @@ the provisioned binding and native admin authorization at genesis join. A
 snapshot join stays closed when the expected committed block or provenance
 cannot be established.
 
+The PQ4.0E.2 peer snapshot path additionally requires a v2 operator anchor
+bound to authenticated exporter evidence and an exact staged file inventory.
+The exporter proof is retained with protected state and revalidated alongside
+the native snapshot metadata and ledger boundary during restart; missing or
+conflicting evidence is a recovery failure, not a reason to fall back to
+baseline admission. Legacy v1 peer snapshot anchors are rejected.
+
 ### Orderer
 
 `StandardChannel.ProcessConfigUpdateMsg` establishes Fabric authorization

@@ -84,7 +84,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | Required mTLS and classical/missing client rejection | PASS | Component mTLS listener only; endpoint-specific proofs remain below. |
 | Signed bootstrap before actual node readiness and protected checkpoint | PASS (managed-process scope) | PQ4.0E native peer/orderer startup and disposable-VM evidence authenticate enrollment and protected checkpoint before managed service readiness; this is not network-wide PQ4 transport acceptance. |
 | Identity binding and stale/conflicting bootstrap rejection | PASS (managed-process scope) | PQ4.0E launcher, registry and restart tests bind signed manifest/history, node/network identity, pinned signer and protected checkpoint; complete privileged-host rollback remains excluded. |
-| Independently established peer snapshot-state provenance | INCOMPLETE | Full-history replay authenticates the block boundary, not the snapshot state; trusted-exporter provenance and pre-signing payload verification remain operator assumptions. |
+| Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation present | PQ4.0E.2 adds ML-DSA-65 exporter evidence against an independently pinned key and source-ledger identity, verifies the full native snapshot inventory before operator signing, stages exact bytes, and retains authenticated evidence for recovery. Focused native tests cover substitution and tampering; final-head CI, complete acceptance evidence and independent review remain pending. |
 | No downgrade through clones, credentials and restarts | INCOMPLETE | PQ4.0E exercises managed restart and strict selected listeners, but not every credential factory, all connection lifetimes, or unsupported old binaries under a real PQ4 capability. |
 | Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
@@ -130,10 +130,9 @@ Pactway policy/checkpoint. The verifier rejects an unauthorized intermediate
 configuration even if the target block is well-formed.
 
 Peer snapshot state provenance is not established by history replay or
-import-time hash checks. The provisioner must independently trust the
-snapshot exporter and validate its files against the metadata before signing.
-This additional assumption leaves independent snapshot-state provenance
-**INCOMPLETE**.
+import-time hash checks alone. PQ4.0E.2 implements a separate trusted-exporter
+evidence flow, but this report still records the gate as **INCOMPLETE** until
+the exact final head has complete acceptance evidence and independent review.
 
 Focused Fabric-history and anchor-issuance tests pass on Windows/amd64, and
 the exact Linux race and vet commands pass locally in a disposable Go
@@ -144,6 +143,44 @@ Basic Checks failed and full unit/integration checks were skipped. Final-head
 CI, disposable-VM evidence and independent review remain pending. Therefore
 PQ4.0E.1 acceptance remains **INCOMPLETE**; neither this update nor the
 existing PQ4.0E process evidence closes PQ4.0B.
+
+## PQ4.0E.2 snapshot evidence update
+
+The peer snapshot signing API now requires an opaque staged-export result;
+there is no raw-metadata signing overload. The exporter signature uses the
+domain `fabric-pq/snapshot-export/v1` plus a NUL separator and binds the
+network, channel, independently approved exporter and source ledger, trusted
+genesis, verified target/configuration and source-history identities, both
+native metadata byte hashes, the complete payload inventory, and
+`pactway-pq-tls-v1`. Provisioning must supply the exporter key and expected
+source-ledger identity from outside the snapshot package.
+
+The peer approval uses the explicit `fabric-pq/peer-snapshot/v2` domain and
+format. It binds the export-evidence digest and the approved exporter identity,
+source-ledger identity and public key. The importer validates the sidecar,
+checks the exact metadata and payload inventory, stages only approved native
+files and retains the sidecar in protected state. Restart requires the same
+evidence; absent or conflicting evidence keeps the channel closed. There is no
+fallback to a v1 peer snapshot anchor. Managed protected snapshot-export RPCs
+remain rejected; no remote export bypass was introduced.
+
+The development trust boundary explicitly includes the approved exporter
+process, its source ledger, the trusted provisioner/operator, and the isolated
+host filesystem. A compromised trusted exporter can authenticate false state;
+hashes do not prove that snapshot world state was derived from Fabric history.
+See [PQ4.0E.2 trusted snapshot export](pq4.0e2-snapshot-provenance.md).
+
+The focused Linux race-enabled native test passed on the current working tree
+and exercises real Fabric snapshot generation, approval, import and restart;
+it rejects a self-consistent payload substitution with recomputed native
+hashes but no fresh trusted-exporter approval, as well as altered metadata,
+payload, exporter evidence, unexpected/missing files, symlinks, non-regular
+entries, an unapproved exporter key, a wrong operator key, legacy v1 approval,
+and missing evidence after restart. The changes are not yet a recorded
+final-head CI commit, and the full PQ4.0E acceptance matrix, hosted Verify
+Build, disposable-VM acceptance and independent review have not yet been
+completed. Consequently this result is not a PQ4.0E PASS and does not change
+the **INCOMPLETE** PQ4.0B decision.
 
 ## Lifecycle review stop
 

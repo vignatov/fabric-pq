@@ -223,6 +223,33 @@ jobs:
         run: go test -mod=vendor -race -count=1 -run '^TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery$' ./core/peer
       - name: Vet provenance and join approval
         run: go vet -mod=vendor ./internal/pkg/pqtransport/... ./orderer/consensus/etcdraft ./core/peer
+  pq40e2-snapshot-acceptance:
+    name: PQ4.0E.2 Trusted Snapshot Evidence
+    runs-on: ubuntu-24.04
+    env:
+      GOFIPS140: "off"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.4
+      - name: Record snapshot acceptance provenance
+        run: |
+          git rev-parse HEAD
+          go version
+          uname -a
+          printf 'GOFIPS140=%s\n' "$GOFIPS140"
+      - name: Build native binaries and record hashes
+        run: |
+          go build -mod=vendor -trimpath -o "$RUNNER_TEMP/peer" ./cmd/peer
+          go build -mod=vendor -trimpath -o "$RUNNER_TEMP/orderer" ./cmd/orderer
+          sha256sum "$RUNNER_TEMP/peer" "$RUNNER_TEMP/orderer"
+      - name: Test snapshot evidence, protected import, recovery and mixed channels
+        run: make pq-snapshot-acceptance
+      - name: Test managed orderer join and promotion regression
+        run: go test -mod=vendor -race -count=1 -run '^TestPQ40EManagedOrdererNonGenesisPromotion$' ./orderer/common/multichannel
   unit-tests:
     name: Unit Tests
     needs: basic-checks

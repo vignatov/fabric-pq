@@ -82,7 +82,15 @@ func (s *Store) AuthenticateRegistry(signer *mldsa.PublicKey, network, node stri
 		case strings.HasPrefix(name, "join-orderer-"):
 			hash = strings.TrimPrefix(name, "join-orderer-")
 		case strings.HasPrefix(name, "join-peer-"):
-			hash = strings.TrimSuffix(strings.TrimPrefix(name, "join-peer-"), ".block")
+			record := strings.TrimPrefix(name, "join-peer-")
+			switch {
+			case strings.HasSuffix(record, ".block"):
+				hash = strings.TrimSuffix(record, ".block")
+			case strings.HasSuffix(record, ".export"):
+				hash = strings.TrimSuffix(record, ".export")
+			default:
+				hash = record
+			}
 		case strings.HasPrefix(name, "quarantine-") && name != nodeQuarantine:
 			hash = strings.TrimPrefix(name, "quarantine-")
 		case strings.HasPrefix(name, "approval-"):
