@@ -92,22 +92,29 @@ evidence. The normal protected snapshot-export RPC restrictions are unchanged.
 identities as caller-supplied claims. Verification authenticates that the
 independently pinned exporter key signed those claims, checks the ledger name
 against the provisioner's pin, and matches the history identity to the
-registry-bound history report. It does not independently inspect which
-ledger the exporter actually read, attest the exporter's execution, or prove
-the correctness of the ledger's state. The native test provisions its pin
-from a fixture key and a chosen ledger name; it tests the matching and
-rejection rules, not an independently operated provisioning environment.
+registry-bound history report. It does not cryptographically attest the
+physical ledger directory, exporter execution, or correctness of the ledger's
+state.
 
-For development-gate closure, the trusted provisioning workflow must
-separately authorize the exporter identity, public key and source-ledger
-identity before receiving the export package. It must control exporter
-execution and access to the authorized ledger and retain reviewable evidence
-linking that authorization and execution to the signed export and its
-verified history boundary. For example, an independently managed immutable
-pin and a controlled exporter audit record could provide such evidence if
-their custody and operation are verified. These controls are requirements of
-the trusted environment, not guarantees implemented or independently
-demonstrated by these helper APIs or their fixture tests.
+PQ4.0E.3 adds a separate authorization signed before export and pins the
+canonical ledger-directory path, exporter identity/key, network/channel,
+trusted genesis, verified history and configuration boundary. The controlled
+Linux executor loads that authorization, rejects path overrides, opens the
+authorized native ledger, and requests the native snapshot. A disposable
+Ubuntu test creates a second valid ledger, makes it inaccessible to the
+exporter identity, rejects an attempted source-path substitution, verifies
+attacker-selected exporter evidence is rejected, and imports/restarts the
+approved snapshot under a separate importer identity. The architecture,
+implementation boundaries and residual assumptions are in the
+[PQ4.0E.3 provisioning guide](pq4.0e3-provisioning.md).
+
+This is a demonstrated association between an independently authorized path
+and controlled native execution under filesystem controls, not a cryptographic
+source-ledger attestation. It trusts the VM kernel, root-controlled
+provisioner, and approved exporter process. The test does not protect against
+a compromised trusted exporter or privileged host, and it does not prove
+arbitrary snapshot world-state correctness. Hosted final-head evidence and
+independent review remain necessary for gate closure.
 
 If that association cannot be evidenced, the gate remains incomplete. If the
 required assurance excludes trusting the exporter or its source ledger, this

@@ -79,8 +79,10 @@ rejected. This proves an authenticated exporter approval, not state correctness
 against a compromised exporter; arbitrary world-state correctness is not
 cryptographically derived from Fabric history. The claim that the exporter
 actually read the approved source ledger depends on the separately controlled
-provisioning workflow; see the [source-ledger trust and upgrade
-boundary](pq4.0e2-snapshot-provenance.md).
+provisioning workflow. PQ4.0E.3 demonstrates pre-export authorization and
+controlled native access to the authorized ledger path; see the
+[provisioning-boundary decision](pq4.0e3-provisioning.md) and
+[source-ledger trust and upgrade boundary](pq4.0e2-snapshot-provenance.md).
 
 The signing helpers require the private key corresponding to the authenticated
 policy signer. Keep that key in the external trusted provisioning authority;

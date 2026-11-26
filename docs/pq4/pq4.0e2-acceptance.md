@@ -2,6 +2,12 @@
 
 **Decision: INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED**
 
+PQ4.0E.3 adds an independently signed exporter authorization, an OS-controlled
+source-ledger selection demonstration, and a separate-identity import test.
+The [PQ4.0E.3 development-gate report](pq4.0e3-development-gate.md) tracks
+that evidence separately. Its local Linux run is not final-head hosted CI or
+independent security review.
+
 PQ4.0E.2 now implements an authenticated snapshot-export path and has focused
 native-ledger, protected-import and recovery coverage. This report does not
 self-certify the complete PQ4.0E gate. The H2 revision passed the full hosted
@@ -192,7 +198,8 @@ peer process.
 | Fabric provenance: historical signatures and predecessor configuration authorization | PQ4.0E.1 history verifier and tests | Native Fabric ledger test | H2/M2 | Job passed; live quorum/readiness is checked by native lifecycle, not offline replay |
 | Fabric provenance: non-genesis approval and correct operator signer | `SignVerifiedOrdererJoinAnchor`; peer signing test below | Native process and ledger tests | H2/M2 | Focused promotion and snapshot tests passed |
 | Fabric provenance: unsupported history and non-configuration target | History verifier negative tests | Native Fabric ledger test | H2/M2 | PQ4.0E.1 job passed |
-| Snapshot: trusted exporter and source identity | `SnapshotExporterTrust`, signed evidence, exact trust checks; `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery` | Native Fabric ledger and peer-component test | H2/M2 | Focused job passed; actual exporter-to-ledger association remains an external trust assumption |
+| Snapshot: trusted exporter and source identity | `SnapshotExporterTrust`, signed evidence, exact trust checks; `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery`; PQ4.0E.3 signed authorization and Ledger A/B process-boundary test | Native Fabric ledger and peer-component tests; isolated Linux OS users | H2/M2; current worktree based on `4dafb5f7e3aca0c7fd70fe9613e1b6250108111b` | Existing job passed; PQ4.0E.3 local test passed, but final-head hosted evidence and independent review remain pending |
+| Snapshot: independent source-ledger association | `VerifyExporterAuthorization`, `SnapshotExporterTrust(VerifiedJoinHistory)`, `TestPQ40EControlledSnapshotProvisioning` | Disposable Linux process/filesystem boundary | Current uncommitted worktree based on `4dafb5f7e3aca0c7fd70fe9613e1b6250108111b`; hosted job not yet run | Ledger A succeeds; Ledger B is inaccessible/rejected; self-authorized key rejected; local run does not establish final-head CI or independent review |
 | Snapshot: metadata binding and complete payload integrity | `VerifySnapshotExport`, inventory and staged hash verification | Native Fabric ledger and peer-component test | H2/M2 | Focused job passed; compromised trusted exporter can sign false state |
 | Snapshot: protected import and restart | `stageProtectedSnapshot`, durable evidence sidecar, `recoverProtectedSnapshot` | In-process native peer lifecycle test | H2/M2 | Missing evidence fails closed; deployed snapshot topology remains pending |
 | Service admission: peer endorsement, Gateway, gossip, discovery, Deliver and private data | Existing PQ4.0E service inventory/tests in [status](pq4.0e-status.md) | Component and native process tests | H2/M2 | Focused job and full regression matrix passed; external topology remains pending/deferred |
@@ -209,7 +216,7 @@ peer process.
 | Compatibility: mixed-channel isolation | `core/peer/pq40e_mixed_channel_test.go` and full peer package test | In-process native peer tests | H2/M2 | Focused job and full regression matrix passed |
 | Compatibility: v1 snapshot-joined peers | V2-only recovery and v1 rejection; [upgrade boundary](pq4.0e2-snapshot-provenance.md) | In-process native peer lifecycle test | H2/M2 | Restart regression passed; no supported in-place v1 migration |
 | Compatibility: PQ3 isolated acceptance | PQ3 isolated acceptance workflow | Isolated hosted acceptance | H2/M2 | Both profiles and evidence verification passed |
-| Overall development acceptance and independent review | Full matrix, trusted provisioning evidence and final-head review | Partially demonstrated | H2/M2; review of H0 | **INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED** |
+| Overall development acceptance and independent review | Full matrix, trusted provisioning evidence and final-head review | Partially demonstrated | H2/M2; PQ4.0E.3 final-head CI and independent review pending | **INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED** |
 
 ## Assumptions, limitations, and deferred work
 
@@ -218,9 +225,10 @@ exporter process, the integrity of its source ledger, the trusted
 provisioning/operator signing authority, and the isolated host kernel and
 filesystem used for staging. The exporter public key and expected source-ledger
 identity are provisioner-controlled pins; they are not accepted from snapshot
-metadata. The APIs authenticate matching claims but do not attest the actual
-source ledger or exporter execution. A real independent pinning and controlled
-exporter workflow has not been evidenced; see the
+metadata. PQ4.0E.3 demonstrates a signed pre-export authorization and OS
+controls binding the exporter to a canonical source-ledger path; these are
+bounded development controls, not cryptographic source-state attestation. See
+the [PQ4.0E.3 architecture](pq4.0e3-provisioning.md) and
 [trust and upgrade boundary](pq4.0e2-snapshot-provenance.md). A compromised
 trusted exporter capable of authenticating false state is not detected by
 metadata or payload hashes.

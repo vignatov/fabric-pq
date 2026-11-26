@@ -84,7 +84,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | Required mTLS and classical/missing client rejection | PASS | Component mTLS listener only; endpoint-specific proofs remain below. |
 | Signed bootstrap before actual node readiness and protected checkpoint | PASS (managed-process scope) | PQ4.0E native peer/orderer startup and disposable-VM evidence authenticate enrollment and protected checkpoint before managed service readiness; this is not network-wide PQ4 transport acceptance. |
 | Identity binding and stale/conflicting bootstrap rejection | PASS (managed-process scope) | PQ4.0E launcher, registry and restart tests bind signed manifest/history, node/network identity, pinned signer and protected checkpoint; complete privileged-host rollback remains excluded. |
-| Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation present | PQ4.0E.2 checks ML-DSA-65 exporter evidence against provisioner-controlled pins, verifies the full native snapshot inventory before operator signing, stages exact bytes, and retains authenticated evidence for recovery. Full H2 hosted CI and an initial independent review are recorded in the [acceptance report](pq4.0e2-acceptance.md); later-head checks and evidence of real exporter/ledger controls remain required. |
+| Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation and local source-control demonstration present | PQ4.0E.2 checks exporter evidence against provisioner-controlled pins and stages exact bytes. PQ4.0E.3 adds signed pre-export authorization, restricted Ledger A/B access, native ledger opening, and separate importer execution; final-head hosted evidence and independent review remain pending in the [PQ4.0E.3 report](pq4.0e3-development-gate.md). This does not implement or prove PQ4.0B network transport enforcement. |
 | No downgrade through clones, credentials and restarts | INCOMPLETE | PQ4.0E exercises managed restart and strict selected listeners, but not every credential factory, all connection lifetimes, or unsupported old binaries under a real PQ4 capability. |
 | Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
@@ -131,9 +131,10 @@ configuration even if the target block is well-formed.
 
 Peer snapshot state provenance is not established by history replay or
 import-time hash checks alone. PQ4.0E.2 implements a separate trusted-exporter
-evidence flow, but this report still records the gate as **INCOMPLETE** until
-the exact final head has complete acceptance evidence and the remaining
-review and trusted-provisioning requirements are met.
+evidence flow, and PQ4.0E.3 demonstrates source-path authorization under
+disposable-VM controls. This PQ4.0B report still records the transport gate as
+**INCOMPLETE** because no PQ4.0B capability or network-wide enforcement proof
+is added by that provisioning work.
 
 Focused Fabric-history and anchor-issuance tests pass on Windows/amd64, and
 the exact Linux race and vet commands pass locally in a disposable Go
