@@ -100,7 +100,7 @@ At `be8e9bb08ece237259398e32051d23ff34bcdb41`, PR Verify Build
 and push Verify Build
 [#45881985020](https://github.com/vignatov/fabric-pq/actions/runs/45881985020)
 each passed all 19 jobs, including the E.3 job. The
-the downloaded [artifact](https://github.com/vignatov/fabric-pq/actions/runs/45881985020/artifacts/15148755927)
+downloaded [artifact](https://github.com/vignatov/fabric-pq/actions/runs/45881985020/artifacts/15148755927)
 reported that exact commit, a clean worktree, and successful import,
 fresh-process recovery and baseline continuity. Its authorization,
 execution-record, exporter-evidence and anchor digests were respectively
