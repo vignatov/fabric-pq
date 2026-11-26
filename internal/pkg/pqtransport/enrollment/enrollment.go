@@ -203,6 +203,16 @@ func (r *Registry) TransportPolicy() *pqtransport.Policy {
 	return r.policy
 }
 
+// Network returns the network identity authenticated by the registry.
+func (r *Registry) Network() string {
+	return r.network
+}
+
+// Node returns the node identity authenticated by the registry.
+func (r *Registry) Node() string {
+	return r.node
+}
+
 // Controller returns a closed controller for an enrolled channel. A nil result
 // means the authenticated checkpoint has no binding for the channel.
 func (r *Registry) Controller(id string, crypto bccsp.BCCSP) *activation.Channel {

@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package peer
 
 import (
+	"crypto/mldsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -25,21 +26,17 @@ import (
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/provisioning"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	fixture := testfixture.New(t)
-	genesis := testfixture.Genesis(t)
+	genesis := fixture.RaftGenesis(t)
 	update := fixture.Update(t, testfixture.Config(t, genesis))
-	block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
-	block.Data.Data = [][]byte{protoutil.MarshalOrPanic(fixture.Envelope(t, update))}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
+	block := fixture.SignedBlock(t, genesis, fixture.Envelope(t, update), 1)
 	block.Metadata.Metadata[cb.BlockMetadataIndex_TRANSACTIONS_FILTER] = []byte{byte(pb.TxValidationCode_VALID)}
-	block.Metadata.Metadata[cb.BlockMetadataIndex_LAST_CONFIG] = protoutil.MarshalOrPanic(
-		&cb.Metadata{Value: protoutil.MarshalOrPanic(&cb.LastConfig{Index: 1})},
-	)
 	exportRoot := t.TempDir()
 	exporter, err := constructLedgerMgrWithTestDefaults(exportRoot)
 	require.NoError(t, err)
@@ -80,6 +77,17 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 		Profile: pqtransport.ProfileV1, PolicySigner: keyFile, PolicySignerDigest: fmt.Sprintf("%x", sha256.Sum256(key)),
 		StateDir: state, LedgerDir: filepath.Join(root, "ledgersData"),
 	}
+	registry, err := enrollment.OpenProtectedRegistry(manifest)
+	require.NoError(t, err)
+	verified, err := provisioning.VerifyJoinHistory(
+		registry, testfixture.ChannelID, []*cb.Block{genesis, block}, block.GetHeader().GetNumber(), fixture.Crypto,
+	)
+	require.NoError(t, err)
+	seed := sha256.Sum256([]byte("PQ4.0C activation fixture operator"))
+	signer, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), seed[:])
+	require.NoError(t, err)
+	signed, err := provisioning.SignVerifiedPeerSnapshotAnchor(verified, signable, additional, signer)
+	require.NoError(t, err)
 	startPeer := func() (*Peer, func()) {
 		p, closeLedger := newTestPeer(t, root)
 		registry, err := enrollment.OpenProtectedRegistry(manifest)
@@ -105,7 +113,6 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	downgrade.Profile = "baseline"
 	require.NoError(t, os.WriteFile(joinName, fixture.SignedJoinAnchor(t, enrollment.PeerSnapshotAnchorDomain, downgrade), 0o600))
 	require.ErrorContains(t, p.CreateChannelFromSnapshot(snapshot, nil, nil, nil), "node policy")
-	signed := fixture.SignedJoinAnchor(t, enrollment.PeerSnapshotAnchorDomain, anchor)
 	require.NoError(t, os.WriteFile(joinName, signed, 0o600))
 	metadataPath := filepath.Join(snapshot, kvledger.SnapshotAdditionalMetadataFileName)
 	require.NoError(t, os.Chmod(metadataPath, 0o600))

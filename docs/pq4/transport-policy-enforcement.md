@@ -4,7 +4,9 @@ Managed protected peers and Raft orderers authenticate enrollment before
 starting channel services. Their shared and administrative listeners use the
 authenticated transport floor. Direct unmanaged startup serves baseline
 deployments. Production verification and bounded endpoint coverage are
-tracked in [PQ4.0E status](pq4.0e-status.md).
+tracked in [PQ4.0E status](pq4.0e-status.md). PQ4.0E.1 separately verifies
+Fabric history before a trusted provisioner issues non-genesis join approval;
+this does not certify network-wide transport enforcement or close PQ4.0B.
 
 Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. PQ4.0D adds the local
 orderer configuration authorization boundary. Strict service endpoint and

@@ -1,9 +1,13 @@
 # PQ4.0E bootstrap and admission: INCOMPLETE
 
 This development checkpoint covers authenticated enrollment and bounded
-admission on native peers and Raft orderers. PQ4.0E acceptance is pending
-production verification and independent review of the final commit. The
-PQ4.0B network enforcement gate remains incomplete.
+admission on native peers and Raft orderers. The bounded PQ4.0E.1
+implementation at `0c3e9db3402dbc87d536d0959442266f4c75c256` passed hosted
+CI and independent review for merge, subject to DCO sign-off. PQ4.0E
+development acceptance remains incomplete pending its remaining acceptance
+evidence. Production deployment certification is a separate assessment and
+is not a prerequisite for development acceptance. The PQ4.0B network
+enforcement gate remains incomplete.
 
 ## Current boundary
 
@@ -90,7 +94,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Signed manifest, protected history and Linux launcher | Linux race and subprocess tests passed; managed deployment incomplete |
 | Fixed managed systemd unit and installer | Disposable systemd VM test installs and inspects the real unit |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Disposable VM test covers the trusted service-manager boundary; production validation pending |
-| Authenticated onboarding and non-genesis join provenance | Signed orderer participation target and peer snapshot at an authenticated configuration block |
+| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. Local Linux race tests cover managed orderer issuance/promotion and peer snapshot issuance/import/recovery. Snapshot state authenticity additionally requires a trusted exporter and provisioner verification of payload hashes; history replay alone does not establish it. Final-head hosted CI and bounded implementation review passed; remaining PQ4.0E acceptance evidence is pending. |
 | Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
@@ -105,16 +109,84 @@ without a protected handoff. Linux is the supported managed platform.
 | Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
 | Runtime service coverage | Recorded below, including endpoints disabled for enrolled channels and network-wide enforcement gaps |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | Verified historical runs below. The PR records evidence for its current commit |
+| Full regression, integration and final-head CI evidence | Current-head Verify Build and PQ3 results are recorded below; PQ4.0E and PQ4.0B acceptance evidence remains incomplete |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
+
+### PQ4.0E.1 provenance verifier implementation
+
+The `internal/pkg/pqtransport/provenance` helper replays a complete,
+consecutive block history from the genesis block anchored by the authenticated
+protected registry to the exact requested configuration-block boundary. It
+uses Fabric's native block-verification assistant for block signatures under
+the historical `BlockValidation` policy, header continuity and data hashes;
+Fabric's configuration validator for each transition under the preceding
+configuration; and native bundle compatibility checks. It also checks
+channel identity in every envelope, both representations of `LAST_CONFIG`,
+configuration sequence progression, and the channel's Raft consensus
+metadata. The target's deterministic configuration digest, channel, network,
+node and `pactway-pq-tls-v1` binding must match the authenticated local policy
+and checkpoint.
+
+The `internal/pkg/pqtransport/provisioning` helper ties replay to the registry's
+protected genesis record and exposes orderer and peer-snapshot anchor signing
+functions that accept only a successful verification result and the matching
+policy signer. Its deterministic report identifies the verified source
+history, genesis, target, configuration, historical verification policies,
+transport profile and exact join-anchor digest. Rejected verification can
+return a report with an explicit failure reason. The signer private key remains
+an external provisioning responsibility and is not part of node state.
+
+Offline verification does not establish live Raft quorum or voter readiness;
+the existing participation-follower promotion and snapshot paths must continue
+to perform their native checks. Only Raft consensus is supported; other
+consensus types and consensus-type transitions fail closed. The supported peer
+snapshot boundary remains a configuration block. Snapshot state provenance
+requires an independently trusted exporter and provisioner verification of
+payload hashes; replay and import-time integrity checks do not prove it.
+
+Focused history tests use Fabric-generated configuration updates and actual
+Fabric MSP signatures. They cover complete history, invalid signatures,
+valid signatures presented under an unauthorized MSP identity, broken links,
+missing blocks, unauthorized configuration updates, wrong genesis/channel,
+checkpoint mismatch, unsupported consensus and snapshot boundaries, and
+registry-bound anchor signing.
+Linux race integration tests also exercise registry-bound anchor issuance
+through native managed orderer promotion and peer snapshot import/recovery.
+The protected-registry genesis-binding test is Linux-only because the
+activation store requires directory syncing. Local disposable Linux race
+tests and `go vet` passed locally. On final reviewed commit
+`0c3e9db3402dbc87d536d0959442266f4c75c256`, the hosted Verify Build, including
+all unit tests, nine integration groups, Basic Checks, focused PQ4.0E.1 tests
+and the PQ4.0E disposable-VM proof, passed. PQ3 isolated acceptance also
+passed. The first PR unit-test attempt failed in an unchanged Gateway timeout
+test; its same-head rerun passed, as did the push-triggered unit run. The
+bounded implementation review accepted this commit for merge subject to DCO
+sign-off. These results do not complete the PQ4.0E development gate; remaining
+acceptance evidence, independent snapshot-state provenance and production
+qualification are still outstanding.
+
+Local validation was run on Linux/amd64 with Go 1.27.4, `GOFIPS140=off`, in a
+disposable `golang:1.27.4` container. All commands below passed:
+
+```text
+go test -mod=vendor -race -count=1 -v ./internal/pkg/pqtransport/provenance ./internal/pkg/pqtransport/provisioning ./internal/pkg/pqtransport/enrollment
+go test -mod=vendor -race -count=1 ./internal/pkg/pqtransport ./internal/pkg/pqtransport/activation/...
+go test -mod=vendor -race -count=1 -run '^TestPQ40EManagedOrdererNonGenesisPromotion$' ./orderer/common/multichannel
+go test -mod=vendor -race -count=1 -run '^TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery$' ./core/peer
+go test -mod=vendor -race -count=1 ./orderer/consensus/etcdraft
+go vet -mod=vendor ./internal/pkg/pqtransport/... ./orderer/consensus/etcdraft ./core/peer
+```
+
+Operator usage and evidence format are documented in
+[PQ4.0E.1 Fabric provenance verification](pq4.0e1-provenance.md).
 
 ### Service and publication inventory
 
 | Runtime path | Admission and publication boundary | Evidence or open dependency |
 | --- | --- | --- |
-| Peer ledger load and CSCC join | The authenticated registry selects protected channels. Genesis and supported non-genesis snapshot provenance are verified before ledger creation. The controller restores the private validation bundle and serving resources before publication. | Native genesis join/restart. Real-ledger test for a signed non-genesis snapshot at a configuration block. Other snapshot targets require additional signed state-transfer evidence. |
+| Peer ledger load and CSCC join | The authenticated registry selects protected channels. Existing runtime checks the signed target anchor and snapshot metadata before ledger creation; PQ4.0E.1 adds full-history verification at trusted provisioning before anchor issuance. The controller restores the private validation bundle and serving resources before publication. | Native genesis join/restart and real-ledger signed non-genesis snapshot issuance/import/recovery pass in local Linux race tests and the final-head hosted CI run. Other snapshot targets require additional signed state-transfer evidence. |
 | Peer endorsement, CSCC config reads and QSCC ledger reads | Endorsement retains the serving generation through unary gRPC completion. CSCC and QSCC acquire the target channel separately when the query names a channel outside the proposal header. Node-local channel and join-status listing use local ACLs. | Native protected queries before and after restart, and refusal with persisted quarantine. Component test for blocked unary response serialization. |
 | Peer block, filtered and private-data Deliver | All three RPCs share the protected seek admission and retain it through iteration, ACL checks and sends. Revocation closes a waiting iterator or aborts a blocked send. | Mixed-channel best-effort Deliver with protected cancellation, continued baseline streaming, and protected recovery. Existing filtered and private-data response tests exercise the data formats. |
 | Peer Gateway | Evaluate, Endorse, Submit, CommitStatus and ChaincodeEvents use the protected generation. Ordered cache retirement precedes installation of staged endpoints and roots. Routed protected calls use the strict client policy. | Registry and RPC tests cover failure, cache reconstruction, unary completion and event-stream drain. Network-wide external Gateway topology is deferred. |

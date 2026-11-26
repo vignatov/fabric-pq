@@ -126,6 +126,39 @@ func (p *Policy) Check() error {
 	return nil
 }
 
+// Network returns the network identity from an authenticated policy.
+func (p *Policy) Network() string {
+	if p.Check() != nil {
+		return ""
+	}
+	return p.document.Network
+}
+
+// Node returns the node identity from an authenticated policy.
+func (p *Policy) Node() string {
+	if p.Check() != nil {
+		return ""
+	}
+	return p.document.Node
+}
+
+// Profile returns the transport profile from an authenticated policy.
+func (p *Policy) Profile() string {
+	if p.Check() != nil {
+		return ""
+	}
+	return p.document.Profile
+}
+
+// SignerMatches reports whether key is the public half of the authenticated
+// policy-signing key.
+func (p *Policy) SignerMatches(key *mldsa.PublicKey) bool {
+	if p.Check() != nil || key == nil || key.Parameters() != mldsa.MLDSA65() {
+		return false
+	}
+	return p.signerDigest == sha256.Sum256(key.Bytes())
+}
+
 // Channel returns the binding approved by the authenticated policy.
 func (p *Policy) Channel(channel string) (ChannelBinding, bool) {
 	if p.Check() != nil {

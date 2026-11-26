@@ -5,6 +5,7 @@
 package multichannel
 
 import (
+	"crypto/mldsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -31,6 +32,7 @@ import (
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/provisioning"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/types"
@@ -205,7 +207,8 @@ func testProtectedParticipationPromotion(t *testing.T, managed bool) {
 		_, err = registrar.JoinChannel(testfixture.ChannelID, join)
 		require.ErrorContains(t, err, "conflicts with genesis")
 		require.Empty(t, factory.ChannelIDs())
-		require.NoError(t, os.WriteFile(joinPath, fixture.SignedJoinAnchor(t, enrollment.OrdererJoinAnchorDomain, joinAnchor), 0o600))
+		verifiedAnchor := pq40dVerifiedOrdererJoinAnchor(t, fixture, genesis, join, membership.GetConfig())
+		require.NoError(t, os.WriteFile(joinPath, verifiedAnchor, 0o600))
 	}
 	info, err := registrar.JoinChannel(testfixture.ChannelID, join)
 	require.NoError(t, err)
@@ -271,6 +274,43 @@ func testProtectedParticipationPromotion(t *testing.T, managed bool) {
 	got, err := promoted.RetrieveBlockByNumber(2)
 	require.NoError(t, err)
 	require.True(t, proto.Equal(replayBlock.GetHeader(), got.GetHeader()))
+}
+
+func pq40dVerifiedOrdererJoinAnchor(t *testing.T, fixture testfixture.Fixture, genesis, target *cb.Block, config *cb.Config) []byte {
+	t.Helper()
+	stateDir := t.TempDir()
+	store, err := activation.OpenStore(stateDir, nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, config)
+
+	publicKey := fixture.Channel(store, activation.Ledger{}).Signer
+	signerPath := filepath.Join(stateDir, "policy-signer.pub")
+	require.NoError(t, os.WriteFile(signerPath, publicKey.Bytes(), 0o600))
+	signerDigest := sha256.Sum256(publicKey.Bytes())
+	channelHash := sha256.Sum256([]byte(testfixture.ChannelID))
+	genesisPath := filepath.Join(stateDir, fmt.Sprintf("genesis-%x", channelHash))
+	genesisHash, err := json.Marshal(hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(genesisPath, genesisHash, 0o600))
+	require.NoError(t, os.WriteFile(genesisPath+".block", protoutil.MarshalOrPanic(genesis), 0o600))
+
+	registry, err := enrollment.OpenProtectedRegistry(&enrollment.Manifest{
+		Mode: enrollment.Protected, Network: testfixture.Network, Node: testfixture.Node,
+		Profile: pqtransport.ProfileV1, StateDir: stateDir, LedgerDir: t.TempDir(),
+		PolicySigner: signerPath, PolicySignerDigest: hex.EncodeToString(signerDigest[:]),
+	})
+	require.NoError(t, err)
+	verified, err := provisioning.VerifyJoinHistory(
+		registry, testfixture.ChannelID, []*cb.Block{genesis, target}, target.GetHeader().GetNumber(), fixture.Crypto,
+	)
+	require.NoError(t, err)
+
+	seed := sha256.Sum256([]byte("PQ4.0C activation fixture operator"))
+	signer, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), seed[:])
+	require.NoError(t, err)
+	anchor, err := provisioning.SignVerifiedOrdererJoinAnchor(verified, signer)
+	require.NoError(t, err)
+	return anchor
 }
 
 func pq40dPromotionBlockIndex(t *testing.T, block *cb.Block) uint64 {

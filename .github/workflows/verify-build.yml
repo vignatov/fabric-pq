@@ -195,6 +195,34 @@ jobs:
             "$RUNNER_TEMP/pq-launcher.test" -test.v -test.timeout=2m -test.run '^TestPQ40EDisposableVMService$'
       - name: Vet affected packages
         run: go vet -mod=vendor ./cmd/pq-launcher ./common/deliver ./core/{peer,endorser,ledger/snapshotgrpc} ./internal/peer/node ./internal/pkg/{comm,gateway} ./internal/pkg/pqtransport/... ./orderer/common/{broadcast,channelparticipation,cluster,localconfig,multichannel,server} ./orderer/consensus/etcdraft
+  pq40e1-provenance-acceptance:
+    name: PQ4.0E.1 Fabric Provenance and Join Approval
+    runs-on: ubuntu-24.04
+    env:
+      GOFIPS140: "off"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e0 # v7.0.0
+        with:
+          go-version: 1.27.4
+      - name: Record provenance test environment
+        run: |
+          git rev-parse HEAD
+          go version
+          uname -a
+          printf 'GOFIPS140=%s\n' "$GOFIPS140"
+      - name: Test full-history verification and gated join approval
+        run: go test -mod=vendor -race -count=1 -v ./internal/pkg/pqtransport/provenance ./internal/pkg/pqtransport/provisioning ./internal/pkg/pqtransport/enrollment
+      - name: Test affected policy and activation packages
+        run: go test -mod=vendor -race -count=1 ./internal/pkg/pqtransport ./internal/pkg/pqtransport/activation/...
+      - name: Test managed non-genesis orderer join and promotion
+        run: go test -mod=vendor -race -count=1 -run '^TestPQ40EManagedOrdererNonGenesisPromotion$' ./orderer/common/multichannel
+      - name: Test managed non-genesis peer snapshot join and recovery
+        run: go test -mod=vendor -race -count=1 -run '^TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery$' ./core/peer
+      - name: Vet provenance and join approval
+        run: go vet -mod=vendor ./internal/pkg/pqtransport/... ./orderer/consensus/etcdraft ./core/peer
   unit-tests:
     name: Unit Tests
     needs: basic-checks
