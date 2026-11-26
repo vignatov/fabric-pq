@@ -25,10 +25,7 @@ func ValidateHistoricalConsensusMetadata(previous, next channelconfig.Orderer) e
 		return errors.New("consensus type changes are unsupported by offline provenance verification")
 	}
 	if next.ConsensusType() != "etcdraft" {
-		if len(next.ConsensusMetadata()) != 0 {
-			return errors.New("consensus metadata cannot be verified for this consensus type")
-		}
-		return nil
+		return errors.New("only Raft consensus is supported by offline provenance verification")
 	}
 	if previous != nil && (previous.ConsensusType() != "etcdraft" || len(previous.ConsensusMetadata()) == 0) {
 		return errors.New("preceding Raft configuration metadata is missing")

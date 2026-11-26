@@ -221,8 +221,13 @@ participation-follower membership, Raft replay, or peer snapshot checks. It
 fails closed for unsupported boundaries and consensus metadata that cannot be
 validated by the supported native Raft validator. The implementation and
 operator flow are tracked in the
-[PQ4.0E.1 provenance guide](pq4.0e1-provenance.md); acceptance, Linux CI and
-independent review remain pending. This work does not close PQ4.0B.
+[PQ4.0E.1 provenance guide](pq4.0e1-provenance.md); acceptance, final-head
+Linux CI and independent review remain pending. This work does not close PQ4.0B.
+
+History verification authenticates the snapshot boundary, not the snapshot
+state. The provisioner must independently trust the exporter and validate
+the snapshot payload hashes before signing; import-time hash checks alone
+cannot establish the authenticity of exported state.
 
 ## Admission and TLS
 

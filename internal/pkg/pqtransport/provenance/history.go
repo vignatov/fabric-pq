@@ -8,6 +8,7 @@ package provenance
 
 import (
 	"bytes"
+	"crypto/mldsa"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -15,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 
-	"crypto/mldsa"
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"

@@ -20,7 +20,6 @@ import (
 
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
-	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/kvledger"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
@@ -34,9 +33,9 @@ import (
 
 func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	fixture := testfixture.New(t)
-	genesis := testfixture.Genesis(t)
+	genesis := fixture.RaftGenesis(t)
 	update := fixture.Update(t, testfixture.Config(t, genesis))
-	block := pq40eSignedConfigBlock(t, fixture, genesis, fixture.Envelope(t, update), 1)
+	block := fixture.SignedBlock(t, genesis, fixture.Envelope(t, update), 1)
 	block.Metadata.Metadata[cb.BlockMetadataIndex_TRANSACTIONS_FILTER] = []byte{byte(pb.TxValidationCode_VALID)}
 	exportRoot := t.TempDir()
 	exporter, err := constructLedgerMgrWithTestDefaults(exportRoot)
@@ -140,31 +139,4 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	require.NotNil(t, restored.Channel(testfixture.ChannelID))
 	require.True(t, restored.Channel(testfixture.ChannelID).activation.Ready())
 	require.EqualValues(t, 1, restored.Channel(testfixture.ChannelID).Sequence())
-}
-
-func pq40eSignedConfigBlock(t *testing.T, fixture testfixture.Fixture, previous *cb.Block, envelope *cb.Envelope, lastConfig uint64) *cb.Block {
-	t.Helper()
-	block := protoutil.NewBlock(previous.GetHeader().GetNumber()+1, protoutil.BlockHeaderHash(previous.GetHeader()))
-	block.Data.Data = [][]byte{protoutil.MarshalOrPanic(envelope)}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
-	protoutil.InitBlockMetadata(block)
-
-	lastConfigBytes := protoutil.MarshalOrPanic(&cb.LastConfig{Index: lastConfig})
-	ordererMetadata := protoutil.MarshalOrPanic(&cb.OrdererBlockMetadata{LastConfig: &cb.LastConfig{Index: lastConfig}})
-	signatureHeader, err := protoutil.NewSignatureHeader(fixture.Fabric)
-	require.NoError(t, err)
-	signatureHeaderBytes := protoutil.MarshalOrPanic(signatureHeader)
-	signature, err := fixture.Fabric.Sign(util.ConcatenateBytes(
-		ordererMetadata, signatureHeaderBytes, protoutil.BlockHeaderBytes(block.GetHeader()),
-	))
-	require.NoError(t, err)
-	block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES] = protoutil.MarshalOrPanic(&cb.Metadata{
-		Value: ordererMetadata,
-		Signatures: []*cb.MetadataSignature{{
-			SignatureHeader: signatureHeaderBytes,
-			Signature:       signature,
-		}},
-	})
-	block.Metadata.Metadata[cb.BlockMetadataIndex_LAST_CONFIG] = protoutil.MarshalOrPanic(&cb.Metadata{Value: lastConfigBytes})
-	return block
 }

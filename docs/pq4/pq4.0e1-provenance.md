@@ -13,9 +13,9 @@ select a genesis trust anchor from the candidate join block or history.
 then verifies a complete sequence from block zero through the requested
 non-genesis configuration block.
 
-The verifier checks each block's channel identity, consecutive number,
-previous-header link, data hash, signed `LAST_CONFIG` index and duplicate
-`LAST_CONFIG` metadata. Fabric's native block-verification assistant validates
+Registry-bound history verification checks each block's channel identity,
+consecutive number, previous-header link, data hash, signed `LAST_CONFIG`
+index and duplicate `LAST_CONFIG` metadata. Fabric's native block-verification assistant validates
 block signatures under the historical `BlockValidation` policy. Every
 configuration update is authorized against the preceding configuration using
 Fabric's `ConfigtxValidator`, then checked using native bundle compatibility
@@ -24,11 +24,12 @@ recorded. The target configuration's deterministic digest and sequence must
 match the authenticated local policy binding for the same network, node,
 channel and `pactway-pq-tls-v1` profile.
 
-For Raft channels, native consensus-metadata validation checks the config
-metadata and TLS certificates against the applicable orderer MSP roots.
-Consensus-type transitions and unrecognized opaque consensus metadata are
-unsupported and fail closed. Static history verification cannot prove that a
-live quorum or the intended snapshot voter set is ready. Participation
+Only Raft channels are supported; other consensus types, including those
+with empty metadata, and consensus-type transitions fail closed. Native
+consensus-metadata validation checks the Raft config metadata and TLS
+certificates against the applicable orderer MSP roots. Static history
+verification cannot prove that a live quorum or the intended snapshot voter
+set is ready. Participation
 followers and snapshot import must still pass their existing native membership,
 replay and readiness checks.
 
@@ -43,8 +44,10 @@ The helper APIs are in `internal/pkg/pqtransport/provenance`,
 2. Supply the immutable block sequence beginning at that registry's genesis
    and ending at the exact intended configuration block.
 3. Call `provisioning.VerifyJoinHistory(registry, channel, history, target,
-   crypto)`. On any error, do not issue a join anchor. For an auditable
-   rejection report, use `provenance.VerifyHistoryWithReport`.
+   crypto)`. On any error, do not issue a join anchor. Only its registry-bound
+   result is eligible for signing. The generic
+   `provenance.VerifyHistoryWithReport` is diagnostic only and does not
+   establish trust in caller-supplied genesis or policy.
 4. Preserve `verified.Report()` as deterministic, non-secret verification
    evidence. It includes the source-history identity, trusted genesis,
    verified range, target block/configuration, applicable historical policy
@@ -58,6 +61,16 @@ The helper APIs are in `internal/pkg/pqtransport/provenance`,
 6. Provision the target configuration block alongside the approved anchor
    where the existing enrollment contract requires it. The receiving peer
    still verifies metadata and every snapshot file hash before import.
+
+   For snapshots, the trusted provisioner must independently trust that the
+   exporter created the snapshot state from the verified channel history and
+   must validate the exported files against the metadata before signing.
+   `SignVerifiedPeerSnapshotAnchor` checks the metadata boundary and digest
+   syntax only; it neither reads the payload files nor proves their state
+   provenance. A maliciously replaced payload and recomputed metadata can
+   therefore be signed if the provisioner fails to establish this separate
+   trusted-exporter assumption. Import-time hash checks establish integrity
+   against the signed metadata, not authenticity of the exported state.
 
 The signing helpers require the private key corresponding to the authenticated
 policy signer. Keep that key in the external trusted provisioning authority;
@@ -74,10 +87,13 @@ does not replace Fabric-history verification.
 Focused tests exercise Fabric-generated configuration updates, Fabric MSP
 signatures, historical policy rejection, hash-link failures, incomplete
 history, wrong genesis/channel, unauthorized config transitions, local policy
-mismatch, unsupported non-configuration target, and anchor issuance gating.
+mismatch, unsupported consensus and non-configuration targets, and
+registry-bound anchor issuance gating.
 Linux race-enabled integration tests now exercise registry-bound history
 verification and gated anchor issuance through native managed orderer
 promotion and peer snapshot import/recovery. The exact race and vet commands
-pass locally in a disposable Linux container; the hosted CI job has not yet
-run. Disposable-VM acceptance and independent review remain required before
-PQ4.0E development acceptance can be declared complete.
+passed locally in a disposable Linux container on the initial review head.
+The hosted PQ4.0E.1 job and PQ4.0E disposable-VM step passed on commit
+`1b47d8bf0`, but Basic Checks failed and full unit/integration checks were
+skipped. Final-head hosted CI, disposable-VM evidence and independent review
+remain required before PQ4.0E development acceptance can be declared complete.

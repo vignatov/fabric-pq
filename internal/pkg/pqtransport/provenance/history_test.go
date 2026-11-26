@@ -14,12 +14,12 @@ import (
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	mspproto "github.com/hyperledger/fabric-protos-go-apiv2/msp"
+	ordererproto "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation/testfixture"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/enrollment"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/provenance"
-	"github.com/hyperledger/fabric/internal/pkg/pqtransport/provisioning"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -27,7 +27,7 @@ import (
 
 func TestVerifyHistoryFromTrustedGenesisThroughConfigurationTransitions(t *testing.T) {
 	fixture := testfixture.New(t)
-	genesis := testfixture.Genesis(t)
+	genesis := fixture.RaftGenesis(t)
 	base := testfixture.Config(t, genesis)
 	config1 := fixture.Update(t, base)
 	configBlock1 := appendBlock(t, fixture, genesis, fixture.Envelope(t, config1), 1)
@@ -48,7 +48,7 @@ func TestVerifyHistoryFromTrustedGenesisThroughConfigurationTransitions(t *testi
 	require.Equal(t, uint64(0), report.VerifiedFromBlock)
 	require.Equal(t, uint64(3), report.VerifiedThroughBlock)
 	require.Equal(t, uint64(2), report.TargetConfigurationSequence)
-	require.Equal(t, 3, len(report.VerificationPolicyIdentities))
+	require.Len(t, report.VerificationPolicyIdentities, 3)
 	require.Equal(t, "PASS", report.VerificationResult)
 
 	identity, ok := verified.JoinIdentity()
@@ -71,37 +71,26 @@ func TestVerifyHistoryFromTrustedGenesisThroughConfigurationTransitions(t *testi
 	target := verified.TargetBlock()
 	target.Header.DataHash[0] ^= 0xff
 	require.True(t, proto.Equal(configBlock2, verified.TargetBlock()))
+}
 
-	seed := sha256.Sum256([]byte("PQ4.0E.1 provenance test signer"))
-	signer, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), seed[:])
-	require.NoError(t, err)
-	signedOrdererAnchor, err := provisioning.SignVerifiedOrdererJoinAnchor(verified, signer)
-	require.NoError(t, err)
-	verifySignedJoin(t, signedOrdererAnchor, enrollment.OrdererJoinAnchorDomain, signer)
-	otherSeed := sha256.Sum256([]byte("unrelated provenance signer"))
-	otherSigner, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), otherSeed[:])
-	require.NoError(t, err)
-	_, err = provisioning.SignVerifiedOrdererJoinAnchor(verified, otherSigner)
-	require.ErrorContains(t, err, "does not match the authenticated")
-
-	snapshotMetadata, err := json.Marshal(map[string]any{
-		"channel_name": testfixture.ChannelID, "last_block_number": uint64(3),
-		"last_block_hash":           report.TargetBlockHash,
-		"snapshot_files_raw_hashes": map[string]string{"state.data": hex.EncodeToString(make([]byte, sha256.Size))},
-	})
-	require.NoError(t, err)
-	snapshotAnchor, err := provisioning.SignVerifiedPeerSnapshotAnchor(verified, snapshotMetadata, []byte(`{"additional":true}`), signer)
-	require.NoError(t, err)
-	verifySignedJoin(t, snapshotAnchor, enrollment.PeerSnapshotAnchorDomain, signer)
-	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, []byte(`{"channel_name":"wrong"}`), nil, signer)
-	require.ErrorContains(t, err, "metadata does not identify")
-	_, err = provisioning.SignVerifiedOrdererJoinAnchor(nil, signer)
-	require.ErrorContains(t, err, "verified Fabric provenance")
+func TestVerifyHistoryRejectsUnsupportedConsensusWithoutMetadata(t *testing.T) {
+	fixture := testfixture.New(t)
+	genesis := testfixture.Genesis(t)
+	consensus := &ordererproto.ConsensusType{}
+	require.NoError(t, proto.Unmarshal(testfixture.Config(t, genesis).GetChannelGroup().GetGroups()["Orderer"].GetValues()["ConsensusType"].GetValue(), consensus))
+	require.NotEqual(t, "etcdraft", consensus.GetType())
+	require.Empty(t, consensus.GetMetadata())
+	config := fixture.Update(t, testfixture.Config(t, genesis))
+	target := fixture.SignedBlock(t, genesis, fixture.Envelope(t, config), 1)
+	request := verificationRequest(t, []*common.Block{genesis, target}, target, config.GetConfig())
+	verified, err := provenance.VerifyHistory(request)
+	require.Nil(t, verified)
+	require.ErrorContains(t, err, "only Raft consensus is supported")
 }
 
 func TestVerifyHistoryRejectsIncompleteOrUnauthorisedEvidence(t *testing.T) {
 	fixture := testfixture.New(t)
-	genesis := testfixture.Genesis(t)
+	genesis := fixture.RaftGenesis(t)
 	base := testfixture.Config(t, genesis)
 	config1 := fixture.Update(t, base)
 	configBlock1 := appendBlock(t, fixture, genesis, fixture.Envelope(t, config1), 1)
@@ -161,14 +150,14 @@ func TestVerifyHistoryRejectsIncompleteOrUnauthorisedEvidence(t *testing.T) {
 				signatures, err := protoutil.GetMetadataFromBlock(block, common.BlockMetadataIndex_SIGNATURES)
 				require.NoError(t, err)
 				signatureHeader := &common.SignatureHeader{}
-				require.NoError(t, proto.Unmarshal(signatures.Signatures[0].SignatureHeader, signatureHeader))
+				require.NoError(t, proto.Unmarshal(signatures.GetSignatures()[0].GetSignatureHeader(), signatureHeader))
 				creator := &mspproto.SerializedIdentity{}
-				require.NoError(t, proto.Unmarshal(signatureHeader.Creator, creator))
+				require.NoError(t, proto.Unmarshal(signatureHeader.GetCreator(), creator))
 				creator.Mspid = "UnauthorisedMSP"
 				signatureHeader.Creator = protoutil.MarshalOrPanic(creator)
 				signatureHeaderBytes := protoutil.MarshalOrPanic(signatureHeader)
 				signature, err := fixture.Fabric.Sign(util.ConcatenateBytes(
-					signatures.Value, signatureHeaderBytes, protoutil.BlockHeaderBytes(block.Header),
+					signatures.GetValue(), signatureHeaderBytes, protoutil.BlockHeaderBytes(block.GetHeader()),
 				))
 				require.NoError(t, err)
 				signatures.Signatures[0].SignatureHeader = signatureHeaderBytes
@@ -185,10 +174,10 @@ func TestVerifyHistoryRejectsIncompleteOrUnauthorisedEvidence(t *testing.T) {
 				configEnvelope := &common.ConfigEnvelope{}
 				_, err := protoutil.UnmarshalEnvelopeOfType(mustEnvelope(t, request.History[1]), common.HeaderType_CONFIG, configEnvelope)
 				require.NoError(t, err)
-				payload, err := protoutil.UnmarshalPayload(configEnvelope.LastUpdate.Payload)
+				payload, err := protoutil.UnmarshalPayload(configEnvelope.GetLastUpdate().GetPayload())
 				require.NoError(t, err)
 				updateEnvelope := &common.ConfigUpdateEnvelope{}
-				require.NoError(t, proto.Unmarshal(payload.Data, updateEnvelope))
+				require.NoError(t, proto.Unmarshal(payload.GetData(), updateEnvelope))
 				updateEnvelope.Signatures[0].Signature[0] ^= 0xff
 				payload.Data = protoutil.MarshalOrPanic(updateEnvelope)
 				configEnvelope.LastUpdate.Payload = protoutil.MarshalOrPanic(payload)
@@ -284,28 +273,7 @@ func authenticatedPolicy(t *testing.T, fixture testfixture.Fixture, config *comm
 
 func appendBlock(t *testing.T, fixture testfixture.Fixture, previous *common.Block, envelope *common.Envelope, lastConfig uint64) *common.Block {
 	t.Helper()
-	block := protoutil.NewBlock(previous.Header.Number+1, protoutil.BlockHeaderHash(previous.Header))
-	block.Data.Data = [][]byte{protoutil.MarshalOrPanic(envelope)}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
-	protoutil.InitBlockMetadata(block)
-
-	lastConfigBytes := protoutil.MarshalOrPanic(&common.LastConfig{Index: lastConfig})
-	ordererMetadata := protoutil.MarshalOrPanic(&common.OrdererBlockMetadata{LastConfig: &common.LastConfig{Index: lastConfig}})
-	signatureHeader, err := protoutil.NewSignatureHeader(fixture.Fabric)
-	require.NoError(t, err)
-	signatureHeaderBytes := protoutil.MarshalOrPanic(signatureHeader)
-	signature, err := fixture.Fabric.Sign(util.ConcatenateBytes(ordererMetadata, signatureHeaderBytes, protoutil.BlockHeaderBytes(block.Header)))
-	require.NoError(t, err)
-
-	block.Metadata.Metadata[common.BlockMetadataIndex_SIGNATURES] = protoutil.MarshalOrPanic(&common.Metadata{
-		Value: ordererMetadata,
-		Signatures: []*common.MetadataSignature{{
-			SignatureHeader: signatureHeaderBytes,
-			Signature:       signature,
-		}},
-	})
-	block.Metadata.Metadata[common.BlockMetadataIndex_LAST_CONFIG] = protoutil.MarshalOrPanic(&common.Metadata{Value: lastConfigBytes})
-	return block
+	return fixture.SignedBlock(t, previous, envelope, lastConfig)
 }
 
 func messageEnvelope(t *testing.T, fixture testfixture.Fixture) *common.Envelope {
@@ -317,9 +285,9 @@ func messageEnvelope(t *testing.T, fixture testfixture.Fixture) *common.Envelope
 
 func replaceEnvelope(t *testing.T, fixture testfixture.Fixture, previous *common.Block, envelope *common.Envelope, lastConfig uint64) *common.Block {
 	t.Helper()
-	block := protoutil.NewBlock(previous.Header.Number, previous.Header.PreviousHash)
+	block := protoutil.NewBlock(previous.GetHeader().GetNumber(), previous.GetHeader().GetPreviousHash())
 	block.Data.Data = [][]byte{protoutil.MarshalOrPanic(envelope)}
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 	protoutil.InitBlockMetadata(block)
 
 	lastConfigBytes := protoutil.MarshalOrPanic(&common.LastConfig{Index: lastConfig})
@@ -327,7 +295,7 @@ func replaceEnvelope(t *testing.T, fixture testfixture.Fixture, previous *common
 	signatureHeader, err := protoutil.NewSignatureHeader(fixture.Fabric)
 	require.NoError(t, err)
 	signatureHeaderBytes := protoutil.MarshalOrPanic(signatureHeader)
-	signature, err := fixture.Fabric.Sign(util.ConcatenateBytes(ordererMetadata, signatureHeaderBytes, protoutil.BlockHeaderBytes(block.Header)))
+	signature, err := fixture.Fabric.Sign(util.ConcatenateBytes(ordererMetadata, signatureHeaderBytes, protoutil.BlockHeaderBytes(block.GetHeader())))
 	require.NoError(t, err)
 	block.Metadata.Metadata[common.BlockMetadataIndex_SIGNATURES] = protoutil.MarshalOrPanic(&common.Metadata{
 		Value: ordererMetadata,
@@ -362,11 +330,4 @@ func cloneHistory(t *testing.T, history []*common.Block) []*common.Block {
 		cloned[index] = proto.Clone(block).(*common.Block)
 	}
 	return cloned
-}
-
-func verifySignedJoin(t *testing.T, encoded []byte, domain string, signer *mldsa.PrivateKey) {
-	t.Helper()
-	var envelope enrollment.Envelope
-	require.NoError(t, json.Unmarshal(encoded, &envelope))
-	require.NoError(t, mldsa.Verify(signer.Public().(*mldsa.PublicKey), append([]byte(domain), envelope.Payload...), envelope.Signature, nil))
 }

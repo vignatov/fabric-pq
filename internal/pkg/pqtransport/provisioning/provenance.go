@@ -22,9 +22,23 @@ import (
 	"github.com/hyperledger/fabric/protoutil"
 )
 
+// VerifiedJoinHistory can only be obtained by verifying against a registry.
+// The generic provenance verifier's result is not eligible for anchor issuance.
+type VerifiedJoinHistory struct {
+	history *provenance.VerifiedHistory
+}
+
+// Report returns the verification evidence for a registry-bound result.
+func (v *VerifiedJoinHistory) Report() provenance.Report {
+	if v == nil {
+		return provenance.Report{}
+	}
+	return v.history.Report()
+}
+
 // VerifyJoinHistory binds complete history replay to the exact genesis anchor,
 // transport policy and node identity already authenticated by Registry.
-func VerifyJoinHistory(registry *enrollment.Registry, channel string, history []*cb.Block, targetBlockNumber uint64, crypto bccsp.BCCSP) (*provenance.VerifiedHistory, error) {
+func VerifyJoinHistory(registry *enrollment.Registry, channel string, history []*cb.Block, targetBlockNumber uint64, crypto bccsp.BCCSP) (*VerifiedJoinHistory, error) {
 	if registry == nil {
 		return nil, errors.New("authenticated protected registry is required")
 	}
@@ -39,17 +53,21 @@ func VerifyJoinHistory(registry *enrollment.Registry, channel string, history []
 	if genesis.GetHeader() == nil {
 		return nil, errors.New("authenticated genesis block has no header")
 	}
-	return provenance.VerifyHistory(provenance.Request{
+	verified, err := provenance.VerifyHistory(provenance.Request{
 		Network: registry.Network(), Node: registry.Node(), Channel: channel,
 		TrustedGenesisHash: hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())),
 		TargetBlockNumber:  targetBlockNumber, History: history,
 		Policy: registry.TransportPolicy(), Crypto: crypto,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &VerifiedJoinHistory{history: verified}, nil
 }
 
 // SignVerifiedOrdererJoinAnchor signs an orderer anchor only from a completed
 // provenance verification and only with the corresponding policy signer.
-func SignVerifiedOrdererJoinAnchor(verified *provenance.VerifiedHistory, signer *mldsa.PrivateKey) ([]byte, error) {
+func SignVerifiedOrdererJoinAnchor(verified *VerifiedJoinHistory, signer *mldsa.PrivateKey) ([]byte, error) {
 	anchor, err := joinAnchorFromVerified(verified, signer)
 	if err != nil {
 		return nil, err
@@ -58,8 +76,10 @@ func SignVerifiedOrdererJoinAnchor(verified *provenance.VerifiedHistory, signer 
 }
 
 // SignVerifiedPeerSnapshotAnchor signs a peer snapshot anchor only when the
-// metadata names the exact verified configuration-block boundary.
-func SignVerifiedPeerSnapshotAnchor(verified *provenance.VerifiedHistory, signable, additional []byte, signer *mldsa.PrivateKey) ([]byte, error) {
+// metadata names the exact verified configuration-block boundary. The caller
+// must independently trust the exporter and snapshot state; this function does
+// not read snapshot files or establish their provenance.
+func SignVerifiedPeerSnapshotAnchor(verified *VerifiedJoinHistory, signable, additional []byte, signer *mldsa.PrivateKey) ([]byte, error) {
 	joinAnchor, err := joinAnchorFromVerified(verified, signer)
 	if err != nil {
 		return nil, err
@@ -91,10 +111,11 @@ func SignVerifiedPeerSnapshotAnchor(verified *provenance.VerifiedHistory, signab
 	return signJoinAnchor(signer, enrollment.PeerSnapshotAnchorDomain, anchor)
 }
 
-func joinAnchorFromVerified(verified *provenance.VerifiedHistory, signer *mldsa.PrivateKey) (enrollment.JoinAnchor, error) {
-	if verified == nil || !verified.Verified() {
+func joinAnchorFromVerified(result *VerifiedJoinHistory, signer *mldsa.PrivateKey) (enrollment.JoinAnchor, error) {
+	if result == nil || !result.history.Verified() {
 		return enrollment.JoinAnchor{}, errors.New("verified Fabric provenance is required before join-anchor issuance")
 	}
+	verified := result.history
 	if signer == nil {
 		return enrollment.JoinAnchor{}, errors.New("join-anchor signer does not match the authenticated Pactway policy signer")
 	}

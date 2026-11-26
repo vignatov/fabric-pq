@@ -92,7 +92,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Signed manifest, protected history and Linux launcher | Linux race and subprocess tests passed; managed deployment incomplete |
 | Fixed managed systemd unit and installer | Disposable systemd VM test installs and inspects the real unit |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Disposable VM test covers the trusted service-manager boundary; production validation pending |
-| Authenticated onboarding and non-genesis join provenance | Existing signed anchors bind the target and protected genesis; PQ4.0E.1 replays complete history before issuance. Local Linux race tests cover managed orderer issuance/promotion and peer snapshot issuance/import/recovery. Hosted CI and final acceptance evidence remain pending. |
+| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. Local Linux race tests cover managed orderer issuance/promotion and peer snapshot issuance/import/recovery. Snapshot state authenticity additionally requires a trusted exporter and provisioner verification of payload hashes; history replay alone does not establish it. Final-head hosted CI and acceptance evidence remain pending. |
 | Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
@@ -138,23 +138,27 @@ an external provisioning responsibility and is not part of node state.
 
 Offline verification does not establish live Raft quorum or voter readiness;
 the existing participation-follower promotion and snapshot paths must continue
-to perform their native checks. Consensus-type transitions and opaque
-consensus metadata that cannot be checked by the supported native Raft
-validator fail closed. The supported peer snapshot boundary remains a
-configuration block.
+to perform their native checks. Only Raft consensus is supported; other
+consensus types and consensus-type transitions fail closed. The supported peer
+snapshot boundary remains a configuration block. Snapshot state provenance
+requires an independently trusted exporter and provisioner verification of
+payload hashes; replay and import-time integrity checks do not prove it.
 
 Focused history tests use Fabric-generated configuration updates and actual
 Fabric MSP signatures. They cover complete history, invalid signatures,
 valid signatures presented under an unauthorized MSP identity, broken links,
 missing blocks, unauthorized configuration updates, wrong genesis/channel,
-checkpoint mismatch, unsupported snapshot boundary, and gated anchor signing.
+checkpoint mismatch, unsupported consensus and snapshot boundaries, and
+registry-bound anchor signing.
 Linux race integration tests also exercise registry-bound anchor issuance
 through native managed orderer promotion and peer snapshot import/recovery.
 The protected-registry genesis-binding test is Linux-only because the
 activation store requires directory syncing. Local disposable Linux race
-tests and `go vet` pass. The hosted CI job, disposable-VM acceptance and
-independent review remain pending for this branch. Do not mark the development
-gate complete based on these focused tests.
+tests and `go vet` passed on the initial review head. The hosted PQ4.0E.1
+job and PQ4.0E disposable-VM step passed on commit `1b47d8bf0`, but Basic
+Checks failed, so full unit/integration checks were skipped. Final-head CI,
+disposable-VM evidence and independent review remain pending. Do not mark the
+development gate complete based on these focused tests.
 
 Local validation was run on Linux/amd64 with Go 1.27.4, `GOFIPS140=off`, in a
 disposable `golang:1.27.4` container. All commands below passed:

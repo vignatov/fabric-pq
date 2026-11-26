@@ -84,6 +84,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | Required mTLS and classical/missing client rejection | PASS | Component mTLS listener only; endpoint-specific proofs remain below. |
 | Signed bootstrap before actual node readiness and protected checkpoint | PASS (managed-process scope) | PQ4.0E native peer/orderer startup and disposable-VM evidence authenticate enrollment and protected checkpoint before managed service readiness; this is not network-wide PQ4 transport acceptance. |
 | Identity binding and stale/conflicting bootstrap rejection | PASS (managed-process scope) | PQ4.0E launcher, registry and restart tests bind signed manifest/history, node/network identity, pinned signer and protected checkpoint; complete privileged-host rollback remains excluded. |
+| Independently established peer snapshot-state provenance | INCOMPLETE | Full-history replay authenticates the block boundary, not the snapshot state; trusted-exporter provenance and pre-signing payload verification remain operator assumptions. |
 | No downgrade through clones, credentials and restarts | INCOMPLETE | PQ4.0E exercises managed restart and strict selected listeners, but not every credential factory, all connection lifetimes, or unsupported old binaries under a real PQ4 capability. |
 | Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
@@ -128,13 +129,21 @@ using the native validator, and matches the result to the authenticated
 Pactway policy/checkpoint. The verifier rejects an unauthorized intermediate
 configuration even if the target block is well-formed.
 
+Peer snapshot state provenance is not established by history replay or
+import-time hash checks. The provisioner must independently trust the
+snapshot exporter and validate its files against the metadata before signing.
+This additional assumption leaves independent snapshot-state provenance
+**INCOMPLETE**.
+
 Focused Fabric-history and anchor-issuance tests pass on Windows/amd64, and
 the exact Linux race and vet commands pass locally in a disposable Go
 container. The Linux protected-registry test, managed non-genesis orderer
 join/promotion, and managed peer snapshot issuance/import/recovery integration
-also pass locally. The hosted CI job, disposable-VM acceptance and independent
-review are still pending. Therefore PQ4.0E.1 acceptance remains **INCOMPLETE**;
-neither this update nor the existing PQ4.0E process evidence closes PQ4.0B.
+also pass locally. The hosted PQ4.0E.1 job passed on commit `1b47d8bf0`, but
+Basic Checks failed and full unit/integration checks were skipped. Final-head
+CI, disposable-VM evidence and independent review remain pending. Therefore
+PQ4.0E.1 acceptance remains **INCOMPLETE**; neither this update nor the
+existing PQ4.0E process evidence closes PQ4.0B.
 
 ## Lifecycle review stop
 
