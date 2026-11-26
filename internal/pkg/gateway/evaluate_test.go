@@ -388,9 +388,7 @@ func TestEvaluate(t *testing.T) {
 // goroutine must not block forever trying to report its failure.
 func TestEvaluateDoesNotLeakGoroutineOnTimeout(t *testing.T) {
 	const fn = "gateway.(*Server).Evaluate.func"
-	// Earlier timeout tests can still have mock RPCs returning in the background.
-	require.Eventually(t, func() bool { return goroutinesInFunction(fn) == 0 }, 2*time.Second, 20*time.Millisecond,
-		"previous Evaluate workers have not exited")
+	waitForNoGoroutinesInFunction(t, fn)
 
 	tt := &testDef{
 		members:           []networkMember{{"id1", "localhost:7051", "msp1", 3}},

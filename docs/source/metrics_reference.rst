@@ -168,6 +168,11 @@ The following orderer metrics are exported for consumption by Prometheus.
 |                                                      |           |                                                            +-----------+--------------------------------------------------------------------+
 |                                                      |           |                                                            | data_type |                                                                    |
 +------------------------------------------------------+-----------+------------------------------------------------------------+-----------+--------------------------------------------------------------------+
+| deliver_sessions_held                                | gauge     | The number of deliver session permits currently held.      | pool      |                                                                    |
++------------------------------------------------------+-----------+------------------------------------------------------------+-----------+--------------------------------------------------------------------+
+| deliver_sessions_rejected                            | counter   | The number of deliver sessions rejected because the        | pool      |                                                                    |
+|                                                      |           | deliver concurrency limit was reached.                     |           |                                                                    |
++------------------------------------------------------+-----------+------------------------------------------------------------+-----------+--------------------------------------------------------------------+
 | deliver_streams_closed                               | counter   | The number of GRPC streams that have been closed for the   |           |                                                                    |
 |                                                      |           | deliver service.                                           |           |                                                                    |
 +------------------------------------------------------+-----------+------------------------------------------------------------+-----------+--------------------------------------------------------------------+
@@ -370,6 +375,11 @@ associated with the metric.
 +---------------------------------------------------------------------------+-----------+------------------------------------------------------------+
 | deliver.requests_received.%{channel}.%{filtered}.%{data_type}             | counter   | The number of deliver requests that have been received.    |
 +---------------------------------------------------------------------------+-----------+------------------------------------------------------------+
+| deliver.sessions_held.%{pool}                                             | gauge     | The number of deliver session permits currently held.      |
++---------------------------------------------------------------------------+-----------+------------------------------------------------------------+
+| deliver.sessions_rejected.%{pool}                                         | counter   | The number of deliver sessions rejected because the        |
+|                                                                           |           | deliver concurrency limit was reached.                     |
++---------------------------------------------------------------------------+-----------+------------------------------------------------------------+
 | deliver.streams_closed                                                    | counter   | The number of GRPC streams that have been closed for the   |
 |                                                                           |           | deliver service.                                           |
 +---------------------------------------------------------------------------+-----------+------------------------------------------------------------+
@@ -539,6 +549,15 @@ The following peer metrics are exported for consumption by Prometheus.
 | gossip_comm_messages_sent                           | counter   | Number of messages sent                                    |                  |                                                             |
 +-----------------------------------------------------+-----------+------------------------------------------------------------+------------------+-------------------------------------------------------------+
 | gossip_comm_overflow_count                          | counter   | Number of outgoing queue buffer overflows                  |                  |                                                             |
++-----------------------------------------------------+-----------+------------------------------------------------------------+------------------+-------------------------------------------------------------+
+| gossip_comm_receive_budget_drops                    | counter   | Number of connections dropped for exceeding the            |                  |                                                             |
+|                                                     |           | per-connection receive byte budget                         |                  |                                                             |
++-----------------------------------------------------+-----------+------------------------------------------------------------+------------------+-------------------------------------------------------------+
+| gossip_comm_receive_shared_evictions                | counter   | Number of connections evicted for exceeding the node-wide  |                  |                                                             |
+|                                                     |           | receive byte budget                                        |                  |                                                             |
++-----------------------------------------------------+-----------+------------------------------------------------------------+------------------+-------------------------------------------------------------+
+| gossip_comm_receive_shared_overcommit               | counter   | Number of times the node-wide receive byte budget was      |                  |                                                             |
+|                                                     |           | exceeded by undelivered bytes of removed connections       |                  |                                                             |
 +-----------------------------------------------------+-----------+------------------------------------------------------------+------------------+-------------------------------------------------------------+
 | gossip_leader_election_leader                       | gauge     | Peer is leader (1) or follower (0)                         | channel          |                                                             |
 +-----------------------------------------------------+-----------+------------------------------------------------------------+------------------+-------------------------------------------------------------+
@@ -719,6 +738,15 @@ associated with the metric.
 | gossip.comm.messages_sent                                                               | counter   | Number of messages sent                                    |
 +-----------------------------------------------------------------------------------------+-----------+------------------------------------------------------------+
 | gossip.comm.overflow_count                                                              | counter   | Number of outgoing queue buffer overflows                  |
++-----------------------------------------------------------------------------------------+-----------+------------------------------------------------------------+
+| gossip.comm.receive_budget_drops                                                        | counter   | Number of connections dropped for exceeding the            |
+|                                                                                         |           | per-connection receive byte budget                         |
++-----------------------------------------------------------------------------------------+-----------+------------------------------------------------------------+
+| gossip.comm.receive_shared_evictions                                                    | counter   | Number of connections evicted for exceeding the node-wide  |
+|                                                                                         |           | receive byte budget                                        |
++-----------------------------------------------------------------------------------------+-----------+------------------------------------------------------------+
+| gossip.comm.receive_shared_overcommit                                                   | counter   | Number of times the node-wide receive byte budget was      |
+|                                                                                         |           | exceeded by undelivered bytes of removed connections       |
 +-----------------------------------------------------------------------------------------+-----------+------------------------------------------------------------+
 | gossip.leader_election.leader.%{channel}                                                | gauge     | Peer is leader (1) or follower (0)                         |
 +-----------------------------------------------------------------------------------------+-----------+------------------------------------------------------------+

@@ -80,7 +80,7 @@ func (gs *Server) ChaincodeEvents(signedRequest *gp.SignedChaincodeEventsRequest
 		return status.Error(codes.Aborted, err.Error())
 	}
 
-	eventsIter := event.NewChaincodeEventsIterator(ledgerIter)
+	eventsIter := event.NewChaincodeEventsIterator(ledgerIter, request.GetAfterTransactionId())
 	closeIterator := sync.OnceFunc(eventsIter.Close)
 	defer closeIterator()
 	if generation != nil {
@@ -132,24 +132,8 @@ func (gs *Server) ChaincodeEvents(signedRequest *gp.SignedChaincodeEventsRequest
 
 func chaincodeEventMatcher(request *gp.ChaincodeEventsRequest) func(event *peer.ChaincodeEvent) bool {
 	chaincodeID := request.GetChaincodeId()
-	previousTransactionID := request.GetAfterTransactionId()
-
-	if len(previousTransactionID) == 0 {
-		return func(event *peer.ChaincodeEvent) bool {
-			return event.GetChaincodeId() == chaincodeID
-		}
-	}
-
-	passedPreviousTransaction := false
 
 	return func(event *peer.ChaincodeEvent) bool {
-		if !passedPreviousTransaction {
-			if event.GetTxId() == previousTransactionID {
-				passedPreviousTransaction = true
-			}
-			return false
-		}
-
 		return event.GetChaincodeId() == chaincodeID
 	}
 }

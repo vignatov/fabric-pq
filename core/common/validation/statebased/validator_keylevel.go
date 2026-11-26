@@ -198,6 +198,11 @@ func NewKeyLevelValidator(evaluator RWSetPolicyEvaluatorFactory, vpmgr KeyLevelV
 }
 
 func (klv *KeyLevelValidator) extractDependenciesForTx(blockNum, txNum uint64, envelopeBytes []byte) {
+	// GetValidationParameterForKey waits on every prior tx's dep signal, so
+	// extraction must be signaled even when the tx carries no usable deps.
+	var rwset []byte
+	defer func() { klv.vpmgr.ExtractValidationParameterDependency(blockNum, txNum, rwset) }()
+
 	env, err := protoutil.GetEnvelopeFromBlock(envelopeBytes)
 	if err != nil {
 		logger.Warningf("while executing GetEnvelopeFromBlock got error '%s', skipping tx at height (%d,%d)", err, blockNum, txNum)
@@ -213,6 +218,12 @@ func (klv *KeyLevelValidator) extractDependenciesForTx(blockNum, txNum uint64, e
 	tx, err := protoutil.UnmarshalTransaction(payl.GetData())
 	if err != nil {
 		logger.Warningf("while executing GetTransaction got error '%s', skipping tx at height (%d,%d)", err, blockNum, txNum)
+		return
+	}
+
+	// Blocks may contain structurally invalid txs without actions; skip them.
+	if len(tx.GetActions()) == 0 {
+		logger.Warningf("transaction without actions at height (%d,%d), skipping tx", blockNum, txNum)
 		return
 	}
 
@@ -234,7 +245,7 @@ func (klv *KeyLevelValidator) extractDependenciesForTx(blockNum, txNum uint64, e
 		return
 	}
 
-	klv.vpmgr.ExtractValidationParameterDependency(blockNum, txNum, respPayload.GetResults())
+	rwset = respPayload.GetResults()
 }
 
 // PreValidate implements the function of the StateBasedValidator interface
@@ -336,6 +347,11 @@ func (klv *KeyLevelValidator) Validate(cc string, blockNum, txNum uint64, rwsetB
 // PostValidate implements the function of the StateBasedValidator interface
 func (klv *KeyLevelValidator) PostValidate(cc string, blockNum, txNum uint64, err error) {
 	klv.vpmgr.SetTxValidationResult(cc, blockNum, txNum, err)
+}
+
+// SignalInvalidTx implements the function of the StateBasedValidator interface
+func (klv *KeyLevelValidator) SignalInvalidTx(blockNum, txNum uint64, err error) {
+	klv.vpmgr.SignalInvalidTx(blockNum, txNum, err)
 }
 
 func policyErr(err error) *commonerrors.VSCCEndorsementPolicyError {

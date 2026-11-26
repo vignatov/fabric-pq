@@ -161,6 +161,28 @@ peer:
     recvBuffSize: 20
     # Buffer size of sending messages
     sendBuffSize: 200
+    # Maximum wire bytes of received messages a single connection may hold
+    # unconsumed before the connection is closed (unit: bytes). Bounds the
+    # memory a slow or flooding peer can pin on this node. If unset, defaults
+    # to 2.5 times peer.maxRecvMsgSize (two maximum-size envelopes plus
+    # headroom), and scales automatically with peer.maxRecvMsgSize; a third
+    # maximum-size envelope arriving while two are still unconsumed exceeds
+    # the budget and drops the connection. A non-positive value disables the
+    # limit.
+    # maxRecvBytesInFlight: 262144000
+    # Maximum wire bytes of received messages retained across all live
+    # gossip connections, queued or awaiting consumption (unit: bytes); on
+    # excess the live connection holding the most in-flight bytes is closed.
+    # If unset, defaults to 4 times the effective maxRecvBytesInFlight
+    # (4 times 2.5x peer.maxRecvMsgSize when that is unset or disabled).
+    # A non-positive value disables the limit.
+    # The bound covers the gossip receive pipeline up to message handling;
+    # channel message stores, state-transfer queues, and the block payload
+    # buffer sit past that boundary and apply their own bounds, and bytes
+    # already delivered by removed connections keep counting until consumed
+    # (bounded by subscriber and state queue capacities) — so this is not a
+    # full heap bound.
+    # maxRecvBytesTotal: 1048576000
     # Time to wait before pull engine processes incoming digests (unit: second)
     # Should be slightly smaller than requestWaitTime
     digestWaitTime: 1s
@@ -687,6 +709,24 @@ ledger:
     stateDatabase: goleveldb
     # Limit on the number of records to return per query
     totalQueryLimit: 100000
+    # Limit on the total size (in bytes) of the keys and values, including
+    # private data, that a transaction simulation may accumulate in its
+    # read-write set (reads, writes, and range query results). A simulation
+    # that exceeds this limit is rejected and the endorsement fails. This is
+    # a memory-safety ceiling for the peer, not a deliverability guarantee:
+    # the proposal response is separately bounded by peer.maxSendMsgSize and
+    # an orderable transaction by the channel's BatchSize.AbsoluteMaxBytes.
+    # The metered size combines the actual key, value, hash, and
+    # state-metadata bytes with fixed per-entry overheads for the runtime
+    # representation (512 bytes per write, 384 per read, 512 per range
+    # query, and 128 per range query result while retained), so a
+    # transaction's entry cap is the limit divided by the per-entry charge
+    # (e.g. maxRWSetSize / (512 + len(key) + len(value)) for writes): the
+    # default below allows at most roughly 200k write or 270k read entries
+    # per transaction, and fewer as keys and values grow. The limit is enabled
+    # by default; upgrades that run legitimate bulk simulations above it
+    # need to raise the value. A value of 0 or less disables the limit.
+    maxRWSetSize: 104857600
     couchDBConfig:
       # It is recommended to run CouchDB on the same server as the peer, and
       # not map the CouchDB container port to a server port in docker-compose.
