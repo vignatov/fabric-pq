@@ -1078,6 +1078,8 @@ func TestCoordinatorStoreBlock(t *testing.T) {
 	// because we didn't define yet the "On(...)" invocation of the transient store or other peers.
 	pvtData := pdFactory.addRWSet().addNSRWSet("ns1", "c1", "c2").addRWSet().addNSRWSet("ns2", "c1").create()
 	committer.On("DoesPvtDataInfoExistInLedger", mock.Anything).Return(false, nil)
+	// Ensure the first asynchronous purge has completed before reusing tx1.
+	require.NoError(t, store.Persist("tx1", 1, &tspb.TxPvtReadWriteSetWithConfigInfo{}))
 
 	capabilityProvider := &privdatamocks.CapabilityProvider{}
 	appCapability := &privdatamocks.ApplicationCapabilities{}
