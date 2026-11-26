@@ -4,10 +4,10 @@
 
 PQ4.0E.2 now implements an authenticated snapshot-export path and has focused
 native-ledger, protected-import and recovery coverage. This report does not
-self-certify the complete PQ4.0E gate. The initial PR revision received
-focused hosted and disposable-VM evidence and an independent review, but its
-full Verify Build did not complete. The current PR head must pass the full
-matrix and the trusted provisioning assumptions still require evidence.
+self-certify the complete PQ4.0E gate. The H2 revision passed the full hosted
+Verify Build and PQ3 acceptance, but the trusted provisioning assumptions
+still require evidence and subsequent substantive changes require review.
+Later PR revisions must also pass their own final-head checks.
 
 ## Provenance and tested head
 
@@ -22,10 +22,14 @@ matrix and the trusted provisioning assumptions still require evidence.
   Its pull-request workflows checked out synthetic merge **M1**:
   `b8b5f46cb5997967d1a1035b5e6ed4b3cc79ebb8`, merging H1 into the same
   base.
+- CI-fix head **H2**: `a5295383f3faf8bbbad06388f5cc0aa029970a4f`.
+  Its pull-request workflows checked out synthetic merge **M2**:
+  `9d4aee18e968f961d79a0a39daebd81c57c53116`, merging H2 into the same
+  base.
 - The [current PR checks](https://github.com/vignatov/fabric-pq/pull/14/checks)
   provide the status of later runs. Compare their PR head and checkout
   revision with the current head and base before using them as final-head
-  evidence; results for H0/M0 do not establish later-head results.
+  evidence; results for H2/M2 do not establish later-head results.
 - Local environment: Linux/amd64 through WSL, Go 1.27.4, vendored
   dependencies, `GOFIPS140=off`. The following local runs are pre-commit
   working-tree evidence:
@@ -106,13 +110,34 @@ orderer `08d34275b876cf4352670b81906893a3484e28ee2098c695e70da21311e2cf1c`.
   generated metrics reference no longer matched. Unit and integration jobs
   were skipped. The later dependency fix keeps the snapshot filenames in the
   shared snapshot package and preserves the existing `kvledger` aliases;
-  the metrics check passes locally and must be rerun on the current head.
+  the hosted metrics check passed at H2/M2.
 - The [PQ4.0E.2 job](https://github.com/vignatov/fabric-pq/actions/runs/45805906460/job/139860964281)
   built peer and orderer binaries with SHA-256 hashes respectively
   `3789e24b189073ee25e12cfe04fef88ad08fcef4c3705eccc586ac54333e6b6f` and
   `5e6293bda4af0dad4ae8bd12819b326874465a74d00ca0ebbdf83fb2b2a7d778`.
 - [PQ3 isolated acceptance #45805906462](https://github.com/vignatov/fabric-pq/actions/runs/45805906462)
   passed on M1. These results do not establish the outcome for a later head.
+
+### Hosted evidence for H2/M2
+
+- [PR Verify Build #45810211331](https://github.com/vignatov/fabric-pq/actions/runs/45810211331)
+  passed all 18 jobs on M2: Basic Checks (including both lint runs, metrics
+  and Swagger), all seven focused PQ4 jobs, Unit Tests, and all nine
+  integration groups. No jobs were skipped. The
+  [PQ4.0E job](https://github.com/vignatov/fabric-pq/actions/runs/45810211331/job/139875775915)
+  executed and passed the disposable-VM service test.
+- The [PQ4.0E.2 job](https://github.com/vignatov/fabric-pq/actions/runs/45810211331/job/139875776274)
+  passed snapshot acceptance and managed orderer promotion. Its built peer
+  and orderer SHA-256 hashes were respectively
+  `75ca1400dc3486afd533ee6881114f449d5f80a45b4ea07ed900c5e1d28fd78c` and
+  `2215e31553b471cfe68ea38d56186be610fcb21da6f4e28554c8dd9c8be97c77`.
+- [PR PQ3 isolated acceptance #45810211209](https://github.com/vignatov/fabric-pq/actions/runs/45810211209)
+  passed on M2, including both profile runs and verification of their
+  protected evidence packages.
+- The push-triggered [Verify Build #45810203436](https://github.com/vignatov/fabric-pq/actions/runs/45810203436)
+  also passed all 18 jobs on H2, and
+  [PQ3 isolated acceptance #45810203554](https://github.com/vignatov/fabric-pq/actions/runs/45810203554)
+  passed on H2. These results do not establish the outcome for a later head.
 
 The native peer integration test generates a real Fabric snapshot and verifies
 approved export, signed approval, protected import, recovery with retained
@@ -126,42 +151,41 @@ secrets, or ledger payloads are included in public evidence.
 
 ## Security-property matrix
 
-H0/M0 identifies the initial hosted evidence above. The same focused PQ4
-and PQ3 jobs also passed at H1/M1, including the added v1 restart regression;
-neither revision completed the full unit/integration matrix. These historical
-results are not a substitute for the full current-head matrix. The snapshot
-lifecycle test uses real Fabric ledger components in a test process, not a
-separately deployed peer process.
+H2/M2 identifies the complete hosted matrix above. H0/M0 and H1/M1 did not
+complete their full unit/integration matrices. These results are not a
+substitute for checks on a later PR head. The snapshot lifecycle test uses
+real Fabric ledger components in a test process, not a separately deployed
+peer process.
 
 | Category / security property | Implementation and test evidence | Evidence class | Tested commit | Outcome and remaining limitation |
 | --- | --- | --- | --- | --- |
-| Enrollment: signed manifest and protected history | Managed launcher and enrollment verification; [status](pq4.0e-status.md) | Native peer/orderer and disposable-VM tests | H0/M0 | Focused job passed; final-head rerun required |
-| Enrollment: trusted launcher before readiness | `cmd/pq-launcher`; managed systemd test | Native peer/orderer and disposable-VM tests | H0/M0 | VM test passed; host enforcement outside the VM remains an assumption |
-| Enrollment: policy/checkpoint authentication | `internal/pkg/pqtransport/activation`; enrollment tests | Component and native process tests | H0/M0 | Focused jobs passed; full privileged-host rollback is excluded |
-| Enrollment: protected-to-baseline prohibition | Signed enrollment history and launcher | Native process and disposable-VM tests | H0/M0 | Focused jobs passed; production provisioning remains unqualified |
-| Enrollment: missing state and restart | Protected registry and recovery paths | Native peer/orderer tests | H0/M0 | Focused jobs passed; final-head restart matrix required |
-| Fabric provenance: trusted genesis and complete history | `provisioning.VerifyJoinHistory`; `provenance` package tests | Native Fabric ledger test | H0/M0 | PQ4.0E.1 job passed; final-head rerun required |
-| Fabric provenance: historical signatures and predecessor configuration authorization | PQ4.0E.1 history verifier and tests | Native Fabric ledger test | H0/M0 | Job passed; live quorum/readiness is checked by native lifecycle, not offline replay |
-| Fabric provenance: non-genesis approval and correct operator signer | `SignVerifiedOrdererJoinAnchor`; peer signing test below | Native process and ledger tests | H0/M0 | Focused promotion and snapshot tests passed; final-head rerun required |
-| Fabric provenance: unsupported history and non-configuration target | History verifier negative tests | Native Fabric ledger test | H0/M0 | PQ4.0E.1 job passed; final-head rerun required |
-| Snapshot: trusted exporter and source identity | `SnapshotExporterTrust`, signed evidence, exact trust checks; `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery` | Native Fabric ledger and peer-component test | H0/M0 | Focused job passed; actual exporter-to-ledger association remains an external trust assumption |
-| Snapshot: metadata binding and complete payload integrity | `VerifySnapshotExport`, inventory and staged hash verification | Native Fabric ledger and peer-component test | H0/M0 | Focused job passed; compromised trusted exporter can sign false state |
-| Snapshot: protected import and restart | `stageProtectedSnapshot`, durable evidence sidecar, `recoverProtectedSnapshot` | In-process native peer lifecycle test | H0/M0 | Missing evidence fails closed; deployed snapshot topology and final-head rerun remain pending |
-| Service admission: peer endorsement, Gateway, gossip, discovery, Deliver and private data | Existing PQ4.0E service inventory/tests in [status](pq4.0e-status.md) | Component and native process tests | H0/M0 | Focused job passed; full final-head regression and external topology remain pending/deferred |
-| Service admission: chaincode invocation and CCAAS | Existing lease and managed connection tests | Component and native process tests; distributed-network test not demonstrated | H0/M0 | Focused job passed; full deployed CCAAS topology remains out of scope |
-| Service admission: orderer Broadcast, Raft and follower promotion | PQ4.0D native orderer tests and PQ4.0E.1 promotion tests | Native orderer tests | H0/M0 | Focused jobs passed; final-head rerun required |
-| Service admission: participation administration | Existing strict admin and signed join tests | Native orderer tests | H0/M0 | Focused job and VM passed; full final-head evidence required |
-| Activation: generation leases and staged configuration | PQ4.0C activation tests | Native peer/orderer tests | H0/M0 | PQ4.0C job passed; final-head rerun required |
-| Activation: TLS-root publication and connection-cache retirement | PQ4.0C/E staged publication tests | Component and native process tests | H0/M0 | Focused jobs passed; final-head rerun required |
-| Activation: interrupted commit and restart reconciliation | PQ4.0C crash matrix and recovery tests | Native Fabric ledger test | H0/M0 | PQ4.0C job passed; power-loss and privileged rollback are not demonstrated |
-| Transport: selected strict profile, listener readiness and mTLS | PQ4.0E strict-listener tests | Component and native process tests | H0/M0 | Focused job passed; network-wide PQ4.0B compliance is not established |
-| Transport: classical rejection | Existing strict TLS listener negative tests | Component and disposable-VM tests | H0/M0 | Focused tests passed; endpoint-wide and unsupported-binary proofs remain incomplete |
-| Transport: administrative endpoints and shared-listener minimum policy | Existing service inventory and strict admin tests | Native process tests | H0/M0 | Focused job passed; network-wide/channel-capability enforcement is not demonstrated |
-| Compatibility: baseline Fabric behavior | Baseline regression suites | Full unit and integration matrix | H0/M0 | Skipped after Basic Checks failed; full final-head Verify Build required |
-| Compatibility: mixed-channel isolation | `core/peer/pq40e_mixed_channel_test.go` and full peer package test | In-process native peer tests | H0/M0 | Focused job passed; final-head CI required |
-| Compatibility: v1 snapshot-joined peers | V2-only recovery and v1 rejection; [upgrade boundary](pq4.0e2-snapshot-provenance.md) | In-process native peer lifecycle test | H0/M0 for v1 import rejection; H1/M1 for restart regression | No supported in-place v1 migration; final-head restart test required |
-| Compatibility: PQ3 isolated acceptance | PQ3 isolated acceptance workflow | Isolated hosted acceptance | H0/M0 | Passed; final-head rerun required |
-| Overall development acceptance and independent review | Full matrix, trusted provisioning evidence and final-head review | Partially demonstrated | H0/M0 only | **INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED** |
+| Enrollment: signed manifest and protected history | Managed launcher and enrollment verification; [status](pq4.0e-status.md) | Native peer/orderer and disposable-VM tests | H2/M2 | Focused job and VM test passed |
+| Enrollment: trusted launcher before readiness | `cmd/pq-launcher`; managed systemd test | Native peer/orderer and disposable-VM tests | H2/M2 | VM test passed; host enforcement outside the VM remains an assumption |
+| Enrollment: policy/checkpoint authentication | `internal/pkg/pqtransport/activation`; enrollment tests | Component and native process tests | H2/M2 | Focused jobs passed; full privileged-host rollback is excluded |
+| Enrollment: protected-to-baseline prohibition | Signed enrollment history and launcher | Native process and disposable-VM tests | H2/M2 | Focused jobs passed; production provisioning remains unqualified |
+| Enrollment: missing state and restart | Protected registry and recovery paths | Native peer/orderer tests | H2/M2 | Focused jobs and full regression matrix passed |
+| Fabric provenance: trusted genesis and complete history | `provisioning.VerifyJoinHistory`; `provenance` package tests | Native Fabric ledger test | H2/M2 | PQ4.0E.1 job passed |
+| Fabric provenance: historical signatures and predecessor configuration authorization | PQ4.0E.1 history verifier and tests | Native Fabric ledger test | H2/M2 | Job passed; live quorum/readiness is checked by native lifecycle, not offline replay |
+| Fabric provenance: non-genesis approval and correct operator signer | `SignVerifiedOrdererJoinAnchor`; peer signing test below | Native process and ledger tests | H2/M2 | Focused promotion and snapshot tests passed |
+| Fabric provenance: unsupported history and non-configuration target | History verifier negative tests | Native Fabric ledger test | H2/M2 | PQ4.0E.1 job passed |
+| Snapshot: trusted exporter and source identity | `SnapshotExporterTrust`, signed evidence, exact trust checks; `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery` | Native Fabric ledger and peer-component test | H2/M2 | Focused job passed; actual exporter-to-ledger association remains an external trust assumption |
+| Snapshot: metadata binding and complete payload integrity | `VerifySnapshotExport`, inventory and staged hash verification | Native Fabric ledger and peer-component test | H2/M2 | Focused job passed; compromised trusted exporter can sign false state |
+| Snapshot: protected import and restart | `stageProtectedSnapshot`, durable evidence sidecar, `recoverProtectedSnapshot` | In-process native peer lifecycle test | H2/M2 | Missing evidence fails closed; deployed snapshot topology remains pending |
+| Service admission: peer endorsement, Gateway, gossip, discovery, Deliver and private data | Existing PQ4.0E service inventory/tests in [status](pq4.0e-status.md) | Component and native process tests | H2/M2 | Focused job and full regression matrix passed; external topology remains pending/deferred |
+| Service admission: chaincode invocation and CCAAS | Existing lease and managed connection tests | Component and native process tests; distributed-network test not demonstrated | H2/M2 | Focused job passed; full deployed CCAAS topology remains out of scope |
+| Service admission: orderer Broadcast, Raft and follower promotion | PQ4.0D native orderer tests and PQ4.0E.1 promotion tests | Native orderer tests | H2/M2 | Focused jobs passed |
+| Service admission: participation administration | Existing strict admin and signed join tests | Native orderer tests | H2/M2 | Focused job and VM test passed |
+| Activation: generation leases and staged configuration | PQ4.0C activation tests | Native peer/orderer tests | H2/M2 | PQ4.0C job passed |
+| Activation: TLS-root publication and connection-cache retirement | PQ4.0C/E staged publication tests | Component and native process tests | H2/M2 | Focused jobs passed |
+| Activation: interrupted commit and restart reconciliation | PQ4.0C crash matrix and recovery tests | Native Fabric ledger test | H2/M2 | PQ4.0C job passed; power-loss and privileged rollback are not demonstrated |
+| Transport: selected strict profile, listener readiness and mTLS | PQ4.0E strict-listener tests | Component and native process tests | H2/M2 | Focused job passed; network-wide PQ4.0B compliance is not established |
+| Transport: classical rejection | Existing strict TLS listener negative tests | Component and disposable-VM tests | H2/M2 | Focused tests passed; endpoint-wide and unsupported-binary proofs remain incomplete |
+| Transport: administrative endpoints and shared-listener minimum policy | Existing service inventory and strict admin tests | Native process tests | H2/M2 | Focused job passed; network-wide/channel-capability enforcement is not demonstrated |
+| Compatibility: baseline Fabric behavior | Baseline regression suites | Full unit and integration matrix | H2/M2 | Unit Tests and all nine integration groups passed |
+| Compatibility: mixed-channel isolation | `core/peer/pq40e_mixed_channel_test.go` and full peer package test | In-process native peer tests | H2/M2 | Focused job and full regression matrix passed |
+| Compatibility: v1 snapshot-joined peers | V2-only recovery and v1 rejection; [upgrade boundary](pq4.0e2-snapshot-provenance.md) | In-process native peer lifecycle test | H2/M2 | Restart regression passed; no supported in-place v1 migration |
+| Compatibility: PQ3 isolated acceptance | PQ3 isolated acceptance workflow | Isolated hosted acceptance | H2/M2 | Both profiles and evidence verification passed |
+| Overall development acceptance and independent review | Full matrix, trusted provisioning evidence and final-head review | Partially demonstrated | H2/M2; review of H0 | **INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED** |
 
 ## Assumptions, limitations, and deferred work
 

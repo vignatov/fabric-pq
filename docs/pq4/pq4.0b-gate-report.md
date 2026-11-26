@@ -84,7 +84,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | Required mTLS and classical/missing client rejection | PASS | Component mTLS listener only; endpoint-specific proofs remain below. |
 | Signed bootstrap before actual node readiness and protected checkpoint | PASS (managed-process scope) | PQ4.0E native peer/orderer startup and disposable-VM evidence authenticate enrollment and protected checkpoint before managed service readiness; this is not network-wide PQ4 transport acceptance. |
 | Identity binding and stale/conflicting bootstrap rejection | PASS (managed-process scope) | PQ4.0E launcher, registry and restart tests bind signed manifest/history, node/network identity, pinned signer and protected checkpoint; complete privileged-host rollback remains excluded. |
-| Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation present | PQ4.0E.2 checks ML-DSA-65 exporter evidence against provisioner-controlled pins, verifies the full native snapshot inventory before operator signing, stages exact bytes, and retains authenticated evidence for recovery. Focused tests and an initial independent review are recorded in the [acceptance report](pq4.0e2-acceptance.md); final-head CI and evidence of real exporter/ledger controls remain pending. |
+| Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation present | PQ4.0E.2 checks ML-DSA-65 exporter evidence against provisioner-controlled pins, verifies the full native snapshot inventory before operator signing, stages exact bytes, and retains authenticated evidence for recovery. Full H2 hosted CI and an initial independent review are recorded in the [acceptance report](pq4.0e2-acceptance.md); later-head checks and evidence of real exporter/ledger controls remain required. |
 | No downgrade through clones, credentials and restarts | INCOMPLETE | PQ4.0E exercises managed restart and strict selected listeners, but not every credential factory, all connection lifetimes, or unsupported old binaries under a real PQ4 capability. |
 | Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
@@ -141,9 +141,9 @@ container. The Linux protected-registry test, managed non-genesis orderer
 join/promotion, and managed peer snapshot issuance/import/recovery integration
 also pass locally. The hosted PQ4.0E.1 job passed on commit `1b47d8bf0`, but
 Basic Checks failed and full unit/integration checks were skipped. Subsequent
-PQ4.0E.2 hosted VM evidence and review are recorded in the
-[acceptance report](pq4.0e2-acceptance.md), but complete final-head evidence
-remains pending. Therefore
+PQ4.0E.2 hosted full-matrix and VM evidence, and the initial review, are
+recorded in the [acceptance report](pq4.0e2-acceptance.md). Later-head checks,
+trusted-provisioning evidence and follow-up review remain required. Therefore
 PQ4.0E.1 acceptance remains **INCOMPLETE**; neither this update nor the
 existing PQ4.0E process evidence closes PQ4.0B.
 

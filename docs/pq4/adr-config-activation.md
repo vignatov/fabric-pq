@@ -229,9 +229,9 @@ fails closed for unsupported boundaries and consensus metadata that cannot be
 validated by the supported native Raft validator. The implementation and
 operator flow are tracked in the
 [PQ4.0E.1 provenance guide](pq4.0e1-provenance.md). The
-[PQ4.0E.2 acceptance report](pq4.0e2-acceptance.md) records the initial hosted
-evidence and review; complete final-head CI and gate closure remain pending.
-This work does not close PQ4.0B.
+[PQ4.0E.2 acceptance report](pq4.0e2-acceptance.md) records the full H2 hosted
+evidence and initial review; later revisions require their own final-head CI,
+and gate closure remains pending. This work does not close PQ4.0B.
 
 History verification authenticates the snapshot boundary, not the snapshot
 state. The provisioner must independently trust the exporter and validate
