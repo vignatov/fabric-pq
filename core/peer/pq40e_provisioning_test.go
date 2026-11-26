@@ -52,6 +52,7 @@ const (
 	exporterOverrideEnv   = "PQ40E_SOURCE_LEDGER_OVERRIDE"
 	importRootEnv         = "PQ40E_IMPORT_ROOT"
 	importSnapshotEnv     = "PQ40E_IMPORT_SNAPSHOT"
+	importRecoveryEnv     = "PQ40E_IMPORT_RECOVERY"
 	acceptanceRecordEnv   = "PQ40E_ACCEPTANCE_RECORD"
 	manifestFileEnv       = "PQ40E_MANIFEST_FILE"
 	historyFileEnv        = "PQ40E_HISTORY_FILE"
@@ -487,6 +488,9 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	require.NoError(t, os.WriteFile(joinPath, anchor, 0o400))
 	importOutput, err := runAs(importerUser, importerEnv, "TestPQ40EControlledSnapshotImporterChild")
 	require.NoError(t, err, importOutput)
+	require.NoFileExists(t, filepath.Join(peerRoot, "acceptance.json"))
+	recoveryOutput, err := runAs(importerUser, withEnvironment(importerEnv, importRecoveryEnv, "1"), "TestPQ40EControlledSnapshotImporterChild")
+	require.NoError(t, err, recoveryOutput)
 	acceptanceBytes, err := os.ReadFile(filepath.Join(peerRoot, "acceptance.json"))
 	require.NoError(t, err)
 	var importResult struct {
@@ -674,7 +678,10 @@ func TestPQ40EControlledSnapshotImporterChild(t *testing.T) {
 		require.Contains(t, ids, testfixture.ChannelID)
 		require.Contains(t, ids, "baseline-channel")
 	}
-	run(os.Getenv(importSnapshotEnv), true)
+	if os.Getenv(importRecoveryEnv) != "1" {
+		run(os.Getenv(importSnapshotEnv), true)
+		return
+	}
 	run("", false)
 	result, err := json.Marshal(struct {
 		Imported                bool `json:"imported"`

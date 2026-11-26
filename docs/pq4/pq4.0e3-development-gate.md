@@ -103,7 +103,9 @@ and push Verify Build
 The downloaded push artifact
 [`pq40e3-acceptance-45879597742-1`](https://github.com/vignatov/fabric-pq/actions/runs/45879597742/artifacts/15145393631)
 reported the exact commit, a clean worktree, and passed import, recovery and
-baseline continuity. It recorded authorization digest
+baseline continuity. That revision recreated the peer within one importer
+process; the current test uses a second importer process for recovery.
+It recorded authorization digest
 `831afe12038798ad2a647365a9330c1bbd6fbcbc57f9ac49c2c668e878d53ca0`,
 execution-record digest
 `600bc2a02a9046d64b30cd143350d77b7ed208c49144ba532441481d7bbc3ff5`,
