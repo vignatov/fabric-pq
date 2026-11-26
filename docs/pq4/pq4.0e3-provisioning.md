@@ -6,13 +6,17 @@ The controlled acceptance procedure uses an independently authenticated,
 versioned authorization created before snapshot export. It pins the network,
 channel, exporter identity and ML-DSA-65 key, source-ledger identity and canonical
 ledger-directory path, trusted genesis, verified history and configuration
-boundary, transport profile, and approval generation.
+boundary, transport profile, approval generation, and exporter executable path
+and digest.
 
 The authorization is signed under the
 `fabric-pq/exporter-authorization/v1` domain by the provisioning authority.
 The verifier receives the authority identity and public key from outside the
-authorization package. Exporter or snapshot evidence cannot establish or
-replace those trust pins. `VerifiedExporterAuthorization.SnapshotExporterTrust`
+authorization package: the verified enrollment manifest names the authority,
+and its independently installed verification key is retained by the registry.
+The provisioning authority, exporter and operator policy keys must be distinct.
+Exporter or snapshot evidence cannot establish or replace those trust pins.
+`VerifiedExporterAuthorization.SnapshotExporterTrust`
 also requires the registry-bound `VerifiedJoinHistory` result and rejects an
 authorization that conflicts with its network, channel, genesis, history,
 profile, configuration or snapshot boundary.
@@ -77,12 +81,15 @@ baseline-ledger continuity.
 
 ## Evidence and retained artifacts
 
-The authority writes the operation record after the controlled exporter exits;
-it records the exact invocation, executable digest, authorization digest,
-selected source path and identity, channel and snapshot boundary. The verifier
+The authority signs the operation record after the controlled exporter exits;
+it records the launcher and exact exporter invocation, executable digest,
+authorization digest, selected source path and identity, channel and snapshot boundary. The verifier
 then checks that record against the authorization before verifying native signed
-evidence. Missing, rejected, and inconsistent records fail this harness
-procedure. This parent-generated record is not an independent attestation of
+evidence. The supported approval API requires both the independently verified
+authorization and the signed operation record. The v2 approval embeds both
+records, which the importing peer verifies again using its independently
+verified enrollment authority. Missing, rejected, inconsistent, or modified
+records fail closed at approval or import/recovery. This parent-generated record is not an independent attestation of
 the ledger actually opened. The non-secret acceptance manifest links:
 
 - exact checkout commit and CI workflow/job/run identifiers;
@@ -99,14 +106,20 @@ secrets, and ledger payloads stay inside the disposable VM. The protected
 staging and v2 approval remain the existing `VerifySnapshotExport` and
 `SignVerifiedPeerSnapshotAnchor` path; no alternate approval API is added.
 
-The controlled procedure is **test-harness-only**. The public PQ4.0E.2
-`NewSnapshotExporterTrust` and approval APIs still accept a trust pin supplied
-by their caller without requiring this signed authorization or operation
-record. A caller controlling that pin can verify and approve a self-chosen
-exporter using the legacy API. The harness rejects such a caller when no
-independently verified authorization is supplied, but this does not establish
-non-bypassable authorization at the public approval API. That mandatory
-invariant remains **INCOMPLETE**.
+The controlled executor remains **test-harness-only**. The production approval
+API requires authorization matching the registry-bound authority and history,
+the exporter key and source identity, and a signed execution record matching the
+exact export evidence. A caller-selected `SnapshotExporterTrust` can still be
+used to inspect a package, but cannot by itself authorize an approval. A v2
+anchor signed directly with the operator key is rejected at import/recovery
+unless its embedded authority proof matches the independently enrolled authority.
+This assumes the launcher and its authority-key, signed manifest, and history
+paths are selected and protected independently of the caller and importer.
+
+Existing v2 snapshot approvals without these authorization and execution
+records are rejected, including during restart recovery. A newly authorized
+approval and verified enrollment manifest are required; there is no legacy
+fallback.
 
 ## Scope and limitations
 

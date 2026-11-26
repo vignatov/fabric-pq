@@ -38,10 +38,13 @@ func TestExporterAuthorizationRequiresIndependentAuthority(t *testing.T) {
 	require.ErrorContains(t, err, "signature is invalid")
 
 	attackerAuthorization := authorizationTestClaims(t, attackerSigner.Public().(*mldsa.PublicKey), t.TempDir())
-	attackerEncoded, err := SignExporterAuthorization(attackerAuthorization, attackerSigner)
+	attackerEncoded, err := SignExporterAuthorization(attackerAuthorization, exporterSigner)
 	require.NoError(t, err)
 	_, err = VerifyExporterAuthorization(attackerEncoded, "provisioner-1", authoritySigner.Public().(*mldsa.PublicKey))
 	require.ErrorContains(t, err, "signature is invalid")
+	sameKey := authorizationTestClaims(t, authoritySigner.Public().(*mldsa.PublicKey), t.TempDir())
+	_, err = SignExporterAuthorization(sameKey, authoritySigner)
+	require.ErrorContains(t, err, "exporter key must be independent")
 }
 
 func TestExporterAuthorizationRejectsModifiedAndSubstitutedPaths(t *testing.T) {
@@ -90,6 +93,55 @@ func TestExporterAuthorizationRejectsModifiedAndSubstitutedPaths(t *testing.T) {
 	require.ErrorContains(t, replaced.VerifyAuthorizedSourcePath(), "symlink")
 }
 
+func TestExporterExecutionRequiresMatchingAuthorityAndEvidence(t *testing.T) {
+	authority := authorizationTestKey(t, "provisioning authority")
+	other := authorizationTestKey(t, "other authority")
+	exporter := authorizationTestKey(t, "approved exporter")
+	encoded := mustSignExporterAuthorization(t, authorizationTestClaims(t, exporter.Public().(*mldsa.PublicKey), t.TempDir()), authority)
+	authorityKey, err := mldsa.NewPublicKey(mldsa.MLDSA65(), authority.Public().(*mldsa.PublicKey).Bytes())
+	require.NoError(t, err)
+	verified, err := VerifyExporterAuthorization(encoded, "provisioner-1", authorityKey)
+	require.NoError(t, err)
+	*authorityKey = *other.Public().(*mldsa.PublicKey)
+	claims := verified.Authorization()
+	evidence := []byte("signed exporter evidence")
+	execution := ExporterExecution{
+		AuthorizationDigest: authorizationTestHash(string(encoded)),
+		ApprovalIdentity:    claims.ApprovalIdentity, Generation: claims.Generation,
+		SourceLedgerIdentity: claims.SourceLedgerIdentity, SourceLedgerPath: claims.SourceLedgerPath,
+		Channel: claims.Channel, SnapshotBlockNumber: claims.SnapshotBlockNumber, SnapshotBlockHash: claims.SnapshotBlockHash,
+		ExecutablePath: claims.ExecutablePath, ExecutableSHA256: claims.ExecutableSHA256,
+		ExportEvidenceDigest: authorizationTestHash(string(evidence)), Launcher: []string{"trusted-launcher"},
+		Invocation: []string{claims.ExecutablePath}, Result: "success",
+	}
+	signed, err := SignExporterExecution(verified, execution, authority)
+	require.NoError(t, err)
+	record, err := VerifyExporterExecution(verified, signed)
+	require.NoError(t, err)
+	require.True(t, record.Matches(verified.verified, evidence))
+	require.False(t, record.Matches(verified.verified, []byte("different evidence")))
+	_, err = SignExporterExecution(verified, execution, other)
+	require.Error(t, err)
+	for name, mutate := range map[string]func(*ExporterExecution){
+		"source":        func(e *ExporterExecution) { e.SourceLedgerPath = filepath.Join(e.SourceLedgerPath, "other") },
+		"executable":    func(e *ExporterExecution) { e.ExecutableSHA256 = authorizationTestHash("other executable") },
+		"invocation":    func(e *ExporterExecution) { e.Invocation = []string{filepath.Join(t.TempDir(), "other")} },
+		"authorization": func(e *ExporterExecution) { e.AuthorizationDigest = authorizationTestHash("other authorization") },
+		"result":        func(e *ExporterExecution) { e.Result = "failed" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := execution
+			mutate(&changed)
+			_, err := SignExporterExecution(verified, changed, authority)
+			require.Error(t, err)
+		})
+	}
+	tampered := append([]byte(nil), signed...)
+	tampered[len(tampered)-1] ^= 1
+	_, err = VerifyExporterExecution(verified, tampered)
+	require.Error(t, err)
+}
+
 func authorizationTestClaims(t *testing.T, exporter *mldsa.PublicKey, sourcePath string) ExporterAuthorization {
 	t.Helper()
 	return ExporterAuthorization{
@@ -101,6 +153,8 @@ func authorizationTestClaims(t *testing.T, exporter *mldsa.PublicKey, sourcePath
 		ExporterPublicKey:     exporter.Bytes(),
 		SourceLedgerIdentity:  "ledger-a",
 		SourceLedgerPath:      sourcePath,
+		ExecutablePath:        filepath.Join(sourcePath, "exporter"),
+		ExecutableSHA256:      authorizationTestHash("exporter executable"),
 		TrustedGenesis:        authorizationTestHash("genesis"),
 		ConfigurationSequence: 4,
 		ConfigurationDigest:   authorizationTestHash("configuration"),

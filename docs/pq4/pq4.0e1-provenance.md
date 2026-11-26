@@ -59,11 +59,12 @@ The helper APIs are in `internal/pkg/pqtransport/provenance`,
      `fabric-pq/orderer-join/v1` domain.
    - For a peer snapshot, the authorized exporter signs
      `provisioning.SignSnapshotExportEvidence` after native export. The
-     trusted provisioner loads the exporter key and expected source-ledger
-     identity from independent configuration, calls
-     `provisioning.VerifySnapshotExport`, then passes only its opaque staged
-     result to `provisioning.SignVerifiedPeerSnapshotAnchor`. This issues the
-     versioned `fabric-pq/peer-snapshot/v2` approval.
+     trusted provisioner verifies an independently signed exporter
+     authorization and controlled execution record, derives the exporter trust
+     pin, and calls `provisioning.VerifySnapshotExport`. It passes the staged
+     result and both verified proofs to
+     `provisioning.SignVerifiedPeerSnapshotAnchor`. This issues the versioned
+     `fabric-pq/peer-snapshot/v2` approval.
 6. Provision the target configuration block, v2 anchor, and authenticated
    `_pactway_snapshot_export_evidence.json` sidecar with the native snapshot.
    The peer verifies the evidence and exact file inventory, stages only

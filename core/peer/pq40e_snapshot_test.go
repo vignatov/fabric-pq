@@ -76,10 +76,45 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	manifest := &enrollment.Manifest{
 		Mode: enrollment.Protected, Network: testfixture.Network, Node: testfixture.Node,
 		Profile: pqtransport.ProfileV1, PolicySigner: keyFile, PolicySignerDigest: fmt.Sprintf("%x", sha256.Sum256(key)),
-		StateDir: state, LedgerDir: filepath.Join(root, "ledgersData"),
+		StateDir: state, LedgerDir: filepath.Join(root, "ledgersData"), Generation: 1,
+		Executable: filepath.Join(root, "peer"), SnapshotAuthority: "test-provisioner",
 	}
+	authority, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	manifestPayload, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	manifestBytes, err := signProvisioningTestDocument(authority, "fabric-pq/enrollment/v1\x00", manifest)
+	require.NoError(t, err)
+	historyBytes, err := signProvisioningTestDocument(authority, "fabric-pq/enrollment-history/v1\x00", enrollment.History{
+		Network: manifest.Network, Node: manifest.Node, Generation: manifest.Generation,
+		ProtectedEver: true, ManifestDigest: hashBytes(manifestPayload),
+	})
+	require.NoError(t, err)
+	authorityKey, err := mldsa.NewPublicKey(mldsa.MLDSA65(), authority.Public().(*mldsa.PublicKey).Bytes())
+	require.NoError(t, err)
+	manifest, err = enrollment.Verify(manifestBytes, historyBytes, authorityKey)
+	require.NoError(t, err)
+	replacementAuthority, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	*authorityKey = *replacementAuthority.Public().(*mldsa.PublicKey)
+	modifiedManifest := *manifest
+	modifiedManifest.SnapshotAuthority = "attacker"
+	_, err = enrollment.OpenProtectedRegistry(&modifiedManifest)
+	require.ErrorContains(t, err, "verified enrollment manifest was modified")
+	var unsignedManifest enrollment.Manifest
+	require.NoError(t, json.Unmarshal(manifestPayload, &unsignedManifest))
+	_, err = enrollment.OpenProtectedRegistry(&unsignedManifest)
+	require.ErrorContains(t, err, "requires verified enrollment")
+	unsignedManifest.SnapshotAuthority = ""
+	unsignedRegistry, err := enrollment.OpenProtectedRegistry(&unsignedManifest)
+	require.NoError(t, err)
 	registry, err := enrollment.OpenProtectedRegistry(manifest)
 	require.NoError(t, err)
+	_, authorityBytes := registry.SnapshotProvisioningAuthority()
+	require.Equal(t, authority.Public().(*mldsa.PublicKey).Bytes(), authorityBytes)
+	authorityBytes[0] ^= 0xff
+	_, authorityBytes = registry.SnapshotProvisioningAuthority()
+	require.Equal(t, authority.Public().(*mldsa.PublicKey).Bytes(), authorityBytes)
 	verified, err := provisioning.VerifyJoinHistory(
 		registry, testfixture.ChannelID, []*cb.Block{genesis, block}, block.GetHeader().GetNumber(), fixture.Crypto,
 	)
@@ -234,13 +269,61 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	export, err := provisioning.VerifySnapshotExport(verified, snapshot, exporterTrust)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, export.Close()) })
+	authorizationBytes, err := provisioning.SignExporterAuthorization(provisioning.ExporterAuthorization{
+		AuthorityIdentity: "test-provisioner", Generation: 1, Network: testfixture.Network, Channel: testfixture.ChannelID,
+		ExporterIdentity: "approved-source-peer", ExporterPublicKey: exporterSigner.Public().(*mldsa.PublicKey).Bytes(),
+		SourceLedgerIdentity: "source-ledger-01", SourceLedgerPath: exportRoot,
+		ExecutablePath: filepath.Join(exportRoot, "exporter"), ExecutableSHA256: hashBytes([]byte("exporter")),
+		TrustedGenesis: historyReport.TrustedGenesisBlockIdentity, ConfigurationSequence: historyReport.TargetConfigurationSequence,
+		ConfigurationDigest: historyReport.TargetConfigurationDigest, SnapshotBlockNumber: historyReport.TargetBlockNumber,
+		SnapshotBlockHash: historyReport.TargetBlockHash, SourceHistoryIdentity: historyReport.SourceHistoryIdentity,
+		TransportProfile: pqtransport.ProfileV1,
+	}, authority)
+	require.NoError(t, err)
+	authorization, err := provisioning.VerifyExporterAuthorization(authorizationBytes, "test-provisioner", authority.Public().(*mldsa.PublicKey))
+	require.NoError(t, err)
+	authorized := authorization.Authorization()
+	executionBytes, err := provisioning.SignExporterExecution(authorization, provisioning.ExporterExecution{
+		AuthorizationDigest: hashBytes(authorizationBytes), ApprovalIdentity: authorized.ApprovalIdentity, Generation: authorized.Generation,
+		SourceLedgerIdentity: authorized.SourceLedgerIdentity, SourceLedgerPath: authorized.SourceLedgerPath,
+		Channel: authorized.Channel, SnapshotBlockNumber: authorized.SnapshotBlockNumber, SnapshotBlockHash: authorized.SnapshotBlockHash,
+		ExecutablePath: authorized.ExecutablePath, ExecutableSHA256: authorized.ExecutableSHA256,
+		ExportEvidenceDigest: hashBytes(exportEvidence), Launcher: []string{"trusted-launcher"},
+		Invocation: []string{authorized.ExecutablePath}, Result: "success",
+	}, authority)
+	require.NoError(t, err)
+	execution, err := provisioning.VerifyExporterExecution(authorization, executionBytes)
+	require.NoError(t, err)
 	seed := sha256.Sum256([]byte("PQ4.0C activation fixture operator"))
 	signer, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), seed[:])
 	require.NoError(t, err)
+	operatorManifest, err := signProvisioningTestDocument(signer, "fabric-pq/enrollment/v1\x00", manifest)
+	require.NoError(t, err)
+	operatorHistory, err := signProvisioningTestDocument(signer, "fabric-pq/enrollment-history/v1\x00", enrollment.History{
+		Network: manifest.Network, Node: manifest.Node, Generation: manifest.Generation,
+		ProtectedEver: true, ManifestDigest: hashBytes(manifestPayload),
+	})
+	require.NoError(t, err)
+	selfEnrolled, err := enrollment.Verify(operatorManifest, operatorHistory, signer.Public().(*mldsa.PublicKey))
+	require.NoError(t, err)
+	_, err = enrollment.OpenProtectedRegistry(selfEnrolled)
+	require.ErrorContains(t, err, "must be independent of the policy signer")
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, export, nil, execution, signer)
+	require.Error(t, err)
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, export, authorization, nil, signer)
+	require.Error(t, err)
+	policyExporter := authorized
+	policyExporter.ExporterPublicKey = signer.Public().(*mldsa.PublicKey).Bytes()
+	policyExporterBytes, err := provisioning.SignExporterAuthorization(policyExporter, authority)
+	require.NoError(t, err)
+	policyExporterAuth, err := provisioning.VerifyExporterAuthorization(policyExporterBytes, "test-provisioner", authority.Public().(*mldsa.PublicKey))
+	require.NoError(t, err)
+	_, err = policyExporterAuth.SnapshotExporterTrust(verified)
+	require.ErrorContains(t, err, "independent of the policy signer")
 	wrongOperatorSeed := sha256.Sum256([]byte("wrong operator signer"))
 	wrongOperator, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), wrongOperatorSeed[:])
 	require.NoError(t, err)
-	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, export, wrongOperator)
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, export, authorization, execution, wrongOperator)
 	require.ErrorContains(t, err, "does not match the authenticated")
 	var stagedMetadata kvledger.SnapshotSignableMetadata
 	require.NoError(t, json.Unmarshal(signable, &stagedMetadata))
@@ -253,13 +336,69 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	require.NoError(t, os.Chmod(export.Directory(), 0o700))
 	require.NoError(t, os.Chmod(filepath.Join(export.Directory(), firstPayload), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(export.Directory(), firstPayload), []byte("changed after staging"), 0o600))
-	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, export, signer)
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verified, export, authorization, execution, signer)
 	require.ErrorContains(t, err, "conflicts with authenticated digest")
 	require.NoError(t, export.Close())
 	export, err = provisioning.VerifySnapshotExport(verified, snapshot, exporterTrust)
 	require.NoError(t, err)
-	signed, err := provisioning.SignVerifiedPeerSnapshotAnchor(verified, export, signer)
+	signed, err := provisioning.SignVerifiedPeerSnapshotAnchor(verified, export, authorization, execution, signer)
 	require.NoError(t, err)
+	var signedEnvelope enrollment.Envelope
+	require.NoError(t, json.Unmarshal(signed, &signedEnvelope))
+	var signedAnchor enrollment.PeerSnapshotAnchor
+	require.NoError(t, json.Unmarshal(signedEnvelope.Payload, &signedAnchor))
+	fakeAuthorization := authorized
+	fakeAuthorization.ExporterPublicKey = unapprovedSigner.Public().(*mldsa.PublicKey).Bytes()
+	fakeAuthorizationBytes, err := provisioning.SignExporterAuthorization(fakeAuthorization, signer)
+	require.NoError(t, err)
+	policyExecution := provisioning.ExporterExecution{
+		AuthorizationDigest: hashBytes(policyExporterBytes), ApprovalIdentity: policyExporter.ApprovalIdentity,
+		Generation: policyExporter.Generation, SourceLedgerIdentity: policyExporter.SourceLedgerIdentity,
+		SourceLedgerPath: policyExporter.SourceLedgerPath, Channel: policyExporter.Channel,
+		SnapshotBlockNumber: policyExporter.SnapshotBlockNumber, SnapshotBlockHash: policyExporter.SnapshotBlockHash,
+		ExecutablePath: policyExporter.ExecutablePath, ExecutableSHA256: policyExporter.ExecutableSHA256,
+		ExportEvidenceDigest: hashBytes(exportEvidence), Launcher: []string{"trusted-launcher"},
+		Invocation: []string{policyExporter.ExecutablePath}, Result: "success",
+	}
+	policyExecutionBytes, err := provisioning.SignExporterExecution(policyExporterAuth, policyExecution, authority)
+	require.NoError(t, err)
+	for name, mutate := range map[string]func(*enrollment.PeerSnapshotAnchor){
+		"missing authorization": func(a *enrollment.PeerSnapshotAnchor) { a.ExporterAuthorization = nil },
+		"missing execution":     func(a *enrollment.PeerSnapshotAnchor) { a.ExporterExecution = nil },
+		"self-selected authority": func(a *enrollment.PeerSnapshotAnchor) {
+			a.ExporterAuthorization = fakeAuthorizationBytes
+		},
+		"exporter is policy signer": func(a *enrollment.PeerSnapshotAnchor) {
+			a.ExporterAuthorization = policyExporterBytes
+			a.ExporterExecution = policyExecutionBytes
+			a.ExporterPublicKey = policyExporter.ExporterPublicKey
+		},
+		"modified authorization": func(a *enrollment.PeerSnapshotAnchor) {
+			a.ExporterAuthorization = append([]byte(nil), a.ExporterAuthorization...)
+			a.ExporterAuthorization[len(a.ExporterAuthorization)-1] ^= 1
+		},
+		"modified execution": func(a *enrollment.PeerSnapshotAnchor) {
+			a.ExporterExecution = append([]byte(nil), a.ExporterExecution...)
+			a.ExporterExecution[len(a.ExporterExecution)-1] ^= 1
+		},
+		"unauthorized exporter": func(a *enrollment.PeerSnapshotAnchor) {
+			a.ExporterPublicKey = unapprovedSigner.Public().(*mldsa.PublicKey).Bytes()
+		},
+		"unauthorized source": func(a *enrollment.PeerSnapshotAnchor) { a.SourceLedgerIdentity = "other-source" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := signedAnchor
+			mutate(&candidate)
+			forged := fixture.SignedJoinAnchor(t, enrollment.PeerSnapshotAnchorDomain, candidate)
+			require.NoError(t, os.WriteFile(joinName, forged, 0o600))
+			_, err := registry.VerifyPeerSnapshot(signable, additional, exportEvidence, fixture.Crypto)
+			require.Error(t, err)
+		})
+	}
+	require.NoError(t, os.WriteFile(joinName, signed, 0o600))
+	_, err = unsignedRegistry.VerifyPeerSnapshot(signable, additional, exportEvidence, fixture.Crypto)
+	require.ErrorContains(t, err, "independent provisioning authority")
+	require.NoError(t, os.Remove(joinName))
 	startPeer := func() (*Peer, func()) {
 		p, closeLedger := newTestPeer(t, root)
 		registry, err := enrollment.OpenProtectedRegistry(manifest)
@@ -285,11 +424,13 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 		ExporterIdentity:       "approved-source-peer",
 		SourceLedgerIdentity:   "source-ledger-01",
 		ExporterPublicKey:      exporterSigner.Public().(*mldsa.PublicKey).Bytes(),
+		ExporterAuthorization:  authorizationBytes,
+		ExporterExecution:      executionBytes,
 	}
 	downgrade := anchor
 	downgrade.Profile = "baseline"
 	require.NoError(t, os.WriteFile(joinName, fixture.SignedJoinAnchor(t, enrollment.PeerSnapshotAnchorDomain, downgrade), 0o600))
-	require.ErrorContains(t, p.CreateChannelFromSnapshot(export.Directory(), nil, nil, nil), "node policy")
+	require.ErrorContains(t, p.CreateChannelFromSnapshot(export.Directory(), nil, nil, nil), "conflicts with independently authorized exporter")
 	legacyAnchor := fixture.SignedJoinAnchor(t, "fabric-pq/peer-snapshot/v1\x00", struct {
 		enrollment.JoinAnchor
 		SignableMetadataHash   string `json:"signable_metadata_hash"`
@@ -329,6 +470,12 @@ func TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery(t *testing.T) {
 	legacyRecovery, closeLegacyRecovery := startPeer()
 	require.Nil(t, legacyRecovery.Channel(testfixture.ChannelID), "v1 approval must not recover a protected snapshot channel")
 	closeLegacyRecovery()
+	missingProof := signedAnchor
+	missingProof.ExporterExecution = nil
+	require.NoError(t, os.WriteFile(joinName, fixture.SignedJoinAnchor(t, enrollment.PeerSnapshotAnchorDomain, missingProof), 0o600))
+	missingProofRecovery, closeMissingProofRecovery := startPeer()
+	require.Nil(t, missingProofRecovery.Channel(testfixture.ChannelID), "missing execution proof must not recover a protected snapshot channel")
+	closeMissingProofRecovery()
 	require.NoError(t, os.WriteFile(joinName, signed, 0o600))
 
 	require.NoError(t, os.Remove(joinName))

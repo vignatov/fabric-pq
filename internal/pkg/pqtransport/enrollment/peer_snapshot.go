@@ -20,6 +20,7 @@ import (
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/ledger/snapshot"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
+	"github.com/hyperledger/fabric/internal/pkg/pqtransport/exportauth"
 	"github.com/hyperledger/fabric/protoutil"
 )
 
@@ -50,6 +51,8 @@ type PeerSnapshotAnchor struct {
 	ExporterIdentity       string `json:"exporter_identity"`
 	SourceLedgerIdentity   string `json:"source_ledger_identity"`
 	ExporterPublicKey      []byte `json:"exporter_public_key"`
+	ExporterAuthorization  []byte `json:"exporter_authorization"`
+	ExporterExecution      []byte `json:"exporter_execution"`
 }
 
 // SnapshotExportEvidence is the exporter-authenticated binding between a
@@ -104,6 +107,31 @@ func (r *Registry) VerifyPeerSnapshot(signable, additional, exportEvidence []byt
 	if anchor.FormatVersion != PeerSnapshotAnchorFormat {
 		return nil, errors.New("unsupported peer snapshot anchor format")
 	}
+	authorization, err := exportauth.VerifyAuthorization(anchor.ExporterAuthorization, r.snapshotAuthority, r.authorityKey)
+	if err != nil {
+		return nil, fmt.Errorf("verify independently authorized snapshot exporter: %w", err)
+	}
+	execution, err := exportauth.VerifyExecution(authorization, anchor.ExporterExecution)
+	if err != nil {
+		return nil, fmt.Errorf("verify controlled snapshot export execution: %w", err)
+	}
+	if !execution.Matches(authorization, exportEvidence) {
+		return nil, errors.New("controlled execution conflicts with snapshot export evidence")
+	}
+	authorized := authorization.Claims()
+	if bytes.Equal(authorized.ExporterPublicKey, r.key.Bytes()) {
+		return nil, errors.New("snapshot exporter key must be independent of the policy signer")
+	}
+	if authorized.ExporterIdentity != anchor.ExporterIdentity ||
+		authorized.SourceLedgerIdentity != anchor.SourceLedgerIdentity ||
+		!bytes.Equal(authorized.ExporterPublicKey, anchor.ExporterPublicKey) ||
+		authorized.Network != anchor.Network || authorized.Channel != anchor.Channel ||
+		authorized.TrustedGenesis != anchor.GenesisHash ||
+		authorized.SnapshotBlockNumber != anchor.BlockNumber || authorized.SnapshotBlockHash != anchor.BlockHash ||
+		authorized.ConfigurationSequence != anchor.Config.Sequence || authorized.ConfigurationDigest != anchor.Config.Digest ||
+		authorized.TransportProfile != anchor.Profile {
+		return nil, errors.New("snapshot anchor conflicts with independently authorized exporter")
+	}
 	if anchor.SignableMetadataHash != fmt.Sprintf("%x", sha256.Sum256(signable)) ||
 		anchor.AdditionalMetadataHash != fmt.Sprintf("%x", sha256.Sum256(additional)) ||
 		anchor.ExportEvidenceHash != fmt.Sprintf("%x", sha256.Sum256(exportEvidence)) {
@@ -139,6 +167,7 @@ func (r *Registry) VerifyPeerSnapshot(signable, additional, exportEvidence []byt
 	config := anchor.Config
 	if export.ExporterIdentity != anchor.ExporterIdentity ||
 		export.SourceLedgerIdentity != anchor.SourceLedgerIdentity ||
+		export.SourceHistoryIdentity != authorized.SourceHistoryIdentity ||
 		export.Network != anchor.Network || export.Channel != anchor.Channel ||
 		export.GenesisIdentity != anchor.GenesisHash ||
 		export.SnapshotBlockNumber != anchor.BlockNumber || export.SnapshotBlockHash != anchor.BlockHash ||

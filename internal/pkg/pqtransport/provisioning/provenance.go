@@ -28,7 +28,9 @@ import (
 // VerifiedJoinHistory can only be obtained by verifying against a registry.
 // The generic provenance verifier's result is not eligible for anchor issuance.
 type VerifiedJoinHistory struct {
-	history *provenance.VerifiedHistory
+	history           *provenance.VerifiedHistory
+	authorityIdentity string
+	authorityKey      *mldsa.PublicKey
 }
 
 // Report returns the verification evidence for a registry-bound result.
@@ -65,7 +67,15 @@ func VerifyJoinHistory(registry *enrollment.Registry, channel string, history []
 	if err != nil {
 		return nil, err
 	}
-	return &VerifiedJoinHistory{history: verified}, nil
+	authorityIdentity, authorityBytes := registry.SnapshotProvisioningAuthority()
+	var authorityKey *mldsa.PublicKey
+	if authorityBytes != nil {
+		authorityKey, err = mldsa.NewPublicKey(mldsa.MLDSA65(), authorityBytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse enrolled snapshot provisioning authority: %w", err)
+		}
+	}
+	return &VerifiedJoinHistory{history: verified, authorityIdentity: authorityIdentity, authorityKey: authorityKey}, nil
 }
 
 // SignVerifiedOrdererJoinAnchor signs an orderer anchor only from a completed
@@ -81,13 +91,26 @@ func SignVerifiedOrdererJoinAnchor(verified *VerifiedJoinHistory, signer *mldsa.
 // SignVerifiedPeerSnapshotAnchor signs only a snapshot that was authenticated
 // by an independently trusted exporter and copied to a private staging
 // directory by VerifySnapshotExport.
-func SignVerifiedPeerSnapshotAnchor(verified *VerifiedJoinHistory, export *VerifiedSnapshotExport, signer *mldsa.PrivateKey) ([]byte, error) {
+func SignVerifiedPeerSnapshotAnchor(verified *VerifiedJoinHistory, export *VerifiedSnapshotExport,
+	authorization *VerifiedExporterAuthorization, execution *VerifiedExporterExecution, signer *mldsa.PrivateKey,
+) ([]byte, error) {
 	joinAnchor, err := joinAnchorFromVerified(verified, signer)
 	if err != nil {
 		return nil, err
 	}
 	if export == nil || export.history != verified || export.stageDir == "" || export.trust == nil {
 		return nil, errors.New("verified staged snapshot export is required before peer snapshot approval")
+	}
+	authorizedTrust, err := authorization.SnapshotExporterTrust(verified)
+	if err != nil {
+		return nil, err
+	}
+	if authorizedTrust.identity != export.trust.identity || authorizedTrust.sourceLedger != export.trust.sourceLedger ||
+		!bytes.Equal(authorizedTrust.publicKey.Bytes(), export.trust.publicKey.Bytes()) {
+		return nil, errors.New("verified snapshot exporter conflicts with independent authorization")
+	}
+	if !execution.Matches(authorization.verified, export.evidenceBytes) {
+		return nil, errors.New("verified controlled execution for this authorization and snapshot evidence is required")
 	}
 	root, err := os.OpenRoot(export.stageDir)
 	if err != nil {
@@ -141,6 +164,8 @@ func SignVerifiedPeerSnapshotAnchor(verified *VerifiedJoinHistory, export *Verif
 		ExporterIdentity:       evidence.ExporterIdentity,
 		SourceLedgerIdentity:   evidence.SourceLedgerIdentity,
 		ExporterPublicKey:      bytes.Clone(export.exporterKey),
+		ExporterAuthorization:  authorization.verified.Encoded(),
+		ExporterExecution:      execution.Encoded(),
 	}
 	return signJoinAnchor(signer, enrollment.PeerSnapshotAnchorDomain, anchor)
 }

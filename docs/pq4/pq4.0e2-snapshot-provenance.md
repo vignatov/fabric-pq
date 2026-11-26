@@ -73,7 +73,9 @@ The provisioner constructs `SnapshotExporterTrust` from its independent
 exporter-key pin, exporter identity and expected source-ledger identity. A
 successful `provisioning.VerifyJoinHistory` result and this trust pin are both
 required to obtain the opaque `VerifiedSnapshotExport` token. The only peer
-snapshot anchor signer accepts that token, rechecks its staged metadata and
+snapshot anchor signer also requires independently verified exporter
+authorization and authority-signed controlled execution evidence as described
+in the [PQ4.0E.3 provisioning guide](pq4.0e3-provisioning.md). It rechecks staged metadata and
 payload bytes immediately before signing, and uses the versioned
 `fabric-pq/peer-snapshot/v2` domain. The signature binds the evidence digest,
 exporter identity, source-ledger identity and approved exporter public key.
@@ -122,6 +124,11 @@ architecture is insufficient and the gate is blocked; signatures and hashes
 cannot establish independent world-state provenance.
 
 ## Upgrade boundary for v1 snapshot-joined peers
+
+The E.3 authorization enforcement also rejects earlier v2 anchors that lack
+the embedded authority-signed authorization and execution records, including
+at restart. A verified enrollment manifest with the independent authority and
+a newly authorized approval are required; there is no compatibility fallback.
 
 An existing protected peer bootstrapped from a v1 snapshot anchor cannot be
 assumed to recover after upgrading to v2-only verification. Recovery requires
