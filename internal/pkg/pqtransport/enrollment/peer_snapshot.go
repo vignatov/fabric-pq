@@ -18,7 +18,7 @@ import (
 
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
-	"github.com/hyperledger/fabric/core/ledger/kvledger"
+	"github.com/hyperledger/fabric/common/ledger/snapshot"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
 	"github.com/hyperledger/fabric/protoutil"
 )
@@ -267,9 +267,9 @@ func VerifySnapshotExportEvidence(encoded []byte, key *mldsa.PublicKey) (Snapsho
 	}
 	for name, digest := range evidence.PayloadFiles {
 		if !filepath.IsLocal(name) || filepath.Base(name) != name || name == "." || name == ".." ||
-			name == kvledger.SnapshotSignableMetadataFileName ||
-			name == kvledger.SnapshotAdditionalMetadataFileName ||
-			name == "_pactway_snapshot_export_evidence.json" ||
+			name == snapshot.SignableMetadataFileName ||
+			name == snapshot.AdditionalMetadataFileName ||
+			name == SnapshotExportEvidenceFileName ||
 			strings.ContainsAny(name, `/\`) || len(name) == 0 ||
 			len(digest) != sha256.Size*2 || !isSnapshotHash(digest) {
 			return SnapshotExportEvidence{}, fmt.Errorf("snapshot export evidence contains an invalid payload entry %q", name)

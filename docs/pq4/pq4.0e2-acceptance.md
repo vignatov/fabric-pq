@@ -18,6 +18,10 @@ matrix and the trusted provisioning assumptions still require evidence.
   `b94e04d5bab8f13347a241652d5b57f178cac33c`, merging H0 into
   `9d5e90f1acaa804e5500d59ed00dbe0c84f7175d`. H0 and M0 below refer to
   these specific revisions, not later PR updates.
+- Review follow-up head **H1**: `0f859eddb31c3d52e5b5c2c97c0970178eadc392`.
+  Its pull-request workflows checked out synthetic merge **M1**:
+  `b8b5f46cb5997967d1a1035b5e6ed4b3cc79ebb8`, merging H1 into the same
+  base.
 - The [current PR checks](https://github.com/vignatov/fabric-pq/pull/14/checks)
   provide the status of later runs. Compare their PR head and checkout
   revision with the current head and base before using them as final-head
@@ -93,6 +97,23 @@ orderer `08d34275b876cf4352670b81906893a3484e28ee2098c695e70da21311e2cf1c`.
   evidence described here. It did not independently run the code or audit a
   real exporter host.
 
+### Hosted evidence for H1/M1
+
+- [Verify Build #45805906460](https://github.com/vignatov/fabric-pq/actions/runs/45805906460)
+  passed both repository-wide lint runs and all focused PQ4 jobs, including
+  the snapshot and managed disposable-VM tests. Basic Checks subsequently
+  failed because the orderer acquired a peer-ledger dependency and the
+  generated metrics reference no longer matched. Unit and integration jobs
+  were skipped. The later dependency fix keeps the snapshot filenames in the
+  shared snapshot package and preserves the existing `kvledger` aliases;
+  the metrics check passes locally and must be rerun on the current head.
+- The [PQ4.0E.2 job](https://github.com/vignatov/fabric-pq/actions/runs/45805906460/job/139860964281)
+  built peer and orderer binaries with SHA-256 hashes respectively
+  `3789e24b189073ee25e12cfe04fef88ad08fcef4c3705eccc586ac54333e6b6f` and
+  `5e6293bda4af0dad4ae8bd12819b326874465a74d00ca0ebbdf83fb2b2a7d778`.
+- [PQ3 isolated acceptance #45805906462](https://github.com/vignatov/fabric-pq/actions/runs/45805906462)
+  passed on M1. These results do not establish the outcome for a later head.
+
 The native peer integration test generates a real Fabric snapshot and verifies
 approved export, signed approval, protected import, recovery with retained
 evidence, and fail-closed recovery when evidence is removed. Negative cases
@@ -105,10 +126,12 @@ secrets, or ledger payloads are included in public evidence.
 
 ## Security-property matrix
 
-H0/M0 identifies the hosted evidence above. A passing job on H0/M0 is
-historical once the PR head changes; it is not a substitute for the full
-current-head matrix. The snapshot lifecycle test uses real Fabric ledger
-components in a test process, not a separately deployed peer process.
+H0/M0 identifies the initial hosted evidence above. The same focused PQ4
+and PQ3 jobs also passed at H1/M1, including the added v1 restart regression;
+neither revision completed the full unit/integration matrix. These historical
+results are not a substitute for the full current-head matrix. The snapshot
+lifecycle test uses real Fabric ledger components in a test process, not a
+separately deployed peer process.
 
 | Category / security property | Implementation and test evidence | Evidence class | Tested commit | Outcome and remaining limitation |
 | --- | --- | --- | --- | --- |
@@ -136,7 +159,7 @@ components in a test process, not a separately deployed peer process.
 | Transport: administrative endpoints and shared-listener minimum policy | Existing service inventory and strict admin tests | Native process tests | H0/M0 | Focused job passed; network-wide/channel-capability enforcement is not demonstrated |
 | Compatibility: baseline Fabric behavior | Baseline regression suites | Full unit and integration matrix | H0/M0 | Skipped after Basic Checks failed; full final-head Verify Build required |
 | Compatibility: mixed-channel isolation | `core/peer/pq40e_mixed_channel_test.go` and full peer package test | In-process native peer tests | H0/M0 | Focused job passed; final-head CI required |
-| Compatibility: v1 snapshot-joined peers | V2-only recovery and v1 rejection; [upgrade boundary](pq4.0e2-snapshot-provenance.md) | In-process native peer lifecycle test | H0/M0 for v1 import rejection; restart regression added later | No supported in-place v1 migration; final-head restart test required |
+| Compatibility: v1 snapshot-joined peers | V2-only recovery and v1 rejection; [upgrade boundary](pq4.0e2-snapshot-provenance.md) | In-process native peer lifecycle test | H0/M0 for v1 import rejection; H1/M1 for restart regression | No supported in-place v1 migration; final-head restart test required |
 | Compatibility: PQ3 isolated acceptance | PQ3 isolated acceptance workflow | Isolated hosted acceptance | H0/M0 | Passed; final-head rerun required |
 | Overall development acceptance and independent review | Full matrix, trusted provisioning evidence and final-head review | Partially demonstrated | H0/M0 only | **INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED** |
 
