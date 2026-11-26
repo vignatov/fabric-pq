@@ -2,9 +2,9 @@
 
 ## Decision
 
-The development workflow uses an independently authenticated, versioned
-authorization created before snapshot export. It pins the network, channel,
-exporter identity and ML-DSA-65 key, source-ledger identity and canonical
+The controlled acceptance procedure uses an independently authenticated,
+versioned authorization created before snapshot export. It pins the network,
+channel, exporter identity and ML-DSA-65 key, source-ledger identity and canonical
 ledger-directory path, trusted genesis, verified history and configuration
 boundary, transport profile, and approval generation.
 
@@ -33,8 +33,10 @@ configuration block, and requests native snapshot generation. The disposable
 Ubuntu test creates a second valid ledger at a different path, demonstrates
 that the exporter identity cannot read it, and rejects an attempt to substitute
 its path while claiming the approved source. The root-controlled execution
-record links the invocation to the authorization digest and the independently
-verified native snapshot.
+record links the authority-observed process exit and pinned invocation to the
+authorization digest. It is reconstructed by the trusted parent from the
+expected inputs; it is not an independent measurement of the opened ledger.
+The source association depends on the pinned executor's code and OS controls.
 
 The test demonstrates filesystem and process controls under a privileged
 provisioner and trusted kernel. The ledger path and audit record are not
@@ -47,20 +49,27 @@ false state.
 - **Provisioning authority:** independently pins and signs authorization,
   verifies exporter evidence and registry-bound Fabric history, privately
   stages exact snapshot bytes, and signs the existing v2 peer snapshot anchor.
-  Authority and operator signing keys remain outside exporter and importer
-  access.
+  Authority, exporter and operator test keys are freshly generated; authority
+  and operator signing keys remain outside exporter and importer access.
 - **Snapshot exporter:** runs under a dedicated Linux identity, can access
   only the authorized source ledger and its export destination, and uses its
   separately pinned ML-DSA-65 key. It cannot modify authorization pins or read
   the operator or provisioning-authority private keys.
 - **Protected importing peer:** runs under a separate Linux identity and uses
-  the existing v2 anchor verification, protected snapshot import, retained
-  evidence recovery, and readiness gates. It cannot modify the pre-existing
-  exporter authorization or read the provisioning authority's private key.
+  the independently signed manifest/history and their root-owned signer key
+  and digest, followed by existing v2 anchor verification, protected snapshot
+  import, retained evidence recovery, and readiness gates. Root-owned genesis
+  and join anchors are protected against replacement in the group-writable,
+  sticky runtime directory. Its root-owned sticky parent also prevents the
+  importer from replacing the state directory. The test attempts chmod and
+  removal of the pins, manifest, history and anchors, and replacement of the
+  state directory; runtime checkpoint and ledger data remain writable.
 
 The acceptance test uses an Ubuntu 24.04 GitHub-hosted job as the disposable
-VM boundary and distinct OS users for exporter and importer execution. The
-test binary invokes Fabric's native ledger manager for source access and the
+VM boundary and distinct OS users for exporter and importer execution. A
+trusted parent chooses the test binary, manifest, history and authority-key
+paths; arbitrary importer-controlled invocations are not a protected launcher.
+The test binary invokes Fabric's native ledger manager for source access and the
 existing peer snapshot-import path for protected admission; it does not claim
 that process separation protects against privileged-host or kernel compromise.
 The import test restarts the peer process and confirms protected readiness and
@@ -71,8 +80,10 @@ baseline-ledger continuity.
 The authority writes the operation record after the controlled exporter exits;
 it records the exact invocation, executable digest, authorization digest,
 selected source path and identity, channel and snapshot boundary. The verifier
-then checks that record against the authorization and the native signed
-evidence. The deterministic non-secret acceptance manifest links:
+then checks that record against the authorization before verifying native signed
+evidence. Missing, rejected, and inconsistent records fail this harness
+procedure. This parent-generated record is not an independent attestation of
+the ledger actually opened. The non-secret acceptance manifest links:
 
 - exact checkout commit and CI workflow/job/run identifiers;
 - exporter/importer test-binary digests;
@@ -87,6 +98,15 @@ Only the manifest is retained as a CI artifact. Private signing keys, TLS
 secrets, and ledger payloads stay inside the disposable VM. The protected
 staging and v2 approval remain the existing `VerifySnapshotExport` and
 `SignVerifiedPeerSnapshotAnchor` path; no alternate approval API is added.
+
+The controlled procedure is **test-harness-only**. The public PQ4.0E.2
+`NewSnapshotExporterTrust` and approval APIs still accept a trust pin supplied
+by their caller without requiring this signed authorization or operation
+record. A caller controlling that pin can verify and approve a self-chosen
+exporter using the legacy API. The harness rejects such a caller when no
+independently verified authorization is supplied, but this does not establish
+non-bypassable authorization at the public approval API. That mandatory
+invariant remains **INCOMPLETE**.
 
 ## Scope and limitations
 

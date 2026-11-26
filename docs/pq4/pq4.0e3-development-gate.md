@@ -6,8 +6,9 @@ PQ4.0E.3 implements signed pre-export authorization, source-ledger path
 controls, controlled native Fabric snapshot generation, independent
 verification, v2 approval, and protected import/recovery under separate Linux
 identities. The local controlled acceptance test passes. This report does not
-propose PASS because the final-head hosted Verify Build/PQ3 matrix, retained
-final-head evidence, and independent review have not yet been completed.
+propose PASS because non-bypassable pre-export authorization is not enforced
+by the legacy approval APIs, and final-head hosted Verify Build/PQ3 evidence
+and independent review have not yet been completed.
 
 ## Trust boundary and assumptions
 
@@ -30,9 +31,9 @@ trusted exporter.
 | Fabric history is verified from independently trusted genesis before approval | `provisioning.VerifyJoinHistory`; provenance tests; `TestPQ40EManagedOrdererNonGenesisPromotion`; snapshot import test | Native Fabric ledger and orderer/peer tests | H2/M2; Verify Build #45810211331 PQ4.0E.1 job | Historical focused tests passed | History verification does not reconstruct or attest arbitrary snapshot world state | Pending final-head regression |
 | Exporter identity/key and source-ledger path are authorized before package creation | `SignExporterAuthorization`, `VerifyExporterAuthorization`, `SnapshotExporterTrust(VerifiedJoinHistory)`; `TestPQ40EControlledSnapshotProvisioning` | Race-enabled disposable Linux process/filesystem test; distinct authority, exporter and importer identities | Local Go 1.27.4 container run on worktree based on `4dafb5f7e3aca0c7fd70fe9613e1b6250108111b`; final-head `pq40e3-provisioning-gate` job pending | Local test passed; hosted exact-head evidence pending | The authorization path is an OS-controlled association, not cryptographic source-ledger attestation | INCOMPLETE until final-head CI and independent review |
 | Only the authorized native ledger/channel/boundary is exported | Controlled exporter verifies the signed path, opens `LedgerMgr` on that root, checks the authorized block hash, then requests native snapshot generation; Ledger A/B case in `TestPQ40EControlledSnapshotProvisioning` | Native Fabric ledger opened by a separate exporter process; OS read-denial check | Same local worktree test; final-head `pq40e3-provisioning-gate` job pending | Ledger A succeeds; Ledger B path is inaccessible and override is rejected before approval | The exporter and host kernel remain trusted | INCOMPLETE until final-head CI and independent review |
-| Self-authorized exporter/key cannot create approval | Attacker-key authorization, self-signed package, and attacker-signed anchor replacement cases in `TestPQ40EControlledSnapshotProvisioning`; existing unapproved exporter tests in `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery` | Native exporter evidence, independent verifier, and separate importer process | New local worktree test; historical PQ4.0E.2 tests H2/M2, Verify Build #45810211331 | Local attacker cases rejected before import; historical focused job passed | Does not detect a malicious exporter holding the independently authorized key | Pending final-head CI |
+| Self-authorized exporter/key cannot create approval in the controlled procedure | Attacker-key authorization, self-signed package, missing authorization, and attacker-signed anchor replacement cases in `TestPQ40EControlledSnapshotProvisioning` | Native exporter evidence, independent verifier, and separate importer process | Local worktree test; hosted final-head job pending | The controlled procedure rejects unapproved keys; legacy APIs still accept a self-chosen pin | Does not detect a malicious authorized exporter; caller-supplied legacy trust bypasses the controlled procedure | **INCOMPLETE** for non-bypassable API authorization |
 | Snapshot evidence binds exact metadata, full inventory and staged bytes | `VerifySnapshotExport`, `SignVerifiedPeerSnapshotAnchor`; `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery`; post-stage replacement in `TestPQ40EControlledSnapshotProvisioning` | Native snapshot and protected staging tests | Historical H2/M2; new local worktree test; final-head job pending | Historical suite and local boundary test passed | Hash/signature checks cannot prove arbitrary world-state correctness | Pending final-head CI |
-| Operator approval is issued only from verified opaque export result | `VerifiedSnapshotExport`; `SignVerifiedPeerSnapshotAnchor`; provenance enrollment tests | Native API and peer tests | H2/M2, Verify Build #45810211331; new local worktree test | Existing API tests and local approval path passed | Operator private key remains in trusted provisioning scope and is never placed in the export package | Pending final-head CI |
+| Operator approval requires verified export and mandatory independent pre-export authorization | `VerifiedSnapshotExport`; `SignVerifiedPeerSnapshotAnchor`; controlled test procedure | Native API and peer tests | H2/M2, Verify Build #45810211331; new local worktree test | Existing API requires verified export, but does not require the E.3 authorization or operation record | Legacy callers can supply their own exporter trust; non-bypassability remains unimplemented | **INCOMPLETE** |
 | Protected import/recovery stays closed until authenticated evidence and readiness | `stageProtectedSnapshot`, `recoverProtectedSnapshot`; `TestPQ40EControlledSnapshotImporterChild`; restart evidence tests in `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery` | Separate importer process, native peer lifecycle, durable recovery | Historical H2/M2; new local worktree test; final-head job pending | Local protected import and restart recovery passed | Test exercises native peer code in the controlled test binary; kernel/privileged-host trust remains | Pending final-head CI |
 | Native peer/orderer admission and Raft readiness remain protected | PQ4.0D Raft/quarantine tests; PQ4.0E managed peer/orderer admission and promotion tests | Native peer/orderer tests | H2/M2, Verify Build #45810211331 PQ4.0D and PQ4.0E jobs | Historical focused jobs passed | Not a distributed network certification | Pending final-head regression |
 | Activation and crash/restart recovery preserve checkpoint invariants | PQ4.0C activation tests and recovery matrix; affected PQ4.0E tests | Native peer/orderer and ledger tests | H2/M2, Verify Build #45810211331 PQ4.0C job | Historical focused job passed | Power-loss and privileged rollback of all host state are not demonstrated | Pending final-head regression |
@@ -62,6 +63,15 @@ ledger roots and performs the following cases:
    pin were fixed independently before export. A separately signed v2 anchor
    that attempts to replace the approved exporter key and identity is rejected
    by the importing peer before channel creation; no partial ledger is left.
+   The test also demonstrates that a self-chosen pin succeeds in the legacy
+   verification API, while the controlled procedure rejects missing or
+   mismatched authority authorization before approval.
+
+The root-owned operation record records the parent's observed successful exit
+and the expected invocation, not an independently measured ledger selection.
+Missing, rejected, and inconsistent records fail the controlled procedure.
+Signer key, manifest, history, genesis, and join anchor replacement attempts
+are denied to the importer; the trusted parent selects the launch inputs.
 
 The test also modifies the original evidence file after private staging; the
 operator signs and the importer consumes only the verified staged bytes. This
@@ -92,6 +102,10 @@ GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=1 -run '^
 ```
 
 These commands validate the current working tree, not an immutable commit.
+Hosted Verify Build run #45857490242 at `ffd05c94c02436e3e9e94a94b5f9bf7c43fc8f4c`
+failed Basic Checks and the PQ4.0E.3 VM job; Unit and Integration Tests were
+skipped. PQ3 run #45857490045 passed at that head. These results do not cover
+subsequent fixes or substitute for final-head evidence.
 The new final-head hosted workflow job must pass after commit. The complete
 Verify Build matrix and PQ3 isolated acceptance must also pass on that exact
 head, with transient failures and retries reported separately and skipped
@@ -100,8 +114,9 @@ tests never counted as passes.
 ## Decision
 
 **INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED.** The controlled authorization and
-source-ledger demonstration is implemented and passes locally, but final-head
-hosted CI and an independent architecture/security review remain mandatory.
+source-ledger demonstration is test-harness-only. Non-bypassable authorization
+at the public approval API is not implemented; final-head hosted CI and a new
+independent architecture/security review also remain mandatory.
 If the hosted evidence passes, request independent review; do not treat this
 proposal as an accepted gate until that review explicitly accepts the final
 commit and evidence. Keep production deployment, PQ4.0B.1, v1 migration,

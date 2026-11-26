@@ -7,16 +7,20 @@ SPDX-License-Identifier: Apache-2.0
 package peer
 
 import (
+	"bytes"
 	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +31,7 @@ import (
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	pb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
+	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/kvledger"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport"
@@ -36,6 +41,7 @@ import (
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/provisioning"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -50,6 +56,8 @@ const (
 	importRootEnv         = "PQ40E_IMPORT_ROOT"
 	importSnapshotEnv     = "PQ40E_IMPORT_SNAPSHOT"
 	acceptanceRecordEnv   = "PQ40E_ACCEPTANCE_RECORD"
+	manifestFileEnv       = "PQ40E_MANIFEST_FILE"
+	historyFileEnv        = "PQ40E_HISTORY_FILE"
 )
 
 type controlledExporterOperation struct {
@@ -114,7 +122,7 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 		require.NoError(t, err, "%s %s: %s", name, strings.Join(args, " "), output)
 		return strings.TrimSpace(string(output))
 	}
-	identity := fmt.Sprintf("%d", os.Getpid())
+	identity := strconv.Itoa(os.Getpid())
 	exporterUser := "pq4e-exp-" + identity
 	importerUser := "pq4e-imp-" + identity
 	run("useradd", "--system", "--user-group", "--shell", "/usr/sbin/nologin", exporterUser)
@@ -136,12 +144,17 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	importerGID, err := strconv.Atoi(importerAccount.Gid)
 	require.NoError(t, err)
 
-	workspace, err := os.MkdirTemp("/tmp", "pq40e3-provisioning-")
+	// The separate users must traverse the workspace even when TMPDIR is private.
+	workspace, err := os.MkdirTemp("/tmp", "pq40e3-provisioning-") //nolint:usetesting
 	require.NoError(t, err)
 	require.NoError(t, os.Chmod(workspace, 0o755))
 	t.Cleanup(func() { _ = os.RemoveAll(workspace) })
 	controlDir := filepath.Join(workspace, "authority")
 	require.NoError(t, os.Mkdir(controlDir, 0o755))
+	gopath := filepath.Join(workspace, "gopath")
+	configParent := filepath.Join(gopath, "src", "github.com", "hyperledger", "fabric")
+	require.NoError(t, os.MkdirAll(configParent, 0o755))
+	run("cp", "-a", configtest.GetDevConfigDir(), filepath.Join(configParent, "sampleconfig"))
 	exporterKeyDir := filepath.Join(workspace, "exporter-key")
 	require.NoError(t, os.Mkdir(exporterKeyDir, 0o700))
 	fixture := testfixture.New(t)
@@ -162,22 +175,32 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	require.NoError(t, os.MkdirAll(stateDir, 0o700))
 	store, err := activation.OpenStore(stateDir, nil)
 	require.NoError(t, err)
-	fixture.Provision(t, store, update.GetConfig())
-	operatorSeed := sha256.Sum256([]byte("PQ4.0C activation fixture operator"))
-	operatorSigner, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), operatorSeed[:])
+	operatorSigner, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	require.NoError(t, err)
-	policyKeyPath := filepath.Join(stateDir, "policy-key")
+	configBytes, err := (proto.MarshalOptions{Deterministic: true}).Marshal(update.GetConfig())
+	require.NoError(t, err)
+	policyPayload, err := json.Marshal(pqtransport.Document{
+		Network: testfixture.Network, Node: testfixture.Node, Version: 1, Profile: pqtransport.ProfileV1,
+		Channels: map[string]pqtransport.ChannelBinding{
+			testfixture.ChannelID: {Sequence: update.GetConfig().GetSequence(), Digest: hashBytes(configBytes)},
+		},
+	})
+	require.NoError(t, err)
+	policySignature, err := operatorSigner.Sign(rand.Reader, policyPayload, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.Provision(pqtransport.Checkpoint{Version: 1, Digest: sha256.Sum256(policyPayload)}, policyPayload, policySignature))
+	policyKeyPath := filepath.Join(controlDir, "policy-key")
 	policyKey := operatorSigner.Public().(*mldsa.PublicKey).Bytes()
-	require.NoError(t, os.WriteFile(policyKeyPath, policyKey, 0o400))
+	require.NoError(t, os.WriteFile(policyKeyPath, policyKey, 0o444))
 	policyKeyDigest := sha256.Sum256(policyKey)
 	channelDigest := sha256.Sum256([]byte(testfixture.ChannelID))
 	genesisPath := filepath.Join(stateDir, fmt.Sprintf("genesis-%x", channelDigest))
 	genesisEncoded, err := json.Marshal(hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())))
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(genesisPath, genesisEncoded, 0o400))
-	require.NoError(t, os.WriteFile(genesisPath+".block", protoutil.MarshalOrPanic(genesis), 0o400))
+	require.NoError(t, os.WriteFile(genesisPath, genesisEncoded, 0o444))
+	require.NoError(t, os.WriteFile(genesisPath+".block", protoutil.MarshalOrPanic(genesis), 0o444))
 	joinPath := filepath.Join(stateDir, fmt.Sprintf("join-peer-%x", channelDigest))
-	require.NoError(t, os.WriteFile(joinPath+".block", protoutil.MarshalOrPanic(block), 0o400))
+	require.NoError(t, os.WriteFile(joinPath+".block", protoutil.MarshalOrPanic(block), 0o444))
 	manifest := enrollment.Manifest{
 		Mode: enrollment.Protected, Network: testfixture.Network, Node: testfixture.Node,
 		Profile: pqtransport.ProfileV1, PolicySigner: policyKeyPath,
@@ -192,14 +215,31 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	require.NoError(t, err)
 	report := verifiedHistory.Report()
 
-	authoritySigner := provisioningTestKey(t, "provisioning authority")
-	exporterSigner := provisioningTestKey(t, "approved exporter")
+	authoritySigner, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	exporterSigner, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
 	authorityPrivateKeyPath := filepath.Join(controlDir, "authority.key")
 	require.NoError(t, os.WriteFile(authorityPrivateKeyPath, authoritySigner.Bytes(), 0o400))
 	operatorPrivateKeyPath := filepath.Join(controlDir, "operator.key")
 	require.NoError(t, os.WriteFile(operatorPrivateKeyPath, operatorSigner.Bytes(), 0o400))
 	authorityPublicKeyPath := filepath.Join(controlDir, "authority.pub")
 	require.NoError(t, os.WriteFile(authorityPublicKeyPath, authoritySigner.Public().(*mldsa.PublicKey).Bytes(), 0o444))
+	manifest.Generation = 1
+	manifest.Executable = filepath.Join(workspace, "pq40e3-peer.test")
+	manifestPayload, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	signedManifest, err := signProvisioningTestDocument(authoritySigner, "fabric-pq/enrollment/v1\x00", manifest)
+	require.NoError(t, err)
+	signedHistory, err := signProvisioningTestDocument(authoritySigner, "fabric-pq/enrollment-history/v1\x00", enrollment.History{
+		Network: manifest.Network, Node: manifest.Node, Generation: manifest.Generation,
+		ProtectedEver: true, ManifestDigest: hashBytes(manifestPayload),
+	})
+	require.NoError(t, err)
+	manifestPath := filepath.Join(controlDir, "manifest.json")
+	historyPath := filepath.Join(controlDir, "history.json")
+	require.NoError(t, os.WriteFile(manifestPath, signedManifest, 0o444))
+	require.NoError(t, os.WriteFile(historyPath, signedHistory, 0o444))
 	authorization := provisioning.ExporterAuthorization{
 		AuthorityIdentity:     "pq40e3-test-provisioner",
 		Generation:            1,
@@ -230,6 +270,13 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	binaryHash := hashFile(t, testBinary)
 	run("chown", "-R", fmt.Sprintf("%d:%d", exporterUID, exporterGID), ledgerA, exporterKeyDir)
 	run("chown", "-R", fmt.Sprintf("%d:%d", importerUID, importerGID), peerRoot)
+	// Runtime state is writable, but sticky-bit ownership protects provisioned anchors.
+	run("chown", fmt.Sprintf("0:%d", importerGID), peerRoot, stateDir)
+	for _, path := range []string{genesisPath, genesisPath + ".block", joinPath + ".block"} {
+		run("chown", "0:0", path)
+	}
+	require.NoError(t, os.Chmod(stateDir, os.ModeSticky|0o770))
+	require.NoError(t, os.Chmod(peerRoot, os.ModeSticky|0o770))
 	require.NoError(t, os.Chmod(ledgerA, 0o700))
 	require.NoError(t, os.Chmod(exporterKeyDir, 0o700))
 
@@ -237,7 +284,9 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 		t.Helper()
 		args := []string{"-u", account, "--", testBinary, "-test.v", "-test.run=^" + testName + "$"}
 		command := exec.CommandContext(t.Context(), "runuser", args...)
+		command.Dir = workspace
 		command.Env = os.Environ()
+		command.Env = append(command.Env, "GOPATH="+gopath)
 		for name, value := range variables {
 			command.Env = append(command.Env, name+"="+value)
 		}
@@ -254,25 +303,25 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	rejected, err := runAs(exporterUser, withEnvironment(commonExporterEnv, exporterOverrideEnv, ledgerB), "TestPQ40EControlledSnapshotExporterChild")
 	require.Error(t, err)
 	require.Contains(t, rejected, "unauthorized source-ledger override")
-	require.NotZero(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-r", ledgerB).Run(),
+	require.Error(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-r", ledgerB).Run(),
 		"exporter must not be able to read an unapproved ledger path")
-	require.NotZero(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-w", authorizationPath).Run(),
+	require.Error(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-w", authorizationPath).Run(),
 		"exporter must not be able to rewrite authorization")
-	require.NotZero(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-w", controlDir).Run(),
+	require.Error(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-w", controlDir).Run(),
 		"exporter must not be able to replace provisioner-controlled records")
-	require.NotZero(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-r", operatorPrivateKeyPath).Run(),
+	require.Error(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-r", operatorPrivateKeyPath).Run(),
 		"exporter must not be able to read the operator signing key")
-	require.NotZero(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-r", authorityPrivateKeyPath).Run(),
+	require.Error(t, exec.Command("runuser", "-u", exporterUser, "--", "test", "-r", authorityPrivateKeyPath).Run(),
 		"exporter must not be able to read the provisioning authority key")
-	require.NotZero(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-w", authorizationPath).Run(),
+	require.Error(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-w", authorizationPath).Run(),
 		"importer must not be able to replace exporter authorization")
-	require.NotZero(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-w", controlDir).Run(),
+	require.Error(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-w", controlDir).Run(),
 		"importer must not be able to replace provisioner-controlled records")
-	require.NotZero(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-r", authorityPrivateKeyPath).Run(),
+	require.Error(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-r", authorityPrivateKeyPath).Run(),
 		"importer must not be able to read the provisioning authority key")
-	require.NotZero(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-r", operatorPrivateKeyPath).Run(),
+	require.Error(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-r", operatorPrivateKeyPath).Run(),
 		"importer must not be able to read the operator signing key")
-	require.NotZero(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-r", exporterPrivateKeyPath).Run(),
+	require.Error(t, exec.Command("runuser", "-u", importerUser, "--", "test", "-r", exporterPrivateKeyPath).Run(),
 		"importer must not be able to read the exporter signing key")
 
 	exportOutput, err := runAs(exporterUser, commonExporterEnv, "TestPQ40EControlledSnapshotExporterChild")
@@ -280,6 +329,7 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	require.NoFileExists(t, joinPath, "a rejected source selection must not produce an approval")
 	snapshotDir := kvledger.SnapshotDirForLedgerBlockNum(filepath.Join(ledgerA, "snapshots"), testfixture.ChannelID, report.TargetBlockNumber)
 	require.DirExists(t, snapshotDir)
+	expectedInvocation := []string{"runuser", "-u", exporterUser, "--", testBinary, "-test.v", "-test.run=^TestPQ40EControlledSnapshotExporterChild$"}
 	operation := controlledExporterOperation{
 		AuthorizationDigest:  hashBytes(authorizationBytes),
 		SourceLedgerIdentity: authorization.SourceLedgerIdentity,
@@ -288,7 +338,7 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 		SnapshotBlockNumber:  authorization.SnapshotBlockNumber,
 		SnapshotBlockHash:    authorization.SnapshotBlockHash,
 		ExecutableSHA256:     binaryHash,
-		Invocation:           []string{"runuser", "-u", exporterUser, "--", testBinary, "-test.v", "-test.run=^TestPQ40EControlledSnapshotExporterChild$"},
+		Invocation:           expectedInvocation,
 		Result:               "success",
 	}
 	operationBytes, err := json.Marshal(operation)
@@ -307,7 +357,8 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	require.Equal(t, report.TargetBlockHash, operation.SnapshotBlockHash)
 	require.Equal(t, binaryHash, operation.ExecutableSHA256)
 
-	attackerSigner := provisioningTestKey(t, "attacker exporter")
+	attackerSigner, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
 	attackerAuthorization := authorization
 	attackerAuthorization.ExporterIdentity = "self-authorized-exporter"
 	attackerAuthorization.ExporterPublicKey = attackerSigner.Public().(*mldsa.PublicKey).Bytes()
@@ -363,7 +414,32 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(attackerPackage, enrollment.SnapshotExportEvidenceFileName), attackerEvidence, 0o600))
 	_, err = provisioning.VerifySnapshotExport(verifiedHistory, attackerPackage, exporterTrust)
 	require.Error(t, err, "internally consistent evidence signed by an unapproved key must be rejected")
-	export, err := provisioning.VerifySnapshotExport(verifiedHistory, snapshotDir, exporterTrust)
+	selfChosenTrust, err := provisioning.NewSnapshotExporterTrust("self-authorized-exporter", authorization.SourceLedgerIdentity, attackerSigner.Public().(*mldsa.PublicKey))
+	require.NoError(t, err)
+	legacyExport, err := provisioning.VerifySnapshotExport(verifiedHistory, attackerPackage, selfChosenTrust)
+	require.NoError(t, err)
+	_, err = provisioning.SignVerifiedPeerSnapshotAnchor(verifiedHistory, legacyExport, operatorSigner)
+	require.NoError(t, err, "legacy approval does not enforce the independent authorization")
+	require.NoError(t, legacyExport.Close())
+	_, err = verifyControlledProvisioningExport(verifiedHistory, attackerPackage, nil, attackerBytes, persistedOperationBytes, binaryHash, expectedInvocation)
+	require.ErrorContains(t, err, "verified exporter authorization")
+	_, err = verifyControlledProvisioningExport(verifiedHistory, attackerPackage, verifiedAuthorization, attackerBytes, persistedOperationBytes, binaryHash, expectedInvocation)
+	require.ErrorContains(t, err, "verified authorization does not match")
+	_, err = verifyControlledProvisioningExport(verifiedHistory, snapshotDir, verifiedAuthorization, authorizationBytes, nil, binaryHash, expectedInvocation)
+	require.ErrorContains(t, err, "decode controlled operation")
+	rejectedOperation := operation
+	rejectedOperation.Result = "rejected"
+	rejectedOperationBytes, err := json.Marshal(rejectedOperation)
+	require.NoError(t, err)
+	_, err = verifyControlledProvisioningExport(verifiedHistory, snapshotDir, verifiedAuthorization, authorizationBytes, rejectedOperationBytes, binaryHash, expectedInvocation)
+	require.ErrorContains(t, err, "controlled operation conflicts")
+	rejectedOperation = operation
+	rejectedOperation.SourceLedgerPath = ledgerB
+	rejectedOperationBytes, err = json.Marshal(rejectedOperation)
+	require.NoError(t, err)
+	_, err = verifyControlledProvisioningExport(verifiedHistory, snapshotDir, verifiedAuthorization, authorizationBytes, rejectedOperationBytes, binaryHash, expectedInvocation)
+	require.ErrorContains(t, err, "controlled operation conflicts")
+	export, err := verifyControlledProvisioningExport(verifiedHistory, snapshotDir, verifiedAuthorization, authorizationBytes, persistedOperationBytes, binaryHash, expectedInvocation)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, export.Close()) }()
 	evidencePath := filepath.Join(snapshotDir, enrollment.SnapshotExportEvidenceFileName)
@@ -378,17 +454,30 @@ func TestPQ40EControlledSnapshotProvisioning(t *testing.T) {
 	require.NotEqual(t, hashBytes(stagedEvidence), hashBytes(replacedEvidence))
 	anchor, err := provisioning.SignVerifiedPeerSnapshotAnchor(verifiedHistory, export, operatorSigner)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(joinPath, anchor, 0o400))
+	require.NoError(t, os.WriteFile(joinPath, anchor, 0o444))
 
 	importSnapshot := filepath.Join(peerRoot, "approved-snapshot")
 	copySnapshotPackage(t, export.Directory(), importSnapshot)
-	run("chown", "-R", fmt.Sprintf("%d:%d", importerUID, importerGID), peerRoot)
+	run("chown", "-R", fmt.Sprintf("%d:%d", importerUID, importerGID), importSnapshot)
+	for _, path := range []string{policyKeyPath, authorityPublicKeyPath, manifestPath, historyPath, joinPath, genesisPath} {
+		output, err := exec.Command("runuser", "-u", importerUser, "--", "chmod", "u+w", path).CombinedOutput()
+		require.Errorf(t, err, "importer must not chmod %s: %s", path, output)
+		output, err = exec.Command("runuser", "-u", importerUser, "--", "rm", "-f", path).CombinedOutput()
+		require.Errorf(t, err, "importer must not replace %s: %s", path, output)
+		require.FileExists(t, path)
+	}
+	output, err := exec.Command("runuser", "-u", importerUser, "--", "mv", stateDir, stateDir+"-replaced").CombinedOutput()
+	require.Errorf(t, err, "importer must not replace the protected state directory: %s", output)
+	require.DirExists(t, stateDir)
 
 	importerEnv := map[string]string{
-		importerChildEnv:    "1",
-		importRootEnv:       peerRoot,
-		importSnapshotEnv:   importSnapshot,
-		acceptanceRecordEnv: filepath.Join(peerRoot, "acceptance.json"),
+		importerChildEnv:      "1",
+		importRootEnv:         peerRoot,
+		importSnapshotEnv:     importSnapshot,
+		acceptanceRecordEnv:   filepath.Join(peerRoot, "acceptance.json"),
+		manifestFileEnv:       manifestPath,
+		historyFileEnv:        historyPath,
+		authorityPublicKeyEnv: authorityPublicKeyPath,
 	}
 	var anchorEnvelope enrollment.Envelope
 	require.NoError(t, json.Unmarshal(anchor, &anchorEnvelope))
@@ -503,7 +592,7 @@ func TestPQ40EControlledSnapshotExporterChild(t *testing.T) {
 	require.NoError(t, err)
 	block, err := source.GetBlockByNumber(authorization.SnapshotBlockNumber)
 	require.NoError(t, err)
-	require.Equal(t, authorization.SnapshotBlockHash, fmt.Sprintf("%x", protoutil.BlockHeaderHash(block.GetHeader())))
+	require.Equal(t, authorization.SnapshotBlockHash, hex.EncodeToString(protoutil.BlockHeaderHash(block.GetHeader())))
 	info, err := source.GetBlockchainInfo()
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, info.GetHeight(), authorization.SnapshotBlockNumber+1)
@@ -539,19 +628,21 @@ func TestPQ40EControlledSnapshotImporterChild(t *testing.T) {
 		t.Skip("subprocess-only importer test")
 	}
 	peerRoot := os.Getenv(importRootEnv)
-	stateDir := filepath.Join(peerRoot, "state")
-	policyKey, err := os.ReadFile(filepath.Join(stateDir, "policy-key"))
+	authorityBytes, err := os.ReadFile(os.Getenv(authorityPublicKeyEnv))
 	require.NoError(t, err)
-	policyDigest := sha256.Sum256(policyKey)
-	manifest := enrollment.Manifest{
-		Mode: enrollment.Protected, Network: testfixture.Network, Node: testfixture.Node,
-		Profile: pqtransport.ProfileV1, PolicySigner: filepath.Join(stateDir, "policy-key"),
-		PolicySignerDigest: hex.EncodeToString(policyDigest[:]),
-		StateDir:           stateDir, LedgerDir: filepath.Join(peerRoot, "ledgersData"),
-	}
+	authorityKey, err := mldsa.NewPublicKey(mldsa.MLDSA65(), authorityBytes)
+	require.NoError(t, err)
+	manifestBytes, err := os.ReadFile(os.Getenv(manifestFileEnv))
+	require.NoError(t, err)
+	historyBytes, err := os.ReadFile(os.Getenv(historyFileEnv))
+	require.NoError(t, err)
+	manifest, err := enrollment.Verify(manifestBytes, historyBytes, authorityKey)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(peerRoot, "ledgersData"), manifest.LedgerDir)
+	require.Equal(t, filepath.Join(peerRoot, "state"), manifest.StateDir)
 	startPeer := func() (*Peer, func()) {
 		p, closeLedger := newTestPeer(t, peerRoot)
-		registry, err := enrollment.OpenProtectedRegistry(&manifest)
+		registry, err := enrollment.OpenProtectedRegistry(manifest)
 		require.NoError(t, err)
 		p.ProtectedRegistry = registry
 		p.Initialize(nil, nil, nil, nil, nil, nil, 1)
@@ -604,11 +695,53 @@ func TestPQ40EControlledSnapshotImporterChild(t *testing.T) {
 
 func signProvisioningTestAnchor(t *testing.T, signer *mldsa.PrivateKey, anchor any) ([]byte, error) {
 	t.Helper()
-	payload, err := json.Marshal(anchor)
+	return signProvisioningTestDocument(signer, enrollment.PeerSnapshotAnchorDomain, anchor)
+}
+
+// The operation is a trusted parent observation, not an attestation of the opened ledger.
+func verifyControlledProvisioningExport(history *provisioning.VerifiedJoinHistory, directory string,
+	authorization *provisioning.VerifiedExporterAuthorization, authorizationBytes, operationBytes []byte,
+	binaryHash string, invocation []string,
+) (*provisioning.VerifiedSnapshotExport, error) {
+	if authorization == nil {
+		return nil, errors.New("verified exporter authorization is required")
+	}
+	var envelope enrollment.Envelope
+	if err := json.Unmarshal(authorizationBytes, &envelope); err != nil {
+		return nil, fmt.Errorf("decode controlled authorization: %w", err)
+	}
+	claims := authorization.Authorization()
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		return nil, fmt.Errorf("encode verified authorization: %w", err)
+	}
+	if !bytes.Equal(envelope.Payload, payload) {
+		return nil, errors.New("verified authorization does not match controlled authorization")
+	}
+	var operation controlledExporterOperation
+	if err := json.Unmarshal(operationBytes, &operation); err != nil {
+		return nil, fmt.Errorf("decode controlled operation: %w", err)
+	}
+	if operation.Result != "success" || operation.AuthorizationDigest != hashBytes(authorizationBytes) ||
+		operation.SourceLedgerIdentity != claims.SourceLedgerIdentity || operation.SourceLedgerPath != claims.SourceLedgerPath ||
+		operation.Channel != claims.Channel || operation.SnapshotBlockNumber != claims.SnapshotBlockNumber ||
+		operation.SnapshotBlockHash != claims.SnapshotBlockHash || operation.ExecutableSHA256 != binaryHash ||
+		!slices.Equal(operation.Invocation, invocation) {
+		return nil, errors.New("controlled operation conflicts with authorization or execution")
+	}
+	trust, err := authorization.SnapshotExporterTrust(history)
 	if err != nil {
 		return nil, err
 	}
-	signature, err := signer.Sign(rand.Reader, append([]byte(enrollment.PeerSnapshotAnchorDomain), payload...), nil)
+	return provisioning.VerifySnapshotExport(history, directory, trust)
+}
+
+func signProvisioningTestDocument(signer *mldsa.PrivateKey, domain string, document any) ([]byte, error) {
+	payload, err := json.Marshal(document)
+	if err != nil {
+		return nil, err
+	}
+	signature, err := signer.Sign(rand.Reader, append([]byte(domain), payload...), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -630,14 +763,6 @@ func createControlledProvisioningLedger(t *testing.T, dataDir, channel string, b
 	}
 }
 
-func provisioningTestKey(t *testing.T, label string) *mldsa.PrivateKey {
-	t.Helper()
-	seed := sha256.Sum256([]byte(label))
-	key, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), seed[:])
-	require.NoError(t, err)
-	return key
-}
-
 func copyTestBinary(t *testing.T, destination string) (string, error) {
 	t.Helper()
 	source, err := os.Executable()
@@ -656,10 +781,7 @@ func copyTestBinary(t *testing.T, destination string) (string, error) {
 }
 
 func withEnvironment(environment map[string]string, name, value string) map[string]string {
-	clone := make(map[string]string, len(environment)+1)
-	for key, existing := range environment {
-		clone[key] = existing
-	}
+	clone := maps.Clone(environment)
 	clone[name] = value
 	return clone
 }
