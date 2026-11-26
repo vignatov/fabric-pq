@@ -20,6 +20,7 @@ import (
 
 	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
+	"github.com/hyperledger/fabric/common/ledger/snapshot"
 	"github.com/hyperledger/fabric/core/chaincode/implicitcollection"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/confighistory"
@@ -32,8 +33,8 @@ import (
 )
 
 const (
-	SnapshotSignableMetadataFileName   = "_snapshot_signable_metadata.json"
-	SnapshotAdditionalMetadataFileName = "_snapshot_additional_metadata.json"
+	SnapshotSignableMetadataFileName   = snapshot.SignableMetadataFileName
+	SnapshotAdditionalMetadataFileName = snapshot.AdditionalMetadataFileName
 	jsonFileIndent                     = "    "
 	simpleKeyValueDB                   = "SimpleKeyValueDB"
 )

@@ -94,7 +94,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Signed manifest, protected history and Linux launcher | Linux race and subprocess tests passed; managed deployment incomplete |
 | Fixed managed systemd unit and installer | Disposable systemd VM test installs and inspects the real unit |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Disposable VM test covers the trusted service-manager boundary; production validation pending |
-| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. Local Linux race tests cover managed orderer issuance/promotion and peer snapshot issuance/import/recovery. Snapshot state authenticity additionally requires a trusted exporter and provisioner verification of payload hashes; history replay alone does not establish it. Final-head hosted CI and bounded implementation review passed; remaining PQ4.0E acceptance evidence is pending. |
+| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. PQ4.0E.2 adds provisioner-pinned exporter evidence, complete pre-signing inventory verification, private staging and a versioned peer snapshot anchor. Full H2 hosted CI, a disposable-VM test and an initial independent review are recorded in the [acceptance report](pq4.0e2-acceptance.md); later revisions require their own CI, and evidence for the independent provisioning boundary remains pending. PQ4.0E is INCOMPLETE. |
 | Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
@@ -109,7 +109,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
 | Runtime service coverage | Recorded below, including endpoints disabled for enrolled channels and network-wide enforcement gaps |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | Current-head Verify Build and PQ3 results are recorded below; PQ4.0E and PQ4.0B acceptance evidence remains incomplete |
+| Full regression, integration and final-head CI evidence | Historical Verify Build and PQ3 results are recorded below; current PQ4.0E.2 evidence is tracked in the [acceptance report](pq4.0e2-acceptance.md). PQ4.0E and PQ4.0B acceptance evidence remains incomplete |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
@@ -167,6 +167,51 @@ sign-off. These results do not complete the PQ4.0E development gate; remaining
 acceptance evidence, independent snapshot-state provenance and production
 qualification are still outstanding.
 
+### PQ4.0E.2 trusted snapshot export
+
+The `provisioning.SignVerifiedPeerSnapshotAnchor` entry point no longer
+accepts arbitrary metadata bytes. It requires the opaque result of
+`VerifySnapshotExport`, which verifies an exporter signature using a
+provisioner-pinned ML-DSA-65 key and checks the independently configured
+exporter and source-ledger identities against that pin, while matching the
+history boundary to the registry-bound `VerifiedJoinHistory`. Versioned
+evidence binds the source-history identity, genesis and configuration
+boundary, exact native metadata byte hashes and complete payload inventory.
+The exporter identity, public-key pin, and
+expected source-ledger identity must come from the trusted provisioning
+boundary, not from snapshot files.
+
+`VerifySnapshotExport` rejects missing or unexpected entries, unsafe names,
+symlinks, non-regular files, altered hashes and inconsistent metadata. It
+copies the authenticated files and evidence into a private, read-only staging
+directory; the signer rechecks that staged content immediately before issuing
+the anchor. The peer anchor uses the explicit
+`fabric-pq/peer-snapshot/v2` domain and format and binds the evidence digest,
+exporter identity, source-ledger identity and approved exporter public key.
+There is no v1 fallback: old peer snapshot anchors fail closed and require a
+new trusted approval for separately provisioned onboarding. No in-place
+migration of an existing v1 snapshot-backed ledger is currently supported;
+see the [upgrade boundary](pq4.0e2-snapshot-provenance.md).
+
+The importer verifies the exporter evidence and exact native metadata before
+copying only the listed payloads into its private native-import directory. It
+retains the evidence beside protected state and requires it again during
+restart recovery. Missing evidence cannot reopen the protected channel.
+Managed protected snapshot-export RPC restrictions remain unchanged; this
+workflow uses a separate offline or isolated source-export boundary.
+
+The source exporter, its ledger, the trusted provisioner and operator, and the
+isolated host filesystem are trusted. A compromised trusted exporter can sign
+false state, which file hashes cannot detect. This is not a cryptographic
+commitment from Fabric block history to arbitrary world state. The APIs do
+not attest which ledger the exporter actually read; evidence of the separate
+provisioning and exporter controls is still required. The focused
+Linux race-enabled native test covers approved export, a self-consistent
+recomputed-hash substitution without fresh exporter approval, metadata and
+payload tampering, unsafe package entries, operator-key mismatch, protected
+import, restart with evidence, and restart without evidence. It does not by
+itself complete the PQ4.0E gate.
+
 Local validation was run on Linux/amd64 with Go 1.27.4, `GOFIPS140=off`, in a
 disposable `golang:1.27.4` container. All commands below passed:
 
@@ -180,20 +225,22 @@ go vet -mod=vendor ./internal/pkg/pqtransport/... ./orderer/consensus/etcdraft .
 ```
 
 Operator usage and evidence format are documented in
-[PQ4.0E.1 Fabric provenance verification](pq4.0e1-provenance.md).
+[PQ4.0E.1 Fabric provenance verification](pq4.0e1-provenance.md); current and
+historical hosted results are distinguished in the
+[PQ4.0E.2 acceptance report](pq4.0e2-acceptance.md).
 
 ### Service and publication inventory
 
 | Runtime path | Admission and publication boundary | Evidence or open dependency |
 | --- | --- | --- |
-| Peer ledger load and CSCC join | The authenticated registry selects protected channels. Existing runtime checks the signed target anchor and snapshot metadata before ledger creation; PQ4.0E.1 adds full-history verification at trusted provisioning before anchor issuance. The controller restores the private validation bundle and serving resources before publication. | Native genesis join/restart and real-ledger signed non-genesis snapshot issuance/import/recovery pass in local Linux race tests and the final-head hosted CI run. Other snapshot targets require additional signed state-transfer evidence. |
+| Peer ledger load and CSCC join | The authenticated registry selects protected channels. Existing runtime checks the signed target anchor and snapshot metadata before ledger creation; PQ4.0E.1 adds full-history verification at trusted provisioning before anchor issuance. The controller restores the private validation bundle and serving resources before publication. | Native genesis join/restart and real-ledger signed non-genesis snapshot issuance/import/recovery passed local Linux race tests and the PQ4.0E.2 hosted job; exact revisions and current-head evidence are tracked in the [acceptance report](pq4.0e2-acceptance.md). Other snapshot targets require additional signed state-transfer evidence. |
 | Peer endorsement, CSCC config reads and QSCC ledger reads | Endorsement retains the serving generation through unary gRPC completion. CSCC and QSCC acquire the target channel separately when the query names a channel outside the proposal header. Node-local channel and join-status listing use local ACLs. | Native protected queries before and after restart, and refusal with persisted quarantine. Component test for blocked unary response serialization. |
 | Peer block, filtered and private-data Deliver | All three RPCs share the protected seek admission and retain it through iteration, ACL checks and sends. Revocation closes a waiting iterator or aborts a blocked send. | Mixed-channel best-effort Deliver with protected cancellation, continued baseline streaming, and protected recovery. Existing filtered and private-data response tests exercise the data formats. |
 | Peer Gateway | Evaluate, Endorse, Submit, CommitStatus and ChaincodeEvents use the protected generation. Ordered cache retirement precedes installation of staged endpoints and roots. Routed protected calls use the strict client policy. | Registry and RPC tests cover failure, cache reconstruction, unary completion and event-stream drain. Network-wide external Gateway topology is deferred. |
 | Peer discovery | Per-channel queries acquire separate leases through the unary response. Local membership is node-scoped and uses its local policy. | Strict gRPC mixed-query test across failure and restart. |
 | Peer gossip, block delivery and private data | Shared listener and managed outbound clients use the strict profile. Protected block commit, state-transfer replies, private-data storage, pulls and distribution honor channel admission. An in-flight protected reply can force reconnect. | Mixed real-ledger commit and TLS restart proof, plus focused queue and private-data tests. End-to-end authenticated gossip topology across independently managed nodes is deferred. |
 | Peer chaincode registration, execution and CCAAS | Strict registration with a local ML-DSA-65 CA, and strict authenticated external connection setup for managed peers. Protected invocation takes admission before lifecycle lookup. Cross-channel calls retain target admission through the source shim response. | Focused lease, queued and in-flight revocation, restart and live external connection-abort tests. A complete deployed CCAAS topology is deferred. |
-| Peer snapshot export | Generate, Cancel and QueryPendings reject enrolled channels. A scheduled export can run after its RPC returns and requires a generation-aware worker. | Native signed protected Generate rejection. Baseline snapshot service stays enabled. Signed snapshot import has its own provenance and remains supported. |
+| Peer snapshot export | Generate, Cancel and QueryPendings still reject enrolled channels. PQ4.0E.2 approval uses a separately authorized offline/isolated exporter; the importer stages only authenticated content and retains export evidence for recovery. | Native signed protected Generate rejection remains. Focused native export/import and negative substitution tests pass; no remote export bypass was introduced. |
 | Orderer Broadcast and Raft | The validated generation survives readiness, forwarding, batching and the Raft proposal call. Native replay and quarantine gate user traffic. | Native mixed Broadcast/Deliver restart and controlled proposal-queue tests. |
 | Orderer AtomicBroadcast Deliver | Both normal and best-effort seeks hold admission through iteration, ACLs and block sends. In-flight revocation can force reconnect on the affected transport. | Native best-effort stream cancellation, baseline continuity and restart. |
 | Orderer cluster and follower | Shared or configured dedicated cluster transports use the strict profile. Application submission carries the generation. Authenticated Raft replication and follower verification can proceed for recovery while application admission is closed. | Strict authenticated Cluster Step and Raft Submit tests, native replay/quarantine and signed non-genesis follower promotion. Managed protected channels require Raft. Full SmartBFT protection is deferred. |
@@ -229,16 +276,18 @@ that already reached the target must contain the anchored block header.
 The orderer still reconciles native Raft replay before opening admission.
 
 For a peer, provision `join-peer-<sha256(channel-id)>` and its `.block`
-file containing the target configuration block. Sign the payload with
-domain `fabric-pq/peer-snapshot/v1` and a NUL separator. The payload also
-includes `signable_metadata_hash` and `additional_metadata_hash`, the raw
-SHA-256 digests of both native snapshot metadata files. This authenticates
-the exact state-transfer boundary and checks the current checkpoint binding
-before asynchronous import. The peer copies and verifies the approved files
-in a private directory. Snapshot height and hash must match the target
-configuration block. Recovery re-authenticates the metadata retained by the
-native ledger and checks the ledger linkage and persisted world-state
-configuration before admission can open.
+file containing the target configuration block, plus the authenticated
+`_pactway_snapshot_export_evidence.json` sidecar and native snapshot files.
+The operator signs the versioned `fabric-pq/peer-snapshot/v2` anchor, which
+binds both native metadata byte hashes, the export-evidence digest, exporter
+identity, source-ledger identity and exporter public key. The provisioner
+must verify the exporter against its independent pin and verify every file
+before signing. The peer authenticates the sidecar, copies only the enumerated
+files into a private directory, and retains the sidecar in protected state.
+Snapshot height and hash must match the target configuration block. Restart
+re-authenticates the retained evidence, metadata and anchor and checks ledger
+linkage before admission can open. Older v1 peer snapshot anchors are not
+accepted as a fallback.
 
 The bounded snapshot path covers a snapshot taken at a configuration block.
 Snapshot targets between configuration blocks require an additional signed

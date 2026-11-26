@@ -18,6 +18,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	// SignableMetadataFileName names the signable ledger snapshot metadata.
+	SignableMetadataFileName = "_snapshot_signable_metadata.json"
+	// AdditionalMetadataFileName names the additional ledger snapshot metadata.
+	AdditionalMetadataFileName = "_snapshot_additional_metadata.json"
+)
+
 type NewHashFunc func() (hash.Hash, error)
 
 // FileWriter creates a new file for ledger snapshot. This is expected to be used by various

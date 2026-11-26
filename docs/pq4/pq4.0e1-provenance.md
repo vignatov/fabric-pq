@@ -57,22 +57,30 @@ The helper APIs are in `internal/pkg/pqtransport/provenance`,
 5. Issue only the matching approval:
    - `provisioning.SignVerifiedOrdererJoinAnchor` for the orderer
      `fabric-pq/orderer-join/v1` domain.
-   - `provisioning.SignVerifiedPeerSnapshotAnchor` for the peer
-     `fabric-pq/peer-snapshot/v1` domain, with the exact native signable and
-     additional metadata bytes.
-6. Provision the target configuration block alongside the approved anchor
-   where the existing enrollment contract requires it. The receiving peer
-   still verifies metadata and every snapshot file hash before import.
+   - For a peer snapshot, the authorized exporter signs
+     `provisioning.SignSnapshotExportEvidence` after native export. The
+     trusted provisioner loads the exporter key and expected source-ledger
+     identity from independent configuration, calls
+     `provisioning.VerifySnapshotExport`, then passes only its opaque staged
+     result to `provisioning.SignVerifiedPeerSnapshotAnchor`. This issues the
+     versioned `fabric-pq/peer-snapshot/v2` approval.
+6. Provision the target configuration block, v2 anchor, and authenticated
+   `_pactway_snapshot_export_evidence.json` sidecar with the native snapshot.
+   The peer verifies the evidence and exact file inventory, stages only
+   approved payload files, and retains the sidecar for restart recovery.
 
-   For snapshots, the trusted provisioner must independently trust that the
-   exporter created the snapshot state from the verified channel history and
-   must validate the exported files against the metadata before signing.
-   `SignVerifiedPeerSnapshotAnchor` checks the metadata boundary and digest
-   syntax only; it neither reads the payload files nor proves their state
-   provenance. A maliciously replaced payload and recomputed metadata can
-   therefore be signed if the provisioner fails to establish this separate
-   trusted-exporter assumption. Import-time hash checks establish integrity
-   against the signed metadata, not authenticity of the exported state.
+The exporter identity and source-ledger identity are not accepted solely
+because they appear in the evidence. The v2 operator anchor binds the
+evidence digest, exporter identity, source-ledger identity and approved
+exporter public key. The earlier helper that accepted raw metadata bytes is
+not retained as an alternate onboarding path. A self-consistent payload and
+recomputed native metadata hashes without fresh exporter authentication are
+rejected. This proves an authenticated exporter approval, not state correctness
+against a compromised exporter; arbitrary world-state correctness is not
+cryptographically derived from Fabric history. The claim that the exporter
+actually read the approved source ledger depends on the separately controlled
+provisioning workflow; see the [source-ledger trust and upgrade
+boundary](pq4.0e2-snapshot-provenance.md).
 
 The signing helpers require the private key corresponding to the authenticated
 policy signer. Keep that key in the external trusted provisioning authority;

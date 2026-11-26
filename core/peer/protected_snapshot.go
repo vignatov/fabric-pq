@@ -38,8 +38,15 @@ func (p *Peer) stageProtectedSnapshot(sourceDir string) (channel, path string, c
 	if err != nil {
 		return "", "", nil, err
 	}
-	verified, err := p.ProtectedRegistry.VerifyPeerSnapshot(signable, additional, p.CryptoProvider)
+	exportEvidence, err := source.ReadFile(enrollment.SnapshotExportEvidenceFileName)
 	if err != nil {
+		return "", "", nil, fmt.Errorf("read authenticated snapshot export evidence: %w", err)
+	}
+	verified, err := p.ProtectedRegistry.VerifyPeerSnapshot(signable, additional, exportEvidence, p.CryptoProvider)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if err := verifyProtectedSnapshotInventory(source, verified.Files); err != nil {
 		return "", "", nil, err
 	}
 	controller := p.ProtectedRegistry.Controller(verified.Channel, p.CryptoProvider)
@@ -76,7 +83,52 @@ func (p *Peer) stageProtectedSnapshot(sourceDir string) (channel, path string, c
 	if err := os.WriteFile(filepath.Join(stage, kvledger.SnapshotAdditionalMetadataFileName), additional, 0o600); err != nil {
 		return "", "", nil, err
 	}
+	if err := p.ProtectedRegistry.StorePeerSnapshotExportEvidence(verified.Channel, verified.ExportEvidence); err != nil {
+		return "", "", nil, err
+	}
 	return verified.Channel, stage, remove, nil
+}
+
+func verifyProtectedSnapshotInventory(source *os.Root, files map[string]string) error {
+	expected := map[string]struct{}{
+		kvledger.SnapshotSignableMetadataFileName:   {},
+		kvledger.SnapshotAdditionalMetadataFileName: {},
+		enrollment.SnapshotExportEvidenceFileName:   {},
+	}
+	for name := range files {
+		if !filepath.IsLocal(name) || filepath.Base(name) != name || name == "." || name == ".." ||
+			name == kvledger.SnapshotSignableMetadataFileName ||
+			name == kvledger.SnapshotAdditionalMetadataFileName ||
+			name == enrollment.SnapshotExportEvidenceFileName {
+			return fmt.Errorf("invalid protected snapshot payload file name %q", name)
+		}
+		expected[name] = struct{}{}
+	}
+	listing, err := source.Open(".")
+	if err != nil {
+		return err
+	}
+	defer listing.Close()
+	entries, err := listing.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	if len(entries) != len(expected) {
+		return errors.New("protected snapshot directory contains missing or unexpected files")
+	}
+	for _, entry := range entries {
+		if _, ok := expected[entry.Name()]; !ok || !entry.Type().IsRegular() {
+			return fmt.Errorf("protected snapshot contains unexpected or non-regular entry %q", entry.Name())
+		}
+		info, err := source.Lstat(entry.Name())
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("protected snapshot entry %q is not a regular file", entry.Name())
+		}
+	}
+	return nil
 }
 
 func copyProtectedSnapshotFile(source *os.Root, stage, name, digest string) error {
@@ -92,6 +144,13 @@ func copyProtectedSnapshotFile(source *os.Root, stage, name, digest string) erro
 		return err
 	}
 	defer input.Close()
+	opened, err := input.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(info, opened) {
+		return fmt.Errorf("protected snapshot payload %q changed while being opened", name)
+	}
 	output, err := os.OpenFile(filepath.Join(stage, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -112,7 +171,11 @@ func (p *Peer) recoverProtectedSnapshot(id string, l ledger.PeerLedger, info *cb
 	if err != nil {
 		return nil, err
 	}
-	verified, err := p.ProtectedRegistry.VerifyPeerSnapshot(signable, additional, p.CryptoProvider)
+	exportEvidence, err := p.ProtectedRegistry.LoadPeerSnapshotExportEvidence(id)
+	if err != nil {
+		return nil, fmt.Errorf("load retained snapshot export evidence: %w", err)
+	}
+	verified, err := p.ProtectedRegistry.VerifyPeerSnapshot(signable, additional, exportEvidence, p.CryptoProvider)
 	if err != nil {
 		return nil, err
 	}

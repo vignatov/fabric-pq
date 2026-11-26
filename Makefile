@@ -179,6 +179,11 @@ docker-thirdparty-couchdb: ## Pull couchdb docker image
 verify: export JOB_TYPE=VERIFY ## Runs unit tests for only the changed package tree
 verify: unit-test # Runs unit tests for only the changed package tree
 
+.PHONY: pq-snapshot-acceptance
+pq-snapshot-acceptance: ## Runs PQ4.0E.2 snapshot evidence, import and recovery tests
+	GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=1 ./internal/pkg/pqtransport/... ./core/peer
+	GOFIPS140=off GOFLAGS=-buildvcs=false go vet -mod=vendor ./internal/pkg/pqtransport/... ./core/peer
+
 .PHONY: profile
 profile: export JOB_TYPE=PROFILE ## Runs unit tests for all packages in coverprofile mode (slow)
 profile: unit-test # Runs unit tests for all packages in coverprofile mode (slow)

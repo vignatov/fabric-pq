@@ -109,6 +109,13 @@ the provisioned binding and native admin authorization at genesis join. A
 snapshot join stays closed when the expected committed block or provenance
 cannot be established.
 
+The PQ4.0E.2 peer snapshot path additionally requires a v2 operator anchor
+bound to authenticated exporter evidence and an exact staged file inventory.
+The exporter proof is retained with protected state and revalidated alongside
+the native snapshot metadata and ledger boundary during restart; missing or
+conflicting evidence is a recovery failure, not a reason to fall back to
+baseline admission. Legacy v1 peer snapshot anchors are rejected.
+
 ### Orderer
 
 `StandardChannel.ProcessConfigUpdateMsg` establishes Fabric authorization
@@ -221,8 +228,10 @@ participation-follower membership, Raft replay, or peer snapshot checks. It
 fails closed for unsupported boundaries and consensus metadata that cannot be
 validated by the supported native Raft validator. The implementation and
 operator flow are tracked in the
-[PQ4.0E.1 provenance guide](pq4.0e1-provenance.md); acceptance, final-head
-Linux CI and independent review remain pending. This work does not close PQ4.0B.
+[PQ4.0E.1 provenance guide](pq4.0e1-provenance.md). The
+[PQ4.0E.2 acceptance report](pq4.0e2-acceptance.md) records the full H2 hosted
+evidence and initial review; later revisions require their own final-head CI,
+and gate closure remains pending. This work does not close PQ4.0B.
 
 History verification authenticates the snapshot boundary, not the snapshot
 state. The provisioner must independently trust the exporter and validate
