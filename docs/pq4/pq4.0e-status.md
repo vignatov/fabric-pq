@@ -653,4 +653,3 @@ log caught up. The scheduler now requires a newly applied block while preserving
 the replayed-byte snapshot interval, with a focused regression test. This is a
 baseline Raft fix as well as a protected-path regression; hosted integration
 must rerun on the final head.
-
