@@ -1,5 +1,12 @@
 # PQ4.0E bootstrap and admission: INCOMPLETE
 
+**Proposed decision: PQ4.0E COMPLETE (DEVELOPMENT), conditional on explicit
+independent architecture/security acceptance.** The [separate decision record](pq4.0e-development-decision.md)
+identifies the evidence and conditions. Until that acceptance is recorded and
+the decision is merged to `main`, PQ4.0E remains incomplete and PQ4.0B.1 is
+not authorized. PQ4.0B network-wide enforcement remains incomplete and PQ4.1
+is not authorized.
+
 This development checkpoint covers authenticated enrollment and bounded
 admission on native peers and Raft orderers. The bounded PQ4.0E.1
 implementation at `0c3e9db3402dbc87d536d0959442266f4c75c256` passed hosted
@@ -646,3 +653,4 @@ log caught up. The scheduler now requires a newly applied block while preserving
 the replayed-byte snapshot interval, with a focused regression test. This is a
 baseline Raft fix as well as a protected-path regression; hosted integration
 must rerun on the final head.
+
