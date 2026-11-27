@@ -42,4 +42,3 @@ and production topology are also outside this decision.
 PQ4.0B network-wide enforcement remains INCOMPLETE. This decision does not
 authorize PQ4.1. PQ4.0B.1 is blocked until independent acceptance of this
 decision and its recording on `main`; only then is PQ4.0B.1 authorized.
-
