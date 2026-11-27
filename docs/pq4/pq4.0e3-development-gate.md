@@ -1,13 +1,14 @@
 # PQ4.0E.3 development gate proposal
 
-**Decision: INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED**
+**Decision: INCOMPLETE — INDEPENDENT DEVELOPMENT ACCEPTANCE PENDING**
 
 PQ4.0E.3 implements signed pre-export authorization, source-ledger path
 controls, controlled native Fabric snapshot generation, independent
 verification, v2 approval, and protected import/recovery under separate Linux
-identities. The current authorization enforcement changes require new
-final-head validation and independent review before this report can propose
-PASS. The earlier hosted results below cover the previous revision only.
+identities. PR #15's final-head hosted validation passed. The independent
+review found the authorization bypass resolved and supported merging the
+bounded implementation. Formal PQ4.0E development acceptance is pending an
+explicit independent decision on the reconciled evidence.
 
 ## Trust boundary and assumptions
 
@@ -16,30 +17,74 @@ provisioning authority authenticates its exporter authorization before export
 and records the launch result. The exporter process runs as a separate user
 with access to only the approved ledger path. The importing peer runs as a
 third user and accepts only the existing v2 signed peer snapshot anchor and
-authenticated evidence. The test trusts the disposable VM kernel and
-privileged test driver; it does not claim resistance to privileged-host
-compromise, total host-state rollback, or deliberate false signing by a
-trusted exporter.
+authenticated evidence. The controlled exporter is a test harness. The signed
+execution record attests to the trusted provisioner's observations. The
+disposable VM kernel, privileged test driver and authorized exporter are in
+the trust boundary. Production launch and key custody, privileged-host
+compromise, total host-state rollback and arbitrary snapshot world-state
+correctness remain outside the demonstrated scope. Existing v2 approvals
+without embedded pre-export authorization and execution proof fail closed at
+import and restart. There is no in-place migration or compatibility fallback.
+
+## PR #15 final-head evidence
+
+The reviewed branch head is `14b8876eba4ac544db6bff9bb476bd136a95e20d`.
+Its Git tree matches squash commit `b198558ee72330a4074eaff944a91c7362fa7f61`.
+The branch-head push checked out the exact reviewed SHA. The PR workflow used
+a synthetic merge checkout. These runs establish the reviewed tree's evidence
+and do not cover subsequent upstream merges into `main`.
+
+| Workflow | PR merge check | Branch-head push | Reported result |
+| --- | --- | --- | --- |
+| Verify Build | [45887599318](https://github.com/vignatov/fabric-pq/actions/runs/45887599318) | [45887591040](https://github.com/vignatov/fabric-pq/actions/runs/45887591040) | Both 19/19 successful, including Basic Checks, unit tests, all nine integration groups, PQ4.0C/D/E/E.1/E.2/E.3 and PQ4.0B component checks |
+| PQ3 Isolated Network | [45887599194](https://github.com/vignatov/fabric-pq/actions/runs/45887599194) | [45887591064](https://github.com/vignatov/fabric-pq/actions/runs/45887591064) | Both succeeded |
+
+The final independent review reports that `TestPQ40EControlledSnapshotProvisioning`
+passed in the **PQ4.0E.3 Independent Provisioning Boundary** job on hosted
+Ubuntu 24.04 in both Verify Build runs (PR 6.17s, push 6.25s). The job logs
+record the race-enabled peer test binary's SHA-256 and the artifact uploads.
+The reviewer inspected the source and hosted logs. Artifact payload verification
+is attributed separately to the PR evidence record. [PR #15 independent review](https://github.com/vignatov/fabric-pq/pull/15#pullrequestreview-6081072626)
+
+| E.3 evidence artifact | Archive SHA-256 reported in hosted logs |
+| --- | --- |
+| [PR artifact 15150189314](https://github.com/vignatov/fabric-pq/actions/runs/45887599318/artifacts/15150189314) | `c08f20cd9e4ea74e815eb76278d802db4e311f4599664d312a3d17fa85102f01` |
+| [Push artifact 15150572958](https://github.com/vignatov/fabric-pq/actions/runs/45887591040/artifacts/15150572958) | `d33cfb34db742893d3138f703148763743e5d6994a673910d5c2eddb9315dd7b` |
+
+The PR evidence record reports downloading the push artifact and verifying
+the exact branch-head commit, clean checkout, run ID, and successful protected
+import, fresh-process recovery and baseline continuity. It records these
+digests for the contents. [PR #15 final-head evidence record](https://github.com/vignatov/fabric-pq/pull/15#issuecomment-7201333814)
+
+| Evidence record | SHA-256 |
+| --- | --- |
+| Exporter authorization | `9819a7a5554ce645c60bcb8f52b0098d37f11a8653ab8c2ddfe20e25a18c2586` |
+| Signed execution record | `2ef4f3d40916b9647d8bcc0ead88b6792c4fd8f448ebe535618d101abdec04f0` |
+| Exporter evidence | `d60eecb80ba2d70ee73d1392710e8223153b32ffa6b729f7e16228910587806f` |
+| Snapshot join anchor | `4a3b2de3c45f4db58d80b202d17a11e797ac5d7ba9a95462bde21cb3469d6c98` |
 
 ## Security-property matrix
 
+The CI jobs below refer to the reviewed PR #15 revision and the linked
+Verify Build and PQ3 runs above.
+
 | Required invariant | Implementation and named test | Evidence class | Exact tested revision and workflow/job | Result | Remaining assumption or limitation | Gate decision |
 | --- | --- | --- | --- | --- | --- | --- |
-| Protected enrollment and startup authenticate the node before serving | `cmd/pq-launcher`; `TestPQ40EDisposableVMService`; managed peer/orderer startup and restart tests | Native processes and disposable systemd VM | Historical H2 `a5295383f3faf8bbbad06388f5cc0aa029970a4f` / M2 `9d4aee18e968f961d79a0a39daebd81c57c53116`; Verify Build #45810211331 | Historical focused job passed | Production host provisioning and complete privileged-host rollback are out of scope | Pending final-head regression |
-| Service-manager boundary prevents exporter/importer identities from replacing trusted launch/config | Root-controlled systemd unit and installer; `TestPQ40EDisposableVMService` | Disposable VM | H2/M2; Verify Build #45810211331 PQ4.0E job | Historical VM test passed | VM kernel and privileged provisioner are trusted | Pending final-head regression |
-| Fabric history is verified from independently trusted genesis before approval | `provisioning.VerifyJoinHistory`; provenance tests; `TestPQ40EManagedOrdererNonGenesisPromotion`; snapshot import test | Native Fabric ledger and orderer/peer tests | H2/M2; Verify Build #45810211331 PQ4.0E.1 job | Historical focused tests passed | History verification does not reconstruct or attest arbitrary snapshot world state | Pending final-head regression |
-| Exporter identity/key and source-ledger path are authorized before package creation | `SignExporterAuthorization`, `VerifyExporterAuthorization`, `SnapshotExporterTrust(VerifiedJoinHistory)`; `TestPQ40EControlledSnapshotProvisioning` | Race-enabled disposable Linux process/filesystem test; distinct authority, exporter and importer identities | Historical `2a277829503a362aeb0c151417f2a3023ec75ca7`: Verify Build #45868004896 and #45867995716; final-head job pending | Historical VM test passed; new enforcement needs final-head validation | The authorization path is an OS-controlled association, not cryptographic source-ledger attestation | INCOMPLETE until final-head CI and independent review |
-| Only the authorized native ledger/channel/boundary is exported | Controlled exporter verifies the signed path, opens `LedgerMgr` on that root, checks the authorized block hash, then requests native snapshot generation; Ledger A/B case in `TestPQ40EControlledSnapshotProvisioning` | Native Fabric ledger opened by a separate exporter process; OS read-denial check | Historical `2a277829503a362aeb0c151417f2a3023ec75ca7`: Verify Build #45868004896 and #45867995716; final-head job pending | Historical test: Ledger A succeeds; Ledger B is inaccessible and override rejected | The exporter and host kernel remain trusted | INCOMPLETE until final-head CI and independent review |
-| Self-authorized exporter/key cannot create an authorized approval | Attacker-key authorization and self-signed package, caller-selected trust, and operator-signed attacker anchor in `TestPQ40EControlledSnapshotProvisioning` | Native exporter evidence, independent verifier, and separate importer process | `be8e9bb08ece237259398e32051d23ff34bcdb41`: E.3 VM jobs in Verify Build #45881993359 and #45881985020 | VM jobs passed; final-head evidence linked below | Does not detect a malicious authorized exporter; independent launcher pins remain trusted | **INCOMPLETE** pending final-head validation and independent review |
-| Snapshot evidence binds exact metadata, full inventory and staged bytes | `VerifySnapshotExport`, `SignVerifiedPeerSnapshotAnchor`; `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery`; post-stage replacement in `TestPQ40EControlledSnapshotProvisioning` | Native snapshot and protected staging tests | Historical H2/M2 and `2a277829503a362aeb0c151417f2a3023ec75ca7`; final-head job pending | Historical suite and boundary test passed | Hash/signature checks cannot prove arbitrary world-state correctness | Pending final-head CI |
-| Operator approval requires verified export and mandatory independent pre-export authorization | `VerifiedSnapshotExport`; `SignVerifiedPeerSnapshotAnchor`; signed execution record; import/recovery verification | Native API and peer tests | `be8e9bb08ece237259398e32051d23ff34bcdb41`: E.3 VM jobs in Verify Build #45881993359 and #45881985020 | VM jobs passed; final-head evidence linked below | Independent enrollment authority and trusted execution observer are required | **INCOMPLETE** pending final-head validation and independent review |
-| Protected import/recovery stays closed until authenticated evidence and readiness | `stageProtectedSnapshot`, `recoverProtectedSnapshot`; `TestPQ40EControlledSnapshotImporterChild`; restart evidence tests in `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery` | Separate importer process, native peer lifecycle, durable recovery | Historical H2/M2 and `2a277829503a362aeb0c151417f2a3023ec75ca7`; final-head job pending | Historical protected import and restart recovery passed | Test exercises native peer code in the controlled test binary; kernel/privileged-host trust remains | Pending final-head CI |
-| Native peer/orderer admission and Raft readiness remain protected | PQ4.0D Raft/quarantine tests; PQ4.0E managed peer/orderer admission and promotion tests | Native peer/orderer tests | H2/M2, Verify Build #45810211331 PQ4.0D and PQ4.0E jobs | Historical focused jobs passed | Not a distributed network certification | Pending final-head regression |
-| Activation and crash/restart recovery preserve checkpoint invariants | PQ4.0C activation tests and recovery matrix; affected PQ4.0E tests | Native peer/orderer and ledger tests | H2/M2, Verify Build #45810211331 PQ4.0C job | Historical focused job passed | Power-loss and privileged rollback of all host state are not demonstrated | Pending final-head regression |
-| Strict transport remains enforced at existing managed endpoints | PQ4.0E strict listener, administration, gossip, Gateway, Deliver and managed launcher tests | Component/native process and disposable-VM tests | H2/M2, Verify Build #45810211331 PQ4.0E job | Historical focused job passed | Does not establish PQ4.0B network-wide capability or unsupported-binary enforcement | Pending final-head regression |
-| Mixed-channel and baseline Fabric behavior remain intact | `core/peer/pq40e_mixed_channel_test.go`; full peer/unit/integration tests; baseline ledger continuity in controlled importer test | Native peer and repository regression suites | Historical H2/M2 and `2a277829503a362aeb0c151417f2a3023ec75ca7`; final-head full matrix pending | Historical full matrix passed and baseline ledger preserved | Production topology and distributed CCAAS are excluded | Pending final-head regression |
-| PQ3 compatibility remains accepted | PQ3 isolated acceptance workflow, both profile runs and evidence-package verification | Isolated hosted acceptance | `be8e9bb08ece237259398e32051d23ff34bcdb41`: PQ3 #45881993331 and #45881984993 | Both runs passed | Must be rerun against the final PR head | INCOMPLETE until final-head run |
-| Full matrix and independent final review support the gate decision | Verify Build, all focused PQ4 jobs, Basic Checks, all unit/integration groups, PQ3, binary hashes and independent review | Final-head hosted CI and independent review | New final-head workflow runs and reviewer sign-off not yet available | Not yet run/reviewed | Codex must not self-certify its own security review; do not merge automatically | **INCOMPLETE** |
+| Protected enrollment and startup authenticate the node before serving | `cmd/pq-launcher`; `TestPQ40EDisposableVMService`; managed peer/orderer startup and restart tests | Native processes and disposable systemd VM | PQ4.0E Bootstrap and Admission | Hosted job passed | Production host provisioning and complete privileged-host rollback are out of scope | Covered by hosted evidence |
+| Service-manager boundary prevents exporter/importer identities from replacing trusted launch/config | Root-controlled systemd unit and installer; `TestPQ40EDisposableVMService` | Disposable VM | PQ4.0E Bootstrap and Admission | Hosted job passed | VM kernel and privileged provisioner are trusted | Covered by hosted evidence |
+| Fabric history is verified from independently trusted genesis before approval | `provisioning.VerifyJoinHistory`; provenance tests; `TestPQ40EManagedOrdererNonGenesisPromotion`; snapshot import test | Native Fabric ledger and orderer/peer tests | PQ4.0E.1 Fabric Provenance and Join Approval | Hosted job passed | History verification does not reconstruct or attest arbitrary snapshot world state | Covered by hosted evidence |
+| Exporter identity/key and source-ledger path are authorized before package creation | `SignExporterAuthorization`, `VerifyExporterAuthorization`, `SnapshotExporterTrust(VerifiedJoinHistory)`; `TestPQ40EControlledSnapshotProvisioning` | Race-enabled disposable Linux process/filesystem test; distinct authority, exporter and importer identities | PQ4.0E.3 Independent Provisioning Boundary | Hosted VM test passed | The authorization path is an OS-controlled association, not cryptographic source-ledger attestation | Covered by hosted evidence |
+| Only the authorized native ledger/channel/boundary is exported | Controlled exporter verifies the signed path, opens `LedgerMgr` on that root, checks the authorized block hash, then requests native snapshot generation; Ledger A/B case in `TestPQ40EControlledSnapshotProvisioning` | Native Fabric ledger opened by a separate exporter process; OS read-denial check | PQ4.0E.3 Independent Provisioning Boundary | Authorized Ledger A export succeeded. Ledger B access and the source override were refused. | The exporter and host kernel remain trusted | Covered by hosted evidence |
+| Self-authorized exporter/key cannot create an authorized approval | Attacker-key authorization and self-signed package, caller-selected trust, and operator-signed attacker anchor in `TestPQ40EControlledSnapshotProvisioning` | Native exporter evidence, independent verifier, and separate importer process | PQ4.0E.3 Independent Provisioning Boundary | Attacker-selected exporter, trust and anchor were refused | Does not detect a malicious authorized exporter; independent launcher pins remain trusted | Reviewed at the final head |
+| Snapshot evidence binds exact metadata, full inventory and staged bytes | `VerifySnapshotExport`, `SignVerifiedPeerSnapshotAnchor`; `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery`; post-stage replacement in `TestPQ40EControlledSnapshotProvisioning` | Native snapshot and protected staging tests | PQ4.0E.2 Trusted Snapshot Evidence and PQ4.0E.3 Independent Provisioning Boundary | Hosted jobs passed | Hash/signature checks cannot prove arbitrary world-state correctness | Covered by hosted evidence |
+| Operator approval requires verified export and mandatory independent pre-export authorization | `VerifiedSnapshotExport`; `SignVerifiedPeerSnapshotAnchor`; signed execution record; import/recovery verification | Native API and peer tests | PQ4.0E.3 Independent Provisioning Boundary | Missing or conflicting authorization and execution evidence were refused | Independent enrollment authority and trusted execution observer are required | Reviewed at the final head |
+| Protected import/recovery stays closed until authenticated evidence and readiness | `stageProtectedSnapshot`, `recoverProtectedSnapshot`; `TestPQ40EControlledSnapshotImporterChild`; restart evidence tests in `TestPQ40ESignedNonGenesisSnapshotJoinAndRecovery` | Separate importer process, native peer lifecycle, durable recovery | PQ4.0E.2 Trusted Snapshot Evidence and PQ4.0E.3 Independent Provisioning Boundary | Native import and separate-process recovery passed | Test exercises native peer code in the controlled test binary; kernel/privileged-host trust remains | Reviewed at the final head |
+| Native peer/orderer admission and Raft readiness remain protected | PQ4.0D Raft/quarantine tests; PQ4.0E managed peer/orderer admission and promotion tests | Native peer/orderer tests | PQ4.0D Raft Quarantine and Replay and PQ4.0E Bootstrap and Admission | Hosted jobs passed | Not a distributed network certification | Covered by hosted evidence |
+| Activation and crash/restart recovery preserve checkpoint invariants | PQ4.0C activation tests and recovery matrix; affected PQ4.0E tests | Native peer/orderer and ledger tests | PQ4.0C Activation Proof and PQ4.0E Bootstrap and Admission | Hosted jobs passed | Power-loss and privileged rollback of all host state are not demonstrated | Covered by hosted evidence |
+| Strict transport remains enforced at existing managed endpoints | PQ4.0E strict listener, administration, gossip, Gateway, Deliver and managed launcher tests | Component/native process and disposable-VM tests | PQ4.0E Bootstrap and Admission | Hosted job passed | Does not establish PQ4.0B network-wide capability or unsupported-binary enforcement | Covered by hosted evidence |
+| Mixed-channel and baseline Fabric behavior remain intact | `core/peer/pq40e_mixed_channel_test.go`; full peer/unit/integration tests; baseline ledger continuity in controlled importer test | Native peer and repository regression suites | Verify Build unit and integration matrix and PQ4.0E.3 Independent Provisioning Boundary | Hosted jobs passed, including VM baseline continuity | Production topology and distributed CCAAS are excluded | Covered by hosted evidence |
+| PQ3 compatibility remains accepted | PQ3 isolated acceptance workflow, both profile runs and evidence-package verification | Isolated hosted acceptance | Final-head PQ3 runs 45887599194 and 45887591064 | Both runs passed | Evidence applies to the reviewed PR #15 tree | Covered by hosted evidence |
+| Full matrix and independent final review support the gate decision | Verify Build, focused PQ4 jobs, Basic Checks, all unit and integration groups, PQ3, test binary and artifact provenance, independent review | Final-head hosted CI and independent review | Final-head runs and independent review linked above | Hosted workflows passed. The reviewer supported the bounded implementation. | Formal gate sign-off remains separate from implementation review | **INCOMPLETE** pending explicit independent development acceptance |
 
 ## Controlled falsification results
 
@@ -78,10 +123,10 @@ operator signs and the importer consumes only the verified staged bytes. This
 demonstrates the intended source-selection and staging controls, not protection
 from compromise of the trusted exporter, provisioning authority, or VM kernel.
 
-## Current worktree validation
+## Earlier worktree validation
 
 The following commands passed in a disposable `golang:1.27.4` Linux container
-with the current changes on top of `2a277829503a362aeb0c151417f2a3023ec75ca7`.
+with changes on top of `2a277829503a362aeb0c151417f2a3023ec75ca7`.
 The first includes race-enabled authorization, enrollment, controlled
 separate-user provisioning and snapshot import/recovery tests, followed by
 `go vet`. The second covers the existing baseline snapshot import:
@@ -112,10 +157,6 @@ Both PQ3 isolated-network runs
 [#45881993331](https://github.com/vignatov/fabric-pq/actions/runs/45881993331)
 and [#45881984993](https://github.com/vignatov/fabric-pq/actions/runs/45881984993)
 passed their temporary and permanent profiles and evidence verification.
-The [final-head evidence record](https://github.com/vignatov/fabric-pq/pull/15#issuecomment-7201333814)
-tracks the precise final revision, CI and review outcomes after this report's
-documentation update.
-
 At `50363572f017122719f997e5ea313e144b1deb04`, the authorization-enforcement
 changes passed the E.3 disposable-VM job in PR Verify Build
 [#45879606704](https://github.com/vignatov/fabric-pq/actions/runs/45879606704)
@@ -125,7 +166,7 @@ The downloaded push artifact
 [`pq40e3-acceptance-45879597742-1`](https://github.com/vignatov/fabric-pq/actions/runs/45879597742/artifacts/15145393631)
 reported the exact commit, a clean worktree, and passed import, recovery and
 baseline continuity. That revision recreated the peer within one importer
-process; the current test uses a second importer process for recovery.
+process. The final-head test uses a second importer process for recovery.
 It recorded authorization digest
 `831afe12038798ad2a647365a9330c1bbd6fbcbc57f9ac49c2c668e878d53ca0`,
 execution-record digest
@@ -167,23 +208,22 @@ The existing native snapshot-import regression passed:
 GOFIPS140=off GOFLAGS=-buildvcs=false go test -mod=vendor -race -count=1 -run '^TestCreateChannelBySnapshot$' ./core/peer
 ```
 
-These commands validated the earlier working tree, not the current changes or an immutable commit.
+These commands validated an earlier working tree.
 Hosted Verify Build run #45857490242 at `ffd05c94c02436e3e9e94a94b5f9bf7c43fc8f4c`
 failed Basic Checks and the PQ4.0E.3 VM job; Unit and Integration Tests were
 skipped. PQ3 run #45857490045 passed at that head. These results do not cover
-subsequent fixes or substitute for final-head evidence.
-The new final-head hosted workflow job must pass after commit. The complete
-Verify Build matrix and PQ3 isolated acceptance must also pass on that exact
-head, with transient failures and retries reported separately and skipped
-tests never counted as passes.
+subsequent fixes. Their skips are excluded from the final-head results above.
 
 ## Decision
 
-**INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED.** The controlled executor and
-source-ledger demonstration are test-harness-only. The authorization
-enforcement changes require final-head hosted CI and a new independent
-architecture/security review.
-If the hosted evidence passes, request independent review; do not treat this
-proposal as an accepted gate until that review explicitly accepts the final
-commit and evidence. Keep production deployment, PQ4.0B.1, v1 migration,
-distributed CCAAS certification, and PQ4.1–PQ4.5 out of scope.
+**INCOMPLETE — INDEPENDENT DEVELOPMENT ACCEPTANCE PENDING.** On November 26,
+2026, the final-head independent security review found the approval API bypass
+resolved and supported merging the bounded implementation after evidence
+reconciliation. It called for an explicit, separate PQ4.0E development
+decision. [PR #15 independent review](https://github.com/vignatov/fabric-pq/pull/15#pullrequestreview-6081072626)
+
+To close the gate, an independent architecture/security reviewer must accept
+the reconciled evidence and the bounded trust model, and the project must
+record that decision as **COMPLETE (DEVELOPMENT)** on `main`. PQ4.0B.1 remains
+blocked until that decision is recorded. Production deployment, v1 migration,
+distributed CCAAS certification and PQ4.1–PQ4.5 remain outside this gate.

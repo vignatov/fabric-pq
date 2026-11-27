@@ -3,13 +3,13 @@
 This development checkpoint covers authenticated enrollment and bounded
 admission on native peers and Raft orderers. The bounded PQ4.0E.1
 implementation at `0c3e9db3402dbc87d536d0959442266f4c75c256` passed hosted
-CI and independent review for merge, subject to DCO sign-off. PQ4.0E
-development acceptance remains incomplete pending its remaining acceptance
-evidence. Production deployment certification is a separate assessment and
-is not a prerequisite for development acceptance. The PQ4.0B network
-enforcement gate remains incomplete. PQ4.0E.3 adds a controlled Linux
-provisioning demonstration; final-head hosted CI and independent review remain
-required before proposing a gate decision.
+CI and independent review for merge, subject to DCO sign-off. PQ4.0E.3 adds
+a controlled Linux provisioning demonstration. Its final-head hosted CI passed,
+and the independent security review supported the bounded implementation.
+PQ4.0E development acceptance remains incomplete pending explicit independent
+sign-off on the reconciled evidence and trust boundary. Production deployment
+certification is a separate assessment. The PQ4.0B network enforcement gate
+remains incomplete. [PQ4.0E.3 development gate report](pq4.0e3-development-gate.md)
 
 ## Current boundary
 
@@ -96,7 +96,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Signed manifest, protected history and Linux launcher | Linux race and subprocess tests passed; managed deployment incomplete |
 | Fixed managed systemd unit and installer | Disposable systemd VM test installs and inspects the real unit |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Disposable VM test covers the trusted service-manager boundary; production validation pending |
-| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. PQ4.0E.2 adds provisioner-pinned exporter evidence, complete pre-signing inventory verification, private staging and a versioned peer snapshot anchor. PQ4.0E.3 adds signed pre-export authorization and a Ledger A/B process/filesystem test; local evidence is recorded in the [PQ4.0E.3 gate report](pq4.0e3-development-gate.md). Final-head hosted CI and independent review remain pending. PQ4.0E is INCOMPLETE. |
+| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. PQ4.0E.2 adds provisioner-pinned exporter evidence, complete pre-signing inventory verification, private staging and a versioned peer snapshot anchor. PQ4.0E.3 adds signed pre-export authorization and a Ledger A/B process/filesystem test. The [PQ4.0E.3 gate report](pq4.0e3-development-gate.md) records the final-head hosted evidence and implementation review. Independent development acceptance remains pending. |
 | Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
@@ -111,7 +111,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
 | Runtime service coverage | Recorded below, including endpoints disabled for enrolled channels and network-wide enforcement gaps |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | Historical Verify Build and PQ3 results are recorded below; current PQ4.0E.2 and PQ4.0E.3 evidence is tracked in the [acceptance report](pq4.0e2-acceptance.md) and [PQ4.0E.3 gate report](pq4.0e3-development-gate.md). PQ4.0E and PQ4.0B acceptance evidence remains incomplete |
+| Full regression, integration and final-head CI evidence | The [PQ4.0E.2 acceptance report](pq4.0e2-acceptance.md) and [PQ4.0E.3 gate report](pq4.0e3-development-gate.md) record results for their respective revisions. PR #15 final-head Verify Build and PQ3 passed. The PQ4.0E development decision and PQ4.0B gate remain incomplete. |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
