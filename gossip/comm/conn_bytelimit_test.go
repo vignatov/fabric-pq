@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package comm
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strconv"
@@ -777,10 +778,41 @@ func TestBlockingSendTerminatesOnWriterFailure(t *testing.T) {
 		defer conn.sendMu.Unlock()
 		return conn.sendClosed
 	}, 30*time.Second, time.Millisecond, "writer did not publish termination")
+	// A failed write closes the connection, including its protected reply scope.
 	select {
 	case <-conn.stopChan:
-		t.Fatal("connection was closed although only the send side failed")
-	default:
+	case <-time.After(30 * time.Second):
+		t.Fatal("connection was not closed after the send failed")
+	}
+}
+
+func TestProtectedReplyQueuedWhenWriterFails(t *testing.T) {
+	sendGate := make(chan struct{})
+	sendEntered := make(chan struct{})
+	stream := &gmocks.MockStream{}
+	stream.On("CloseSend").Return(nil)
+	stream.On("Send", mock.Anything).Return(func(*proto.Envelope) error {
+		close(sendEntered)
+		<-sendGate
+		return errors.New("stream dead")
+	})
+	conn := newConnection(nil, nil, stream, disabledMetrics, ConnConfig{SendBuffSize: 1})
+	conn.logger = flogging.MustGetLogger("test")
+	go conn.writeToStream()
+	msg := createGossipMsg()
+	conn.send(msg, func(error) {}, blockingSend)
+	<-sendEntered
+	done := make(chan struct{})
+	go func() {
+		conn.sendProtectedReply(msg, context.Background())
+		close(done)
+	}()
+	require.Eventually(t, func() bool { return len(conn.outBuff) == 1 }, 30*time.Second, time.Millisecond)
+	close(sendGate)
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("queued protected reply did not terminate after writer failure")
 	}
 }
 
@@ -1306,9 +1338,10 @@ func TestPerConnTripDoesNotEvictOther(t *testing.T) {
 	}, 30*time.Second, 10*time.Millisecond, "connection did not trip its per-connection budget")
 	<-svcDone
 
-	// Only the two messages still retained by the connection stay charged;
-	// the tripping message never touched the shared budget.
-	require.Equal(t, 2*msgSize, shared.inFlight.Load(), "per-connection trip charged the shared budget for a never-retained message")
+	// Queued messages may be drained during shutdown; only handed-off
+	// messages remain charged, and the tripping message was never charged.
+	require.Equal(t, victim.recvBytesInFlight.Load(), shared.inFlight.Load())
+	require.LessOrEqual(t, shared.inFlight.Load(), 2*msgSize)
 	select {
 	case <-healthy.stopChan:
 		t.Fatal("healthy connection was evicted by another connection's per-connection trip")

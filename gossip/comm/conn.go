@@ -497,13 +497,30 @@ func (conn *connection) sendProtectedReply(msg *protoext.SignedGossipMessage, ge
 		return
 	}
 	reply := &protectedReply{generation: generation, done: make(chan struct{})}
-	select {
-	case <-generation.Done():
-		return
-	case <-conn.stopChan:
-		return
-	case conn.outBuff <- &msgSending{envelope: msg.Envelope, protected: reply}:
+	stopWake := context.AfterFunc(generation, func() {
+		conn.sendMu.Lock()
+		conn.sendCond.Broadcast()
+		conn.sendMu.Unlock()
+	})
+	defer stopWake()
+	conn.sendMu.Lock()
+enqueue:
+	for {
+		if conn.sendClosed || generation.Err() != nil {
+			conn.sendMu.Unlock()
+			return
+		}
+		select {
+		case <-conn.stopChan:
+			conn.sendMu.Unlock()
+			return
+		case conn.outBuff <- &msgSending{envelope: msg.Envelope, protected: reply}:
+			break enqueue
+		default:
+			conn.sendCond.Wait()
+		}
 	}
+	conn.sendMu.Unlock()
 	select {
 	case <-reply.done:
 		return
@@ -583,7 +600,11 @@ func (conn *connection) writeToStream() {
 		for {
 			select {
 			case m := <-conn.outBuff:
-				go m.onErr(errConnClosed)
+				if m.protected != nil {
+					close(m.protected.done)
+				} else {
+					go m.onErr(errConnClosed)
+				}
 			default:
 				conn.sendMu.Unlock()
 				return
@@ -594,6 +615,10 @@ func (conn *connection) writeToStream() {
 	for {
 		select {
 		case m := <-conn.outBuff:
+			// Queue room is available for both ordinary and protected senders.
+			conn.sendMu.Lock()
+			conn.sendCond.Broadcast()
+			conn.sendMu.Unlock()
 			if m.protected != nil {
 				reply := m.protected
 				if !reply.state.CompareAndSwap(replyQueued, replyWriting) {
@@ -620,11 +645,6 @@ func (conn *connection) writeToStream() {
 				return
 			}
 			conn.metrics.SentMessages.Add(1)
-			// Wake a sender waiting for queue room; holding sendMu keeps the
-			// signal from landing between a sender's check and its wait.
-			conn.sendMu.Lock()
-			conn.sendCond.Signal()
-			conn.sendMu.Unlock()
 		case <-conn.stopChan:
 			conn.logger.Debug("Closing writing to stream")
 			return

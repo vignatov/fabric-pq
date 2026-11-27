@@ -99,6 +99,7 @@ func TestPrivateDataBoundedConcurrency(t *testing.T) {
 		stopCh:          make(chan struct{}),
 		privateDataSem:  make(chan struct{}, 2),
 		ledger:          ledger,
+		config:          &StateConfig{},
 	}
 
 	inCh := make(chan protoext.ReceivedMessage, 20)
@@ -138,6 +139,7 @@ func TestPrivateDataDoesNotStarveStateMessages(t *testing.T) {
 		stopCh:          make(chan struct{}),
 		privateDataSem:  make(chan struct{}, 2),
 		ledger:          ledger,
+		config:          &StateConfig{},
 	}
 	atomic.StoreInt32(&s.stateTransferActive, 1)
 
@@ -188,6 +190,7 @@ func TestStopDisposesMessageAwaitingDispatch(t *testing.T) {
 		stopCh:          make(chan struct{}),
 		privateDataSem:  make(chan struct{}, 1),
 		ledger:          ledger,
+		config:          &StateConfig{},
 	}
 
 	inCh := make(chan protoext.ReceivedMessage)
