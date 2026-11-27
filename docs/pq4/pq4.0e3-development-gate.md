@@ -36,8 +36,12 @@ and do not cover subsequent upstream merges into `main`.
 
 | Workflow | PR merge check | Branch-head push | Reported result |
 | --- | --- | --- | --- |
-| Verify Build | [45887599318](https://github.com/vignatov/fabric-pq/actions/runs/45887599318) | [45887591040](https://github.com/vignatov/fabric-pq/actions/runs/45887591040) | Both 19/19 successful, including Basic Checks, unit tests, all nine integration groups, PQ4.0C/D/E/E.1/E.2/E.3 and PQ4.0B component checks |
-| PQ3 Isolated Network | [45887599194](https://github.com/vignatov/fabric-pq/actions/runs/45887599194) | [45887591064](https://github.com/vignatov/fabric-pq/actions/runs/45887591064) | Both succeeded |
+| Verify Build | [45887599318, attempt 2](https://github.com/vignatov/fabric-pq/actions/runs/45887599318/attempts/2) | [45887591040, attempt 2](https://github.com/vignatov/fabric-pq/actions/runs/45887591040/attempts/2) | Both reported 19/19 successful after retry, including Basic Checks, unit tests, all nine integration groups, PQ4.0C/D/E/E.1/E.2/E.3 and PQ4.0B component checks |
+| PQ3 Isolated Network | [45887599194](https://github.com/vignatov/fabric-pq/actions/runs/45887599194) | [45887591064](https://github.com/vignatov/fabric-pq/actions/runs/45887591064) | Both succeeded on attempt 1 |
+
+On attempt 1, the PR private-data integration job timed out waiting for
+historical data, and the push PKCS#11 integration job timed out during network
+startup. Both jobs passed on retry. [PR first-attempt failure](https://github.com/vignatov/fabric-pq/actions/runs/45887599318/job/140145263575) · [Push first-attempt failure](https://github.com/vignatov/fabric-pq/actions/runs/45887591040/job/140147609103) · [PR #15 retry evidence](https://github.com/vignatov/fabric-pq/pull/15#issuecomment-7205183507)
 
 The final independent review reports that `TestPQ40EControlledSnapshotProvisioning`
 passed in the **PQ4.0E.3 Independent Provisioning Boundary** job on hosted
