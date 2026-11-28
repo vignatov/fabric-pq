@@ -395,3 +395,17 @@ provisioner responsibility; independently discoverable enrollment history is
 future production hardening. Capability recognition does not establish
 network-wide strict TLS. Implementation and final-head acceptance evidence for
 PQ4.0B.1 remain incomplete until independently reviewed.
+
+Early development evidence is separate from final-head acceptance. For commit
+`3759968ad8b88064022056a48b020646c914e483`, [Verify Build](https://github.com/vignatov/fabric-pq/actions/runs/46174609096)
+failed capability checks, Basic Checks and PQ4.0E admission checks; unit and
+integration jobs were skipped. The [PQ3 run](https://github.com/vignatov/fabric-pq/actions/runs/46174608904)
+failed during temporary-profile acceptance. The capability check failure was a
+nil test fixture, the lifecycle failures were missing genesis readers in test
+fixtures, and Basic Checks reported formatting and protobuf getter issues.
+These were addressed in later commits. For commit
+`f3ad03de5a8a75d1963f3a1579cc2bb1584f0d5f`, the [real-capability binary step](https://github.com/vignatov/fabric-pq/actions/runs/46175305191)
+passed against the configured older Pactway and upstream binaries; its
+[Basic Checks](https://github.com/vignatov/fabric-pq/actions/runs/46175305129)
+failed on a protobuf getter lint and unit and integration jobs were skipped.
+These results are not final-head evidence, and skipped jobs are not passes.

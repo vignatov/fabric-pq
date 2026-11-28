@@ -45,7 +45,7 @@ func TestPQ40B1OrdererRejectsFabricAuthorizedCapabilityChanges(t *testing.T) {
 			if len(value.GetValue()) != 0 {
 				require.NoError(t, proto.Unmarshal(value.GetValue(), caps))
 			}
-			if caps.Capabilities == nil {
+			if caps.GetCapabilities() == nil {
 				caps.Capabilities = map[string]*cb.Capability{}
 			}
 			if tc.add {
