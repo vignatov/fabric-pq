@@ -35,7 +35,7 @@ func TestPQ40B1AuthenticatedFreshGenesis(t *testing.T) {
 	require.NoError(t, err)
 	fixture.Provision(t, store, Config(t, genesis))
 	id := sha256.Sum256([]byte(ChannelID))
-	anchor, err := json.Marshal(hex.EncodeToString(protoutil.BlockHeaderHash(genesis.Header)))
+	anchor, err := json.Marshal(hex.EncodeToString(protoutil.BlockHeaderHash(genesis.GetHeader())))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("genesis-%x", id)), anchor, 0o600))
 	controller := fixture.Channel(store, activation.Ledger{})

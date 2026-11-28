@@ -100,8 +100,8 @@ func TransportGenesis(t *testing.T) *cb.Block {
 		group.Values[channelconfig.CapabilitiesKey] = value
 	}
 	caps := &cb.Capabilities{}
-	if len(value.Value) != 0 {
-		require.NoError(t, proto.Unmarshal(value.Value, caps))
+	if len(value.GetValue()) != 0 {
+		require.NoError(t, proto.Unmarshal(value.GetValue(), caps))
 	}
 	if caps.Capabilities == nil {
 		caps.Capabilities = make(map[string]*cb.Capability)
@@ -111,7 +111,7 @@ func TransportGenesis(t *testing.T) *cb.Block {
 	payload.Data = protoutil.MarshalOrPanic(config)
 	envelope.Payload = protoutil.MarshalOrPanic(payload)
 	block.Data.Data[0] = protoutil.MarshalOrPanic(envelope)
-	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 	return block
 }
 

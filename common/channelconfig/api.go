@@ -150,6 +150,10 @@ func PQTransportRequired(resources Resources) bool {
 	if resources == nil || resources.ChannelConfig() == nil {
 		return false
 	}
+	if channel, ok := resources.ChannelConfig().(*ChannelConfig); ok &&
+		(channel == nil || channel.protos == nil || channel.protos.Capabilities == nil) {
+		return false
+	}
 	caps, ok := resources.ChannelConfig().Capabilities().(interface{ PactwayPQTransportV1() bool })
 	return ok && caps.PactwayPQTransportV1()
 }

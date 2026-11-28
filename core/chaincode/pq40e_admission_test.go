@@ -289,7 +289,10 @@ func chaincodeAdmissionFixture(t *testing.T) func() *activation.Channel {
 		t.Helper()
 		store, err := activation.OpenStore(dir, nil)
 		require.NoError(t, err)
-		channel := fixture.Channel(store, activation.Ledger{LatestConfig: func() (*cb.Block, error) { return genesis, nil }})
+		channel := fixture.Channel(store, activation.Ledger{
+			LatestConfig: func() (*cb.Block, error) { return genesis, nil },
+			Block:        func(uint64) (*cb.Block, error) { return genesis, nil },
+		})
 		require.NoError(t, channel.Recover(true))
 		return &channel
 	}

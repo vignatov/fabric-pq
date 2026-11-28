@@ -52,6 +52,14 @@ import (
 )
 
 func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
+	testMixedPeerPublicationFailureAndRestart(t, false)
+}
+
+func TestPQ40B1ManagedPeerPublicationFailureAndRestart(t *testing.T) {
+	testMixedPeerPublicationFailureAndRestart(t, true)
+}
+
+func testMixedPeerPublicationFailureAndRestart(t *testing.T, transportCapability bool) {
 	const baseline = "unchanged-baseline"
 	fixture := testfixture.New(t)
 	ca := func() tlsgen.CA {
@@ -104,8 +112,11 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	}
 
 	template := testfixture.Genesis(t)
-	protectedBase := configWithRoot(testfixture.Config(t, template), oldCA.CertBytes())
 	baselineBase := configWithRoot(testfixture.Config(t, template), baseCA.CertBytes())
+	if transportCapability {
+		template = testfixture.TransportGenesis(t)
+	}
+	protectedBase := configWithRoot(testfixture.Config(t, template), oldCA.CertBytes())
 	protectedGenesis := makeBlock(testfixture.ChannelID, 0, nil, &cb.ConfigEnvelope{Config: protectedBase})
 	baselineGenesis := makeBlock(baseline, 0, nil, &cb.ConfigEnvelope{Config: baselineBase})
 	update := fixture.UpdateTo(t, protectedBase, configWithRoot(protectedBase, candidateCA.CertBytes()))

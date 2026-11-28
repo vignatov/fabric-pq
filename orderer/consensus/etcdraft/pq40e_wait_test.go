@@ -42,9 +42,10 @@ func TestPQ40EProposalDrainsActiveWorkAndRejectsQueuedWork(t *testing.T) {
 	store, err := activation.OpenStore(t.TempDir(), nil)
 	require.NoError(t, err)
 	fixture.Provision(t, store, testfixture.Config(t, genesis))
-	controller := fixture.Channel(store, activation.Ledger{LatestConfig: func() (*cb.Block, error) {
-		return genesis, nil
-	}})
+	controller := fixture.Channel(store, activation.Ledger{
+		LatestConfig: func() (*cb.Block, error) { return genesis, nil },
+		Block:        func(uint64) (*cb.Block, error) { return genesis, nil },
+	})
 	require.NoError(t, controller.Recover(true))
 
 	_, generation, release, ok := controller.Gate.Acquire()

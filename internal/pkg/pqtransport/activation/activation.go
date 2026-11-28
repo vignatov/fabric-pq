@@ -524,12 +524,13 @@ func (c *Channel) recover(replaySettled, orderer, requirePublisher bool) error {
 	if err != nil {
 		return c.quarantine(err)
 	}
-	committedBlock, err := c.Ledger.LatestConfig()
+	initial, err := c.config(genesis)
 	if err != nil {
 		return c.quarantine(err)
 	}
-	if err := c.VerifyCapabilityBinding(genesis, committedBlock); err != nil {
-		return c.quarantine(err)
+	if initial.identity.Number != 0 || initial.binding.Sequence != 0 ||
+		channelconfig.PQTransportRequired(initial.bundle) != channelconfig.PQTransportRequired(committed.bundle) {
+		return c.quarantine(errors.New("transport capability conflicts with genesis"))
 	}
 	record, err := s.readJournal()
 	if err != nil {

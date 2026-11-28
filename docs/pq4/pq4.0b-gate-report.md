@@ -91,7 +91,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | Identity binding and stale/conflicting bootstrap rejection | PASS (managed-process scope) | PQ4.0E launcher, registry and restart tests bind signed manifest/history, node/network identity, pinned signer and protected checkpoint; complete privileged-host rollback remains excluded. |
 | Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation and local source-control demonstration present | PQ4.0E.2 checks exporter evidence against provisioner-controlled pins and stages exact bytes. PQ4.0E.3 adds signed pre-export authorization, restricted Ledger A/B access, native ledger opening, and separate importer execution; final-head hosted evidence and independent review remain pending in the [PQ4.0E.3 report](pq4.0e3-development-gate.md). This does not implement or prove PQ4.0B network transport enforcement. |
 | No downgrade through clones, credentials and restarts | INCOMPLETE | PQ4.0E exercises managed restart and strict selected listeners, but not every credential factory, all connection lifetimes, or unsupported old binaries under a real PQ4 capability. |
-| Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
+| Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability and managed-admission implementation require complete native lifecycle, compatibility and final-head evidence. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
 | Authorized non-weakening Fabric and operator transition, durable recovery | PASS (native lifecycle scope) | PQ4.0C/D/E exercise real Fabric configuration authorization, separate operator authorization, durable activation recovery and native peer/orderer lifecycle paths; a distributed PQ4 network and transport-wide policy remain unproved. |
 | Older peer and orderer reject the actual capability | INCOMPLETE | No actual capability or binary provenance for this proof. Earlier unknown-name evidence is not a substitute. |
@@ -117,7 +117,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | 6. TLS 1.2 | PASS | Real strict `comm` listener and cloned credentials reject with version diagnostics. |
 | 7. Classical-only endpoint identity | PASS | Component strict client and mTLS server reject classical identities. |
 | 8. Missing required client identity | PASS | Component mTLS server rejects a missing client certificate. |
-| 9. Missing/inconsistent channel capability | INCOMPLETE | Capability and actual binding not implemented. |
+| 9. Missing/inconsistent channel capability | INCOMPLETE | Capability and binding checks require complete adversarial and recovery evidence. |
 | 10. Authorized configuration weakening PQ4 | INCOMPLETE | No Fabric-authorized PQ4 configuration update tested. |
 | 11. Unsupported peer and orderer | INCOMPLETE | No actual new capability or recorded binaries. |
 | 12. Plaintext CCAAS metadata | INCOMPLETE | The earlier plaintext guard is test-only, not runtime enforcement. |

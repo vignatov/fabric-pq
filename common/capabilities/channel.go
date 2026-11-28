@@ -61,7 +61,7 @@ type ChannelProvider struct {
 	v30                        bool
 	pactwayHybridCertificateV1 bool
 	pactwayHybridPactwayV1     bool
-	pactwayPQTransportV1        bool
+	pactwayPQTransportV1       bool
 }
 
 // NewChannelProvider creates a channel capabilities provider.
