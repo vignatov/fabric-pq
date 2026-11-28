@@ -11,9 +11,10 @@ remain open. [PQ4.0E status and service inventory](pq4.0e-status.md)
 **Recommendation: stop for architecture review; do not accept or merge the
 gate.** The focused `comm` and signed-policy components are not a protected
 Pactway network. `PactwayPQTransportV1` is the selected name and
-fresh-genesis-only contract; it is **not implemented or advertised as
-supported** by peer or orderer binaries. The existing enrollment capability
-and baseline behavior remain separate.
+fresh-genesis-only contract. Capability implementation and its independent
+acceptance evidence are under development; recognition alone does not prove
+transport enforcement. The existing enrollment capability and baseline
+behavior remain separate.
 
 ## Evidence provenance
 
@@ -382,3 +383,15 @@ listeners, per-service and stream admission, the authenticated
 `PactwayPQTransportV1` capability, and strict CCAAS and orderer administration.
 The process-crash tests provide no evidence for power loss or privileged host
 rollback.
+# PQ4.0B.1 legacy startup boundary
+
+PQ4.0B remains **INCOMPLETE**. Legacy PQ4.0E protected channels remain under
+authenticated enrollment and the trusted launcher; ordinary baseline channels
+retain unmanaged Fabric startup. New capability-bearing channels require both
+fresh genesis and independently authenticated managed policy. A competing
+unmanaged process with no enrollment evidence cannot recognize an otherwise
+identical legacy protected ledger. Preventing that process is a trusted
+provisioner responsibility; independently discoverable enrollment history is
+future production hardening. Capability recognition does not establish
+network-wide strict TLS. Implementation and final-head acceptance evidence for
+PQ4.0B.1 remain incomplete until independently reviewed.

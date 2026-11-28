@@ -62,6 +62,26 @@ jobs:
         name: Run PQ4.0 Feasibility Tests
       - run: go vet -mod=vendor ./integration/pq4/feasibility
         name: Vet PQ4.0 Feasibility Tests
+  pq40b1-capability:
+    name: PQ4.0B.1 Capability Checks (gate incomplete)
+    runs-on: ubuntu-24.04
+    env:
+      GOFIPS140: "off"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - name: Record environment
+        run: |
+          git rev-parse HEAD
+          go version
+          uname -a
+          printf 'GOFIPS140=%s\n' "$GOFIPS140"
+      - name: Test capability and admission boundaries
+        run: go test -mod=vendor -race -count=1 -run '^TestPQ40B1' ./common/capabilities ./common/channelconfig ./core/peer ./orderer/common/multichannel ./internal/pkg/pqtransport/activation/...
   pq40b-component:
     name: PQ4.0B Component Checks (gate incomplete)
     runs-on: ${{ github.repository == 'hyperledger/fabric' && 'fabric-ubuntu-24.04' || 'ubuntu-24.04' }}

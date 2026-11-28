@@ -19,6 +19,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"github.com/hyperledger/fabric/common/capabilities"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/common/util"
@@ -79,6 +80,38 @@ func Genesis(t *testing.T) *cb.Block {
 	t.Helper()
 	block, err := configtxtest.MakeGenesisBlock(ChannelID)
 	require.NoError(t, err)
+	return block
+}
+
+// TransportGenesis makes a fresh test genesis declaring the real capability.
+func TransportGenesis(t *testing.T) *cb.Block {
+	t.Helper()
+	block := Genesis(t)
+	envelope, err := protoutil.ExtractEnvelope(block, 0)
+	require.NoError(t, err)
+	payload, err := protoutil.UnmarshalPayload(envelope.GetPayload())
+	require.NoError(t, err)
+	config := &cb.ConfigEnvelope{}
+	require.NoError(t, proto.Unmarshal(payload.GetData(), config))
+	group := config.GetConfig().GetChannelGroup()
+	value := group.GetValues()[channelconfig.CapabilitiesKey]
+	if value == nil {
+		value = &cb.ConfigValue{}
+		group.Values[channelconfig.CapabilitiesKey] = value
+	}
+	caps := &cb.Capabilities{}
+	if len(value.Value) != 0 {
+		require.NoError(t, proto.Unmarshal(value.Value, caps))
+	}
+	if caps.Capabilities == nil {
+		caps.Capabilities = make(map[string]*cb.Capability)
+	}
+	caps.Capabilities[capabilities.PactwayPQTransportV1] = &cb.Capability{}
+	value.Value = protoutil.MarshalOrPanic(caps)
+	payload.Data = protoutil.MarshalOrPanic(config)
+	envelope.Payload = protoutil.MarshalOrPanic(payload)
+	block.Data.Data[0] = protoutil.MarshalOrPanic(envelope)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
 	return block
 }
 

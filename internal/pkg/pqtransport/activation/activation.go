@@ -219,6 +219,28 @@ func (c *Channel) match(policy *pqtransport.Policy, current configuration) error
 	return nil
 }
 
+// VerifyCapabilityBinding preserves legacy protected channels while requiring
+// a new transport declaration to be present at genesis for its entire life.
+// The caller authenticates the genesis and target through the existing policy
+// and provenance mechanisms.
+func (c *Channel) VerifyCapabilityBinding(genesis, target *cb.Block) error {
+	initial, err := c.config(genesis)
+	if err != nil {
+		return err
+	}
+	current, err := c.config(target)
+	if err != nil {
+		return err
+	}
+	if initial.identity.Number != 0 || initial.binding.Sequence != 0 {
+		return errors.New("transport capability requires an authentic genesis configuration")
+	}
+	if channelconfig.PQTransportRequired(initial.bundle) != channelconfig.PQTransportRequired(current.bundle) {
+		return errors.New("transport capability conflicts with genesis")
+	}
+	return nil
+}
+
 func (c *Channel) latest() (configuration, error) {
 	block, err := c.Ledger.LatestConfig()
 	if err != nil {
@@ -493,6 +515,20 @@ func (c *Channel) recover(replaySettled, orderer, requirePublisher bool) error {
 	}
 	committed, err := c.latest()
 	if err != nil {
+		return c.quarantine(err)
+	}
+	if c.Ledger.Block == nil {
+		return c.quarantine(errors.New("protected genesis is unavailable"))
+	}
+	genesis, err := c.Ledger.Block(0)
+	if err != nil {
+		return c.quarantine(err)
+	}
+	committedBlock, err := c.Ledger.LatestConfig()
+	if err != nil {
+		return c.quarantine(err)
+	}
+	if err := c.VerifyCapabilityBinding(genesis, committedBlock); err != nil {
 		return c.quarantine(err)
 	}
 	record, err := s.readJournal()

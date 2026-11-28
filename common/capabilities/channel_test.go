@@ -138,6 +138,14 @@ func TestPactwayHybridCertificatePactwayV1(t *testing.T) {
 	require.Equal(t, "pactway-hybrid-certificate-v1", cp.PactwayHybridCertificateProfile())
 }
 
+func TestPQ40B1TransportCapabilityIsDistinct(t *testing.T) {
+	cp := NewChannelProvider(map[string]*cb.Capability{PactwayPQTransportV1: {}})
+	require.NoError(t, cp.Supported())
+	require.True(t, cp.PactwayPQTransportV1())
+	require.False(t, cp.PactwayHybridCertificateV1())
+	require.Empty(t, cp.PactwayHybridCertificateProfile())
+}
+
 func TestConflictingPactwayHybridCertificateProfilesAreUnsupported(t *testing.T) {
 	cp := NewChannelProvider(map[string]*cb.Capability{
 		PactwayHybridCertificateV1:        {},

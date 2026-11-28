@@ -503,6 +503,10 @@ func (r *Registrar) newLedgerResources(configTx *cb.Envelope) (*ledgerResources,
 	if err != nil {
 		return nil, errors.WithMessage(err, "error creating channelconfig bundle")
 	}
+	if channelconfig.PQTransportRequired(bundle) &&
+		(r.protected.managed == nil || !r.protected.managed.RequiresProtection(chdr.GetChannelId())) {
+		return nil, errors.New("PQ transport capability requires authenticated managed channel protection")
+	}
 	if bundle.ChannelConfig().Capabilities().PactwayHybridCertificateV1() {
 		if err := validateHybridOrdererSigner(bundle, r.signer); err != nil {
 			return nil, errors.WithMessage(err, "validating local signing identity for PQ-required channel")

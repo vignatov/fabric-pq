@@ -144,6 +144,16 @@ type ChannelCapabilities interface {
 	PactwayHybridCertificateProfile() string
 }
 
+// PQTransportRequired identifies the authenticated channel declaration. It
+// does not authenticate the local transport policy or establish TLS coverage.
+func PQTransportRequired(resources Resources) bool {
+	if resources == nil || resources.ChannelConfig() == nil {
+		return false
+	}
+	caps, ok := resources.ChannelConfig().Capabilities().(interface{ PactwayPQTransportV1() bool })
+	return ok && caps.PactwayPQTransportV1()
+}
+
 // ApplicationCapabilities defines the capabilities for the application portion of a channel
 type ApplicationCapabilities interface {
 	// Supported returns an error if there are unknown capabilities in this channel which are required
