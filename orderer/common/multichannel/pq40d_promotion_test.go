@@ -48,14 +48,18 @@ import (
 const promotionRaftID = 4
 
 func TestPQ40DProtectedParticipationPromotion(t *testing.T) {
-	testProtectedParticipationPromotion(t, false)
+	testProtectedParticipationPromotion(t, false, false)
 }
 
 func TestPQ40EManagedOrdererNonGenesisPromotion(t *testing.T) {
-	testProtectedParticipationPromotion(t, true)
+	testProtectedParticipationPromotion(t, true, false)
 }
 
-func testProtectedParticipationPromotion(t *testing.T, managed bool) {
+func TestPQ40B1ManagedOrdererNonGenesisPromotion(t *testing.T) {
+	testProtectedParticipationPromotion(t, true, true)
+}
+
+func testProtectedParticipationPromotion(t *testing.T, managed, transportCapability bool) {
 	t.Helper()
 	fixture := testfixture.New(t)
 	ca, err := tlsgen.NewCA()
@@ -82,6 +86,10 @@ func testProtectedParticipationPromotion(t *testing.T, managed bool) {
 		}
 	}
 	genesis, base, raftConfig := pq40dPromotionGenesis(t, fixture, server.Address(), ca.CertBytes(), members[:promotionRaftID-1])
+	if transportCapability {
+		genesis = testfixture.WithTransportCapability(t, genesis)
+		base = testfixture.Config(t, genesis)
+	}
 	next := proto.CloneOf(base)
 	raftConfig.Consenters = members
 	pq40dSetRaftConfig(next, raftConfig)

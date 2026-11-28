@@ -86,7 +86,13 @@ func Genesis(t *testing.T) *cb.Block {
 // TransportGenesis makes a fresh test genesis declaring the real capability.
 func TransportGenesis(t *testing.T) *cb.Block {
 	t.Helper()
-	block := Genesis(t)
+	return WithTransportCapability(t, Genesis(t))
+}
+
+// WithTransportCapability adds the declaration to a test genesis block.
+func WithTransportCapability(t *testing.T, original *cb.Block) *cb.Block {
+	t.Helper()
+	block := proto.CloneOf(original)
 	envelope, err := protoutil.ExtractEnvelope(block, 0)
 	require.NoError(t, err)
 	payload, err := protoutil.UnmarshalPayload(envelope.GetPayload())
