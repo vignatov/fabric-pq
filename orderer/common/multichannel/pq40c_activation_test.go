@@ -94,8 +94,19 @@ func activationWriter(t *testing.T, fixture testfixture.Fixture, ledger blockled
 }
 
 func TestPQ40COrdererActivation(t *testing.T) {
+	testOrdererActivation(t, false)
+}
+
+func TestPQ40B1ProtectedOrdererActivation(t *testing.T) {
+	testOrdererActivation(t, true)
+}
+
+func testOrdererActivation(t *testing.T, transportCapability bool) {
 	fixture := testfixture.New(t)
 	genesis := testfixture.Genesis(t)
+	if transportCapability {
+		genesis = testfixture.TransportGenesis(t)
+	}
 	base := testfixture.Config(t, genesis)
 	store, err := activation.OpenStore(t.TempDir(), nil)
 	require.NoError(t, err)

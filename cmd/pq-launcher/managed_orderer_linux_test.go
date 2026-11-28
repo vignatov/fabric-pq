@@ -56,6 +56,14 @@ import (
 )
 
 func TestPQ40EManagedOrdererRestart(t *testing.T) {
+	testManagedOrdererRestart(t, false)
+}
+
+func TestPQ40B1ManagedOrdererRestart(t *testing.T) {
+	testManagedOrdererRestart(t, true)
+}
+
+func testManagedOrdererRestart(t *testing.T, transportCapability bool) {
 	if os.Getenv("PQ40E_MANAGED_TEST_CHILD") == "1" {
 		if err := run(os.Getenv("PQ40E_AUTHORITY"), os.Getenv("PQ40E_MANIFEST"), os.Getenv("PQ40E_HISTORY")); err != nil {
 			_, _ = os.Stderr.WriteString(err.Error())
@@ -87,7 +95,7 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 
 	mainPort, adminPort, operationsPort := unusedPort(t), unusedPort(t), unusedPort(t)
 	fixture := testfixture.New(t)
-	genesis := managedGenesis(t, fixture, ca.CertBytes(), node.Cert, mainPort)
+	genesis := managedGenesis(t, fixture, ca.CertBytes(), node.Cert, mainPort, transportCapability)
 	factory, err := fileledger.New(ledger, coreledger.GoLevelDB, &disabled.Provider{})
 	require.NoError(t, err)
 	channel, err := factory.GetOrCreate(testfixture.ChannelID)
@@ -95,8 +103,9 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 	require.NoError(t, channel.Append(genesis))
 	const baseline = "unchanged-baseline"
 	base := testfixture.Config(t, genesis)
-	baselineGenesis := proto.CloneOf(genesis)
-	baselineEnvelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG, baseline, fixture.Fabric, &cb.ConfigEnvelope{Config: base}, 0, 0)
+	baselineGenesis := managedGenesis(t, fixture, ca.CertBytes(), node.Cert, mainPort)
+	baselineBase := testfixture.Config(t, baselineGenesis)
+	baselineEnvelope, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG, baseline, fixture.Fabric, &cb.ConfigEnvelope{Config: baselineBase}, 0, 0)
 	require.NoError(t, err)
 	baselineGenesis.Data.Data[0] = protoutil.MarshalOrPanic(baselineEnvelope)
 	baselineGenesis.Header.DataHash = protoutil.ComputeBlockDataHash(baselineGenesis.GetData())
@@ -112,7 +121,7 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 	require.NoError(t, err)
 	write(filepath.Join("state", "genesis-"+hex.EncodeToString(channelHash[:])), anchor)
 	update := fixture.Update(t, base)
-	baselineUpdate := fixture.UpdateChannelTo(t, baseline, base, update.GetConfig())
+	baselineUpdate := fixture.UpdateChannelTo(t, baseline, baselineBase, fixture.Update(t, baselineBase).GetConfig())
 	authorization, err := json.Marshal(fixture.Authorize(t, 1, base, update.GetConfig()))
 	require.NoError(t, err)
 	write(filepath.Join("state", "approval-"+hex.EncodeToString(channelHash[:])+"-2"), authorization)
@@ -137,7 +146,7 @@ func TestPQ40EManagedOrdererRestart(t *testing.T) {
 		"ORDERER_CONSENSUS_SNAPDIR="+filepath.Join(ledger, "snap"),
 	)
 	command := func() *exec.Cmd {
-		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPQ40EManagedOrdererRestart$")
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+t.Name()+"$")
 		cmd.Env = append(os.Environ(), environment...)
 		return cmd
 	}
@@ -353,6 +362,14 @@ func managedEvidence(t *testing.T, root, state, ledger, binary string, args []st
 }
 
 func TestPQ40EManagedPeerRestart(t *testing.T) {
+	testManagedPeerRestart(t, false)
+}
+
+func TestPQ40B1ManagedPeerRestart(t *testing.T) {
+	testManagedPeerRestart(t, true)
+}
+
+func testManagedPeerRestart(t *testing.T, transportCapability bool) {
 	binary := os.Getenv("PQ40E_MANAGED_PEER")
 	if binary == "" {
 		t.Skip("set PQ40E_MANAGED_PEER to the built peer")
@@ -373,7 +390,7 @@ func TestPQ40EManagedPeerRestart(t *testing.T) {
 	require.NoError(t, os.MkdirAll(ledgerRoot, 0o700))
 	require.NoError(t, os.Mkdir(state, 0o700))
 	fixture := testfixture.New(t)
-	genesis := managedGenesis(t, fixture, rootCA.CertBytes(), serverKey.Cert, unusedPort(t))
+	genesis := managedGenesis(t, fixture, rootCA.CertBytes(), serverKey.Cert, unusedPort(t), transportCapability)
 	genesisPath := write("genesis.block", protoutil.MarshalOrPanic(genesis))
 	store, err := activation.OpenStore(state, nil)
 	require.NoError(t, err)
@@ -607,9 +624,12 @@ func verifyManagedOperations(t *testing.T, address string, config *tls.Config) {
 	}
 }
 
-func managedGenesis(t *testing.T, fixture testfixture.Fixture, root, serverCert []byte, port string) *cb.Block {
+func managedGenesis(t *testing.T, fixture testfixture.Fixture, root, serverCert []byte, port string, transportCapability ...bool) *cb.Block {
 	t.Helper()
 	genesis := testfixture.Genesis(t)
+	if len(transportCapability) != 0 && transportCapability[0] {
+		genesis = testfixture.TransportGenesis(t)
+	}
 	config := testfixture.Config(t, genesis)
 	delete(config.GetChannelGroup().GetGroups(), "Consortiums")
 	ordererGroup := config.GetChannelGroup().GetGroups()["Orderer"]
