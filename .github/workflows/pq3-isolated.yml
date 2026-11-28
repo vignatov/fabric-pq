@@ -83,17 +83,43 @@ jobs:
           echo "PACTWAY_UNSUPPORTED_PQ2_PEER_SHA256=$peer_sha256" >> "$GITHUB_ENV"
           echo "PACTWAY_UNSUPPORTED_PQ2_ORDERER_SHA256=$orderer_sha256" >> "$GITHUB_ENV"
 
+      - name: Build pinned capability compatibility binaries from source
+        env:
+          GOFIPS140: "off"
+        run: |
+          set -euo pipefail
+          for entry in 'older:45fd1e34520b8be6cd2a23897649209eb566ae1b' 'upstream:86c1172bec37e6590c6b1ae6f847833df48d65fc'; do
+            name="${entry%%:*}"
+            revision="${entry#*:}"
+            source_dir="$RUNNER_TEMP/pq40b1-$name-source"
+            binary_dir="$RUNNER_TEMP/pq40b1-$name-bin"
+            mkdir -p "$source_dir" "$binary_dir"
+            git archive "$revision" | tar -x -C "$source_dir"
+            (
+              cd "$source_dir"
+              go build -mod=vendor -trimpath -buildvcs=false -o "$binary_dir/peer" ./cmd/peer
+              go build -mod=vendor -trimpath -buildvcs=false -o "$binary_dir/orderer" ./cmd/orderer
+            )
+            printf '%s source commit: %s\n' "$name" "$revision"
+            sha256sum "$binary_dir/peer" "$binary_dir/orderer"
+          done
+
       - name: Test real PQ4 transport capability against unsupported binaries
         env:
           GOFIPS140: "off"
           GOFLAGS: -buildvcs=false
         run: |
           set -euo pipefail
-          export PACTWAY_OLDER_PEER="$PACTWAY_UNSUPPORTED_PQ2_PEER"
-          export PACTWAY_OLDER_ORDERER="$PACTWAY_UNSUPPORTED_PQ2_ORDERER"
-          export PACTWAY_OLDER_PEER_SHA256="$PACTWAY_UNSUPPORTED_PQ2_PEER_SHA256"
-          export PACTWAY_OLDER_ORDERER_SHA256="$PACTWAY_UNSUPPORTED_PQ2_ORDERER_SHA256"
-          export PACTWAY_OLDER_REVISION="$PACTWAY_UNSUPPORTED_PQ2_REVISION"
+          export PACTWAY_OLDER_PEER="$RUNNER_TEMP/pq40b1-older-bin/peer"
+          export PACTWAY_OLDER_ORDERER="$RUNNER_TEMP/pq40b1-older-bin/orderer"
+          export PACTWAY_OLDER_PEER_SHA256="$(sha256sum "$PACTWAY_OLDER_PEER" | awk '{print $1}')"
+          export PACTWAY_OLDER_ORDERER_SHA256="$(sha256sum "$PACTWAY_OLDER_ORDERER" | awk '{print $1}')"
+          export PACTWAY_OLDER_REVISION=45fd1e34520b8be6cd2a23897649209eb566ae1b
+          export PACTWAY_UPSTREAM_PEER="$RUNNER_TEMP/pq40b1-upstream-bin/peer"
+          export PACTWAY_UPSTREAM_ORDERER="$RUNNER_TEMP/pq40b1-upstream-bin/orderer"
+          export PACTWAY_UPSTREAM_PEER_SHA256="$(sha256sum "$PACTWAY_UPSTREAM_PEER" | awk '{print $1}')"
+          export PACTWAY_UPSTREAM_ORDERER_SHA256="$(sha256sum "$PACTWAY_UPSTREAM_ORDERER" | awk '{print $1}')"
+          export PACTWAY_UPSTREAM_PEER_REVISION=86c1172bec37e6590c6b1ae6f847833df48d65fc
           git rev-parse HEAD
           go version
           uname -a
