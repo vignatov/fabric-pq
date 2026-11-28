@@ -95,10 +95,21 @@ func TestPQ40ECreateChannelRecoversProtectedResources(t *testing.T) {
 }
 
 func TestPQ40CPeerActivation(t *testing.T) {
+	testPeerActivation(t, false)
+}
+
+func TestPQ40B1PeerActivation(t *testing.T) {
+	testPeerActivation(t, true)
+}
+
+func testPeerActivation(t *testing.T, transportCapability bool) {
 	for _, scenario := range []string{"authorized", "staged authorized", "staged publish retry", "staged missing operator", "missing operator", "missing Fabric signature", "committed without preparation", "mismatching join"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := testfixture.New(t)
 			genesis := testfixture.Genesis(t)
+			if transportCapability {
+				genesis = testfixture.TransportGenesis(t)
+			}
 			base := testfixture.Config(t, genesis)
 			update := fixture.Update(t, base)
 			auth := fixture.Authorize(t, 1, base, update.GetConfig())

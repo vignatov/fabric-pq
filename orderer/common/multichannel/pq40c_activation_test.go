@@ -207,6 +207,14 @@ func verifyActivationMetadata(t *testing.T, block *cb.Block, bundle *channelconf
 }
 
 func TestPQ40COrdererUncertainCommit(t *testing.T) {
+	testOrdererUncertainCommit(t, false)
+}
+
+func TestPQ40B1OrdererUncertainCommit(t *testing.T) {
+	testOrdererUncertainCommit(t, true)
+}
+
+func testOrdererUncertainCommit(t *testing.T, transportCapability bool) {
 	for _, scenario := range []struct {
 		name   string
 		append bool
@@ -214,6 +222,9 @@ func TestPQ40COrdererUncertainCommit(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			fixture := testfixture.New(t)
 			genesis := testfixture.Genesis(t)
+			if transportCapability {
+				genesis = testfixture.TransportGenesis(t)
+			}
 			base := testfixture.Config(t, genesis)
 			store, err := activation.OpenStore(t.TempDir(), nil)
 			require.NoError(t, err)
@@ -251,6 +262,14 @@ func TestPQ40COrdererUncertainCommit(t *testing.T) {
 }
 
 func TestPQ40COrdererCrashRecovery(t *testing.T) {
+	testOrdererCrashRecovery(t, false)
+}
+
+func TestPQ40B1OrdererCrashRecovery(t *testing.T) {
+	testOrdererCrashRecovery(t, true)
+}
+
+func testOrdererCrashRecovery(t *testing.T, transportCapability bool) {
 	for _, scenario := range []struct {
 		point      string
 		occurrence int
@@ -276,7 +295,7 @@ func TestPQ40COrdererCrashRecovery(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/%d", scenario.point, scenario.occurrence), func(t *testing.T) {
 			root := t.TempDir()
 			worker := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPQ40COrdererCrashWorker$")
-			worker.Env = append(os.Environ(), "PQ40C_CRASH_ROOT="+root, "PQ40C_CRASH_POINT="+fmt.Sprintf("%s/%d", scenario.point, scenario.occurrence))
+			worker.Env = append(os.Environ(), "PQ40C_CRASH_ROOT="+root, "PQ40C_CRASH_POINT="+fmt.Sprintf("%s/%d", scenario.point, scenario.occurrence), fmt.Sprintf("PQ40B1_CAPABILITY=%t", transportCapability))
 			output, err := worker.CombinedOutput()
 			var exit *exec.ExitError
 			require.ErrorAs(t, err, &exit, "%s", output)
@@ -332,6 +351,9 @@ func TestPQ40COrdererCrashWorker(t *testing.T) {
 	}
 	fixture := testfixture.New(t)
 	genesis := testfixture.Genesis(t)
+	if os.Getenv("PQ40B1_CAPABILITY") == "true" {
+		genesis = testfixture.TransportGenesis(t)
+	}
 	base := testfixture.Config(t, genesis)
 	policyDir := filepath.Join(root, "policy")
 	require.NoError(t, os.Mkdir(policyDir, 0o700))
