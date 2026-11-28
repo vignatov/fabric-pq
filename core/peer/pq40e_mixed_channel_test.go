@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -337,6 +338,39 @@ func testMixedPeerPublicationFailureAndRestart(t *testing.T, transportCapability
 	checkBlock(seek(restartedClient, restartedHash, testfixture.ChannelID, 1), protectedBlock)
 	require.NoError(t, distribute(p, testfixture.ChannelID, "protected-recovered"))
 	require.NoError(t, distribute(p, baseline, "baseline-recovered"))
+	if transportCapability {
+		current := testfixture.Config(t, protectedBlock)
+		next := fixture.Update(t, current)
+		weakened := fixture.AuthorizeWithProfile(t, 2, current, next.GetConfig(), "classical")
+		encoded, err := json.Marshal(weakened)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(state, fmt.Sprintf("approval-%x-3", id)), encoded, 0o600))
+		attempt := makeBlock(testfixture.ChannelID, 2, protectedBlock, next)
+		require.NoError(t, enqueue(p, testfixture.ChannelID, attempt))
+		require.Eventually(t, func() bool {
+			_, _, admitted := p.AcquireChannelAdmission(testfixture.ChannelID)
+			return !admitted
+		}, 10*time.Second, 50*time.Millisecond)
+		_, _, admitted := p.AcquireChannelAdmission(baseline)
+		require.True(t, admitted)
+		persisted, err := RetrievePersistedChannelConfig(p.Channel(testfixture.ChannelID).Ledger())
+		require.NoError(t, err)
+		require.EqualValues(t, 1, persisted.GetSequence())
+		weakClient, err := baseCA.NewClientCertKeyPair()
+		require.NoError(t, err)
+		cert, err := tls.X509KeyPair(weakClient.Cert, weakClient.Key)
+		require.NoError(t, err)
+		roots := x509.NewCertPool()
+		require.True(t, roots.AppendCertsFromPEM(nodeCA.CertBytes()))
+		weakConn, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", server.Address(), &tls.Config{
+			RootCAs: roots, ServerName: "127.0.0.1", Certificates: []tls.Certificate{cert},
+			MinVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519},
+		})
+		if weakConn != nil {
+			_ = weakConn.Close()
+		}
+		require.Error(t, err, "shared listener accepted classical key exchange")
+	}
 }
 
 type mixedDiscoverySupport struct {
