@@ -258,6 +258,9 @@ func expectUnsupportedOrdererToRejectCapability(binary, requiredCapability strin
 	)
 	blockBytes, err := proto.Marshal(network.LoadAppChannelGenesisBlock(channelID))
 	Expect(err).NotTo(HaveOccurred())
+	genesisDigest := sha256.Sum256(blockBytes)
+	_, err = fmt.Fprintf(GinkgoWriter, "CAPABILITY_ORDERER binary=%q command=%q genesis_sha256=%x\n", binary, binary+" start", genesisDigest)
+	Expect(err).NotTo(HaveOccurred())
 	request := nwo.GenerateJoinRequest(joinURL, channelID, blockBytes)
 	authClient, _ := nwo.OrdererOperationalClients(network, orderer)
 	response, err := authClient.Do(request)
@@ -267,6 +270,8 @@ func expectUnsupportedOrdererToRejectCapability(binary, requiredCapability strin
 	Expect(err).NotTo(HaveOccurred())
 	Expect(response.StatusCode).NotTo(Equal(http.StatusCreated))
 	Expect(string(body)).To(ContainSubstring(fmt.Sprintf("Channel capability %s is required but not supported", requiredCapability)))
+	_, err = fmt.Fprintf(GinkgoWriter, "CAPABILITY_ORDERER join_http_status=%d channel_ready=false diagnostic=%q\n", response.StatusCode, string(body))
+	Expect(err).NotTo(HaveOccurred())
 	Eventually(ordererRunner.Err(), network.EventuallyTimeout).Should(gbytes.Say(requiredCapability))
 }
 
@@ -304,11 +309,18 @@ func expectUnsupportedPeerToRejectCapability(
 		"FABRIC_CFG_PATH="+peerConfigPath,
 		"CORE_PEER_MSPCONFIGPATH="+network.PeerUserMSPDir(peer, "Admin"),
 	)
+	genesisBytes, err := os.ReadFile(network.OutputBlockPath(network.Channels[0].Name))
+	Expect(err).NotTo(HaveOccurred())
+	genesisDigest := sha256.Sum256(genesisBytes)
+	_, err = fmt.Fprintf(GinkgoWriter, "CAPABILITY_PEER binary=%q command=%q genesis_sha256=%x\n", binary, strings.Join(joinCommand.Args, " "), genesisDigest)
+	Expect(err).NotTo(HaveOccurred())
 	session, err := gexec.Start(joinCommand, GinkgoWriter, GinkgoWriter)
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(session, network.EventuallyTimeout).Should(gexec.Exit())
 	Expect(session.ExitCode()).NotTo(Equal(0))
 	output := strings.TrimSpace(string(session.Out.Contents()) + string(session.Err.Contents()))
+	_, err = fmt.Fprintf(GinkgoWriter, "CAPABILITY_PEER join_exit_status=%d channel_ready=false diagnostic=%q\n", session.ExitCode(), output)
+	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(ContainSubstring(fmt.Sprintf("Channel capability %s is required but not supported", requiredCapability)))
 	(*peerProcess).Signal(syscall.SIGTERM)
 	Eventually((*peerProcess).Wait(), network.EventuallyTimeout).Should(Receive())

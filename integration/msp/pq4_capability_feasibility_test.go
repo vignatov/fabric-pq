@@ -20,7 +20,7 @@ const experimentalPQ4Capability = "PactwayPQ4FeasibilityUnknownCapability"
 
 var _ = Describe("PQ4 unknown capability feasibility", func() {
 	It("rejects a channel carrying an experimental unknown capability on the baseline peer", func() {
-		expectExperimentalPQ4CapabilityPeerRejection(components.Peer())
+		expectPQ4CapabilityPeerRejection(components.Peer(), experimentalPQ4Capability)
 	})
 
 	It("rejects a channel carrying an experimental unknown capability on the baseline orderer", func() {
@@ -37,12 +37,32 @@ var _ = Describe("PQ4 unknown capability feasibility", func() {
 		Expect(orderer).NotTo(BeEmpty(), "PACTWAY_UPSTREAM_ORDERER")
 		verifyUnsupportedBinary("upstream peer", peer, "PACTWAY_UPSTREAM_PEER_SHA256", "PACTWAY_UPSTREAM_PEER_REVISION")
 		verifyUnsupportedBinary("upstream orderer", orderer, "PACTWAY_UPSTREAM_ORDERER_SHA256", "PACTWAY_UPSTREAM_ORDERER_REVISION")
-		expectExperimentalPQ4CapabilityPeerRejection(peer)
+		expectPQ4CapabilityPeerRejection(peer, experimentalPQ4Capability)
 		expectUnsupportedOrdererToRejectCapability(orderer, experimentalPQ4Capability)
 	})
 })
 
-func expectExperimentalPQ4CapabilityPeerRejection(binary string) {
+var _ = Describe("PQ4.0B.1 real capability compatibility", func() {
+	for _, candidate := range []struct {
+		name, peer, orderer, peerSHA, ordererSHA, revision string
+	}{
+		{"older Pactway", "PACTWAY_OLDER_PEER", "PACTWAY_OLDER_ORDERER", "PACTWAY_OLDER_PEER_SHA256", "PACTWAY_OLDER_ORDERER_SHA256", "PACTWAY_OLDER_REVISION"},
+		{"upstream Fabric", "PACTWAY_UPSTREAM_PEER", "PACTWAY_UPSTREAM_ORDERER", "PACTWAY_UPSTREAM_PEER_SHA256", "PACTWAY_UPSTREAM_ORDERER_SHA256", "PACTWAY_UPSTREAM_PEER_REVISION"},
+	} {
+		It("rejects the real transport capability on "+candidate.name, func() {
+			peer, orderer := os.Getenv(candidate.peer), os.Getenv(candidate.orderer)
+			if peer == "" && orderer == "" {
+				Skip("compatibility binaries are not configured")
+			}
+			verifyUnsupportedBinary(candidate.name+" peer", peer, candidate.peerSHA, candidate.revision)
+			verifyUnsupportedBinary(candidate.name+" orderer", orderer, candidate.ordererSHA, candidate.revision)
+			expectPQ4CapabilityPeerRejection(peer, "PactwayPQTransportV1")
+			expectUnsupportedOrdererToRejectCapability(orderer, "PactwayPQTransportV1")
+		})
+	}
+})
+
+func expectPQ4CapabilityPeerRejection(binary, capability string) {
 	testDir, err := os.MkdirTemp("", "pq4-unknown-capability-peer")
 	Expect(err).NotTo(HaveOccurred())
 	var network *nwo.Network
@@ -59,8 +79,8 @@ func expectExperimentalPQ4CapabilityPeerRejection(binary string) {
 	})
 
 	network = nwo.New(nwo.BasicEtcdRaft(), testDir, nil, StartPort(), components)
-	network.Profiles[0].ChannelCapabilities = []string{"V3_0", experimentalPQ4Capability}
+	network.Profiles[0].ChannelCapabilities = []string{"V3_0", capability}
 	network.GenerateConfigTree()
 	network.Bootstrap()
-	expectUnsupportedPeerToRejectCapability(binary, experimentalPQ4Capability, network, &peerProcess)
+	expectUnsupportedPeerToRejectCapability(binary, capability, network, &peerProcess)
 }

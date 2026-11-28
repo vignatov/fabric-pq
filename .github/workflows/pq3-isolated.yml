@@ -83,6 +83,23 @@ jobs:
           echo "PACTWAY_UNSUPPORTED_PQ2_PEER_SHA256=$peer_sha256" >> "$GITHUB_ENV"
           echo "PACTWAY_UNSUPPORTED_PQ2_ORDERER_SHA256=$orderer_sha256" >> "$GITHUB_ENV"
 
+      - name: Test real PQ4 transport capability against unsupported binaries
+        env:
+          GOFIPS140: "off"
+          GOFLAGS: -buildvcs=false
+        run: |
+          set -euo pipefail
+          export PACTWAY_OLDER_PEER="$PACTWAY_UNSUPPORTED_PQ2_PEER"
+          export PACTWAY_OLDER_ORDERER="$PACTWAY_UNSUPPORTED_PQ2_ORDERER"
+          export PACTWAY_OLDER_PEER_SHA256="$PACTWAY_UNSUPPORTED_PQ2_PEER_SHA256"
+          export PACTWAY_OLDER_ORDERER_SHA256="$PACTWAY_UNSUPPORTED_PQ2_ORDERER_SHA256"
+          export PACTWAY_OLDER_REVISION="$PACTWAY_UNSUPPORTED_PQ2_REVISION"
+          git rev-parse HEAD
+          go version
+          uname -a
+          printf 'GOFIPS140=%s\n' "$GOFIPS140"
+          go test -mod=vendor -count=1 -timeout 20m -v ./integration/msp -run '^TestMSP$' -args -ginkgo.focus='PQ4.0B.1 real capability compatibility'
+
       - name: Run temporary-profile PQ3 acceptance
         run: integration/pq3/pq3.sh acceptance
         env:

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/internal/pkg/pqtransport/activation"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
@@ -41,4 +42,20 @@ func TestPQ40B1AuthenticatedFreshGenesis(t *testing.T) {
 	controller := fixture.Channel(store, activation.Ledger{})
 	require.NoError(t, controller.AuthorizeGenesis(genesis))
 	require.Error(t, controller.AuthorizeGenesis(Genesis(t)))
+}
+
+func TestPQ40B1RecoveryQuarantinesRemovedCapability(t *testing.T) {
+	fixture := New(t)
+	genesis := TransportGenesis(t)
+	committed := Genesis(t)
+	store, err := activation.OpenStore(t.TempDir(), nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, Config(t, committed))
+	controller := fixture.Channel(store, activation.Ledger{
+		Block:        func(uint64) (*cb.Block, error) { return genesis, nil },
+		LatestConfig: func() (*cb.Block, error) { return committed, nil },
+	})
+	require.ErrorContains(t, controller.Recover(true), "transport capability conflicts with genesis")
+	require.False(t, controller.Ready())
+	require.ErrorContains(t, controller.Recover(true), "quarantined")
 }
