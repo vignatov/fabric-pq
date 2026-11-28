@@ -1,5 +1,9 @@
 # PQ4.0E.3 controlled provisioning boundary
 
+> The pending PQ4.0E acceptance statement below describes an earlier
+> checkpoint. See the [development decision](pq4.0e-development-decision.md)
+> for the later bounded disposition and effective status on `main`.
+
 ## Decision
 
 The controlled acceptance procedure uses an independently authenticated,

@@ -1,5 +1,9 @@
 # PQ4.0E.3 development gate proposal
 
+> Historical evidence report: the decision and pending statements below describe
+> the PR #16 checkpoint. See the [later development decision](pq4.0e-development-decision.md)
+> for the accepted disposition and effective status on `main`.
+
 **Decision: INCOMPLETE — INDEPENDENT DEVELOPMENT ACCEPTANCE PENDING**
 
 PQ4.0E.3 implements signed pre-export authorization, source-ledger path

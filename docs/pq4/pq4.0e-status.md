@@ -1,4 +1,9 @@
-# PQ4.0E bootstrap and admission: INCOMPLETE
+# PQ4.0E bootstrap and admission: COMPLETE (DEVELOPMENT)
+
+The [accepted development decision](pq4.0e-development-decision.md) records
+the evidence, review and trust boundary. This status takes effect on `main`
+when the accepted record is merged; until then PQ4.0B.1 remains blocked.
+PQ4.0B network-wide enforcement remains incomplete and PQ4.1 is not authorized.
 
 This development checkpoint covers authenticated enrollment and bounded
 admission on native peers and Raft orderers. The bounded PQ4.0E.1
@@ -6,10 +11,9 @@ implementation at `0c3e9db3402dbc87d536d0959442266f4c75c256` passed hosted
 CI and independent review for merge, subject to DCO sign-off. PQ4.0E.3 adds
 a controlled Linux provisioning demonstration. Its final-head hosted CI passed,
 and the independent security review supported the bounded implementation.
-PQ4.0E development acceptance remains incomplete pending explicit independent
-sign-off on the reconciled evidence and trust boundary. Production deployment
-certification is a separate assessment. The PQ4.0B network enforcement gate
-remains incomplete. [PQ4.0E.3 development gate report](pq4.0e3-development-gate.md)
+The bounded development decision is accepted as described above. Production
+deployment certification is a separate assessment. The PQ4.0B network
+enforcement gate remains incomplete. [PQ4.0E.3 development gate report](pq4.0e3-development-gate.md)
 
 ## Current boundary
 
@@ -96,7 +100,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Signed manifest, protected history and Linux launcher | Linux race and subprocess tests passed; managed deployment incomplete |
 | Fixed managed systemd unit and installer | Disposable systemd VM test installs and inspects the real unit |
 | Non-bypassable managed VM deployment and protected-to-baseline prohibition | Disposable VM test covers the trusted service-manager boundary; production validation pending |
-| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. PQ4.0E.2 adds provisioner-pinned exporter evidence, complete pre-signing inventory verification, private staging and a versioned peer snapshot anchor. PQ4.0E.3 adds signed pre-export authorization and a Ledger A/B process/filesystem test. The [PQ4.0E.3 gate report](pq4.0e3-development-gate.md) records the final-head hosted evidence and implementation review. Independent development acceptance remains pending. |
+| Authenticated onboarding and non-genesis join provenance | PQ4.0E.1 replays complete history before issuance. PQ4.0E.2 adds provisioner-pinned exporter evidence, complete pre-signing inventory verification, private staging and a versioned peer snapshot anchor. PQ4.0E.3 adds signed pre-export authorization and a Ledger A/B process/filesystem test. The [PQ4.0E.3 gate report](pq4.0e3-development-gate.md) records the final-head hosted evidence and implementation review; the [decision](pq4.0e-development-decision.md) records bounded acceptance. |
 | Peer bootstrap and endorsement, Gateway and background admission | Managed peer startup installs the verified channel registry and strict shared listener |
 | Peer native commit adapter with staged approval | Real-ledger race tests passed; protected channel creation installs the adapter |
 | Protected peer lifecycle assembly | Protected channel creation recovers private validation, serving publication and guarded commits before exposing the channel |
@@ -111,7 +115,7 @@ without a protected handoff. Linux is the supported managed platform.
 | Orderer protected bundle callbacks | Managed orderer stages listener and cluster dialer trust before publishing either |
 | Runtime service coverage | Recorded below, including endpoints disabled for enrolled channels and network-wide enforcement gaps |
 | Managed operations listener and profiling | Authenticated strict mTLS for operations; managed startup rejects an enabled profiling listener |
-| Full regression, integration and final-head CI evidence | The [PQ4.0E.2 acceptance report](pq4.0e2-acceptance.md) and [PQ4.0E.3 gate report](pq4.0e3-development-gate.md) record results for their respective revisions. PR #15 final-head Verify Build and PQ3 passed. The PQ4.0E development decision and PQ4.0B gate remain incomplete. |
+| Full regression, integration and final-head CI evidence | The [PQ4.0E.2 acceptance report](pq4.0e2-acceptance.md) and [PQ4.0E.3 gate report](pq4.0e3-development-gate.md) record results for their respective revisions. PR #15 final-head Verify Build and PQ3 passed. The bounded PQ4.0E development decision is accepted; the PQ4.0B gate remains incomplete. |
 
 Complete privileged-host replacement or rollback of all protected
 provisioning state remains outside the development threat model.
@@ -165,9 +169,11 @@ and the PQ4.0E disposable-VM proof, passed. PQ3 isolated acceptance also
 passed. The first PR unit-test attempt failed in an unchanged Gateway timeout
 test; its same-head rerun passed, as did the push-triggered unit run. The
 bounded implementation review accepted this commit for merge subject to DCO
-sign-off. These results do not complete the PQ4.0E development gate; remaining
-acceptance evidence, independent snapshot-state provenance and production
-qualification are still outstanding.
+sign-off. These historical results alone did not complete the PQ4.0E
+development gate; subsequent evidence and the bounded decision are recorded
+in the [decision record](pq4.0e-development-decision.md). Independent
+attestation of arbitrary snapshot state and production qualification remain
+outside that decision.
 
 ### PQ4.0E.2 trusted snapshot export
 
@@ -219,7 +225,8 @@ protected import, restart with evidence, and restart without evidence. The
 PQ4.0E.3 disposable-VM test additionally covers source-path substitution,
 unapproved Ledger B access, independent exporter authorization, evidence
 replacement after staging, v2 approval, peer restart recovery, and baseline
-ledger continuity. Final-head hosted CI and independent review remain required.
+ledger continuity. Final-head hosted CI and review are recorded in the
+[decision record](pq4.0e-development-decision.md).
 
 Local validation was run on Linux/amd64 with Go 1.27.4, `GOFIPS140=off`, in a
 disposable `golang:1.27.4` container. All commands below passed:
