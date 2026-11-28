@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -52,6 +53,14 @@ import (
 )
 
 func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
+	testMixedPeerPublicationFailureAndRestart(t, false)
+}
+
+func TestPQ40B1ManagedPeerPublicationFailureAndRestart(t *testing.T) {
+	testMixedPeerPublicationFailureAndRestart(t, true)
+}
+
+func testMixedPeerPublicationFailureAndRestart(t *testing.T, transportCapability bool) {
 	const baseline = "unchanged-baseline"
 	fixture := testfixture.New(t)
 	ca := func() tlsgen.CA {
@@ -104,8 +113,11 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	}
 
 	template := testfixture.Genesis(t)
-	protectedBase := configWithRoot(testfixture.Config(t, template), oldCA.CertBytes())
 	baselineBase := configWithRoot(testfixture.Config(t, template), baseCA.CertBytes())
+	if transportCapability {
+		template = testfixture.TransportGenesis(t)
+	}
+	protectedBase := configWithRoot(testfixture.Config(t, template), oldCA.CertBytes())
 	protectedGenesis := makeBlock(testfixture.ChannelID, 0, nil, &cb.ConfigEnvelope{Config: protectedBase})
 	baselineGenesis := makeBlock(baseline, 0, nil, &cb.ConfigEnvelope{Config: baselineBase})
 	update := fixture.UpdateTo(t, protectedBase, configWithRoot(protectedBase, candidateCA.CertBytes()))
@@ -326,6 +338,45 @@ func TestPQ40EMixedPeerPublicationFailureAndRestart(t *testing.T) {
 	checkBlock(seek(restartedClient, restartedHash, testfixture.ChannelID, 1), protectedBlock)
 	require.NoError(t, distribute(p, testfixture.ChannelID, "protected-recovered"))
 	require.NoError(t, distribute(p, baseline, "baseline-recovered"))
+	if transportCapability {
+		current := testfixture.Config(t, protectedBlock)
+		next := fixture.Update(t, current)
+		weakened := fixture.AuthorizeWithProfile(t, 2, current, next.GetConfig(), "classical")
+		encoded, err := json.Marshal(weakened)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(state, fmt.Sprintf("approval-%x-3", id)), encoded, 0o600))
+		attempt := makeBlock(testfixture.ChannelID, 2, protectedBlock, next)
+		require.NoError(t, enqueue(p, testfixture.ChannelID, attempt))
+		require.Eventually(t, func() bool {
+			_, release, admitted := p.AcquireChannelAdmission(testfixture.ChannelID)
+			if release != nil {
+				release()
+			}
+			return !admitted
+		}, 10*time.Second, 50*time.Millisecond)
+		_, release, admitted := p.AcquireChannelAdmission(baseline)
+		require.True(t, admitted)
+		if release != nil {
+			release()
+		}
+		persisted, err := RetrievePersistedChannelConfig(p.Channel(testfixture.ChannelID).Ledger())
+		require.NoError(t, err)
+		require.EqualValues(t, 1, persisted.GetSequence())
+		weakClient, err := baseCA.NewClientCertKeyPair()
+		require.NoError(t, err)
+		cert, err := tls.X509KeyPair(weakClient.Cert, weakClient.Key)
+		require.NoError(t, err)
+		roots := x509.NewCertPool()
+		require.True(t, roots.AppendCertsFromPEM(nodeCA.CertBytes()))
+		weakConn, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", server.Address(), &tls.Config{
+			RootCAs: roots, ServerName: "127.0.0.1", Certificates: []tls.Certificate{cert},
+			MinVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519},
+		})
+		if weakConn != nil {
+			_ = weakConn.Close()
+		}
+		require.Error(t, err, "shared listener accepted classical key exchange")
+	}
 }
 
 type mixedDiscoverySupport struct {

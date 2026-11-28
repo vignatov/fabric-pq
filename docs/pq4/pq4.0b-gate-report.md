@@ -11,9 +11,10 @@ remain open. [PQ4.0E status and service inventory](pq4.0e-status.md)
 **Recommendation: stop for architecture review; do not accept or merge the
 gate.** The focused `comm` and signed-policy components are not a protected
 Pactway network. `PactwayPQTransportV1` is the selected name and
-fresh-genesis-only contract; it is **not implemented or advertised as
-supported** by peer or orderer binaries. The existing enrollment capability
-and baseline behavior remain separate.
+fresh-genesis-only contract. Capability implementation and its independent
+acceptance evidence are under development; recognition alone does not prove
+transport enforcement. The existing enrollment capability and baseline
+behavior remain separate.
 
 ## Evidence provenance
 
@@ -90,7 +91,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | Identity binding and stale/conflicting bootstrap rejection | PASS (managed-process scope) | PQ4.0E launcher, registry and restart tests bind signed manifest/history, node/network identity, pinned signer and protected checkpoint; complete privileged-host rollback remains excluded. |
 | Independently established peer snapshot-state provenance | INCOMPLETE for PQ4.0E acceptance; bounded implementation and local source-control demonstration present | PQ4.0E.2 checks exporter evidence against provisioner-controlled pins and stages exact bytes. PQ4.0E.3 adds signed pre-export authorization, restricted Ledger A/B access, native ledger opening, and separate importer execution; final-head hosted evidence and independent review remain pending in the [PQ4.0E.3 report](pq4.0e3-development-gate.md). This does not implement or prove PQ4.0B network transport enforcement. |
 | No downgrade through clones, credentials and restarts | INCOMPLETE | PQ4.0E exercises managed restart and strict selected listeners, but not every credential factory, all connection lifetimes, or unsupported old binaries under a real PQ4 capability. |
-| Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability not implemented; no actual node/channel-policy integration. |
+| Actual authenticated capability, local agreement and channel join | INCOMPLETE | Capability and managed-admission implementation require complete native lifecycle, compatibility and final-head evidence. |
 | Fabric-authorized downgrade or removal rejected | INCOMPLETE | No actual PQ4 channel or authenticated configuration update. |
 | Authorized non-weakening Fabric and operator transition, durable recovery | PASS (native lifecycle scope) | PQ4.0C/D/E exercise real Fabric configuration authorization, separate operator authorization, durable activation recovery and native peer/orderer lifecycle paths; a distributed PQ4 network and transport-wide policy remain unproved. |
 | Older peer and orderer reject the actual capability | INCOMPLETE | No actual capability or binary provenance for this proof. Earlier unknown-name evidence is not a substitute. |
@@ -116,7 +117,7 @@ Each result applies to the **requested gate**, not merely the component test.
 | 6. TLS 1.2 | PASS | Real strict `comm` listener and cloned credentials reject with version diagnostics. |
 | 7. Classical-only endpoint identity | PASS | Component strict client and mTLS server reject classical identities. |
 | 8. Missing required client identity | PASS | Component mTLS server rejects a missing client certificate. |
-| 9. Missing/inconsistent channel capability | INCOMPLETE | Capability and actual binding not implemented. |
+| 9. Missing/inconsistent channel capability | INCOMPLETE | Capability and binding checks require complete adversarial and recovery evidence. |
 | 10. Authorized configuration weakening PQ4 | INCOMPLETE | No Fabric-authorized PQ4 configuration update tested. |
 | 11. Unsupported peer and orderer | INCOMPLETE | No actual new capability or recorded binaries. |
 | 12. Plaintext CCAAS metadata | INCOMPLETE | The earlier plaintext guard is test-only, not runtime enforcement. |
@@ -382,3 +383,36 @@ listeners, per-service and stream admission, the authenticated
 `PactwayPQTransportV1` capability, and strict CCAAS and orderer administration.
 The process-crash tests provide no evidence for power loss or privileged host
 rollback.
+# PQ4.0B.1 legacy startup boundary
+
+PQ4.0B remains **INCOMPLETE**. Legacy PQ4.0E protected channels remain under
+authenticated enrollment and the trusted launcher; ordinary baseline channels
+retain unmanaged Fabric startup. New capability-bearing channels require both
+fresh genesis and independently authenticated managed policy. A competing
+unmanaged process with no enrollment evidence cannot recognize an otherwise
+identical legacy protected ledger. Preventing that process is a trusted
+provisioner responsibility; independently discoverable enrollment history is
+future production hardening. Capability recognition does not establish
+network-wide strict TLS. Implementation and final-head acceptance evidence for
+PQ4.0B.1 remain incomplete until independently reviewed.
+
+Early development evidence is separate from final-head acceptance. For commit
+`3759968ad8b88064022056a48b020646c914e483`, [Verify Build](https://github.com/vignatov/fabric-pq/actions/runs/46174609096)
+failed capability checks, Basic Checks and PQ4.0E admission checks; unit and
+integration jobs were skipped. The [PQ3 run](https://github.com/vignatov/fabric-pq/actions/runs/46174608904)
+failed during temporary-profile acceptance. The capability check failure was a
+nil test fixture, the lifecycle failures were missing genesis readers in test
+fixtures, and Basic Checks reported formatting and protobuf getter issues.
+These were addressed in later commits. For commit
+`f3ad03de5a8a75d1963f3a1579cc2bb1584f0d5f`, the [real-capability binary step](https://github.com/vignatov/fabric-pq/actions/runs/46175305191)
+passed against the configured older Pactway and upstream binaries; its
+[Basic Checks](https://github.com/vignatov/fabric-pq/actions/runs/46175305129)
+failed on a protobuf getter lint and unit and integration jobs were skipped.
+These results are not final-head evidence, and skipped jobs are not passes.
+For commit `50f9f3f9fb475fedb82742b7196c09b8d574b1ed`,
+[Verify Build](https://github.com/vignatov/fabric-pq/actions/runs/46175600895)
+failed Basic Checks on another protobuf getter and the managed-binary test
+because its binary filenames did not match the authenticated launcher contract;
+dependent unit and integration jobs were skipped. Superseded runs for commits
+`3a7c4ba56`, `f3ad03de5` and `90b87e370` were cancelled while in progress;
+their incomplete jobs are not passes.

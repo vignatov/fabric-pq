@@ -44,6 +44,10 @@ const (
 	// 1.3.6.1.4.1.67732.1, profile/key OID .1.1, PQ-signature OID .1.2,
 	// and ML-DSA-65 algorithm. Older binaries reject this distinct capability.
 	PactwayHybridCertificatePactwayV1 = "PactwayHybridCertificatePactwayV1"
+
+	// PactwayPQTransportV1 requires the independently authenticated
+	// pactway-pq-tls-v1 transport policy. Recognition alone does not enforce TLS.
+	PactwayPQTransportV1 = "PactwayPQTransportV1"
 )
 
 // ChannelProvider provides capabilities information for channel level config.
@@ -57,6 +61,7 @@ type ChannelProvider struct {
 	v30                        bool
 	pactwayHybridCertificateV1 bool
 	pactwayHybridPactwayV1     bool
+	pactwayPQTransportV1       bool
 }
 
 // NewChannelProvider creates a channel capabilities provider.
@@ -71,6 +76,7 @@ func NewChannelProvider(capabilities map[string]*cb.Capability) *ChannelProvider
 	_, cp.v30 = capabilities[ChannelV3_0]
 	_, cp.pactwayHybridCertificateV1 = capabilities[PactwayHybridCertificateV1]
 	_, cp.pactwayHybridPactwayV1 = capabilities[PactwayHybridCertificatePactwayV1]
+	_, cp.pactwayPQTransportV1 = capabilities[PactwayPQTransportV1]
 	return cp
 }
 
@@ -98,6 +104,8 @@ func (cp *ChannelProvider) HasCapability(capability string) bool {
 		return true
 	case PactwayHybridCertificatePactwayV1:
 		return true
+	case PactwayPQTransportV1:
+		return true
 	case ChannelV2_0:
 		return true
 	case ChannelV1_4_3:
@@ -111,6 +119,12 @@ func (cp *ChannelProvider) HasCapability(capability string) bool {
 	default:
 		return false
 	}
+}
+
+// PactwayPQTransportV1 reports the channel transport requirement, not whether
+// the local node has authenticated or enforced the required policy.
+func (cp *ChannelProvider) PactwayPQTransportV1() bool {
+	return cp.pactwayPQTransportV1
 }
 
 // PactwayHybridCertificateV1 reports whether this channel requires hybrid

@@ -30,8 +30,19 @@ import (
 )
 
 func TestRegistryUsesProtectedGenesisForJoinHistory(t *testing.T) {
+	testRegistryUsesProtectedGenesisForJoinHistory(t, false)
+}
+
+func TestPQ40B1RegistryUsesProtectedGenesisForJoinHistory(t *testing.T) {
+	testRegistryUsesProtectedGenesisForJoinHistory(t, true)
+}
+
+func testRegistryUsesProtectedGenesisForJoinHistory(t *testing.T, transportCapability bool) {
 	fixture := testfixture.New(t)
 	genesis := fixture.RaftGenesis(t)
+	if transportCapability {
+		genesis = testfixture.WithTransportCapability(t, genesis)
+	}
 	update := fixture.Update(t, testfixture.Config(t, genesis))
 	target := fixture.SignedBlock(t, genesis, fixture.Envelope(t, update), 1)
 	config := update.GetConfig()

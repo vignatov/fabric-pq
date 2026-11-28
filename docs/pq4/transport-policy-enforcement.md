@@ -16,6 +16,24 @@ Status: **enforcement NOT PROVEN; PQ4.1 is blocked**. PQ4.0D adds the local
 orderer configuration authorization boundary. Strict service endpoint and
 shared-listener enforcement still require integration evidence.
 
+### Legacy protected channels and the trusted startup boundary
+
+Ordinary baseline channels use existing Fabric compatibility and need no
+managed enrollment. Legacy PQ4.0E protected channels derive their protection
+from authenticated enrollment, protected history, checkpoint state and the
+trusted launcher; they do not acquire a transport capability retroactively.
+New PQ4.0B channels declare `PactwayPQTransportV1` at genesis and additionally
+require the independently authenticated managed transport policy. Capability
+recognition alone does not establish enforcement on all network connections.
+
+The trusted provisioner and service manager must prevent competing unmanaged
+processes from accessing protected ledger and credential state. Without the
+independently authenticated enrollment evidence, an unmanaged process cannot
+distinguish a legacy protected ledger from an identical baseline ledger. This
+is not universal downgrade prevention. Independently discoverable enrollment
+history and protection against competing direct processes are production
+hardening work, not properties established by PQ4.0B.1.
+
 ### Isolated managed orderer provisioning
 
 Use the signed launcher and service-manager contract described in the

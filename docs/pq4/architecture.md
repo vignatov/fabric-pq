@@ -33,6 +33,16 @@ must not remove the capability; non-weakening configuration updates remain
 possible through separately authorized local checkpoint advancement. The
 capability does not authenticate a connection before its channel is known.
 
+Legacy PQ4.0E protected channels retain their original genesis and their
+authenticated enrollment, checkpoint and managed-startup lifecycle. They are
+not evidence of the new transport capability. Baseline channels need no
+enrollment; new PQ4.0B channels require both the capability and an independently
+authenticated local policy. The trusted provisioner must prevent a competing
+unmanaged process from accessing protected ledger and credential state. A
+process without enrollment evidence cannot identify a legacy protected ledger
+that is identical to a baseline ledger. Independently discoverable enrollment
+history and protection against competing direct startup are future hardening.
+
 In strict mode every protected server authenticates using ML-DSA-65. TLS 1.3
 and X25519MLKEM768 are required on all protected connections. Existing
 listener-specific client-certificate requirements are retained: general

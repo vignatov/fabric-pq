@@ -79,6 +79,9 @@ func (b *Bundle) ConfigtxValidator() configtx.Validator {
 // ValidateNew checks if a new bundle's contained configuration is valid to be derived from the current bundle.
 // This allows checks of the nature "Make sure that the consensus type did not change".
 func (b *Bundle) ValidateNew(nb Resources) error {
+	if PQTransportRequired(b) != PQTransportRequired(nb) {
+		return errors.New("Pactway PQ transport capability can only be selected in genesis and cannot be removed")
+	}
 	currentProfile := hybridProfileForChannel(b.ChannelConfig())
 	newProfile := hybridProfileForChannel(nb.ChannelConfig())
 	if currentProfile == "" && newProfile == "pactway-hybrid-certificate-v1" {

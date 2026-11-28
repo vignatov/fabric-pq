@@ -94,8 +94,19 @@ func activationWriter(t *testing.T, fixture testfixture.Fixture, ledger blockled
 }
 
 func TestPQ40COrdererActivation(t *testing.T) {
+	testOrdererActivation(t, false)
+}
+
+func TestPQ40B1ProtectedOrdererActivation(t *testing.T) {
+	testOrdererActivation(t, true)
+}
+
+func testOrdererActivation(t *testing.T, transportCapability bool) {
 	fixture := testfixture.New(t)
 	genesis := testfixture.Genesis(t)
+	if transportCapability {
+		genesis = testfixture.TransportGenesis(t)
+	}
 	base := testfixture.Config(t, genesis)
 	store, err := activation.OpenStore(t.TempDir(), nil)
 	require.NoError(t, err)
@@ -175,6 +186,13 @@ func TestPQ40COrdererActivation(t *testing.T) {
 		t.Fatal("replayed configuration entered native commit")
 		return nil
 	}), "Fabric config authorization")
+	secondUpdate := fixture.Update(t, update.GetConfig())
+	secondBlock := writer.CreateNextBlock([]*cb.Envelope{fixture.Envelope(t, secondUpdate)})
+	require.ErrorContains(t, controller.Apply(secondBlock, auth, func() error {
+		t.Fatal("replayed operator authorization entered native commit")
+		return nil
+	}), "transition previous checkpoint conflicts")
+	require.False(t, controller.Ready())
 }
 
 func verifyActivationMetadata(t *testing.T, block *cb.Block, bundle *channelconfig.Bundle, raftMetadata []byte) {
@@ -196,6 +214,49 @@ func verifyActivationMetadata(t *testing.T, block *cb.Block, bundle *channelconf
 }
 
 func TestPQ40COrdererUncertainCommit(t *testing.T) {
+	testOrdererUncertainCommit(t, false)
+}
+
+func TestPQ40B1OrdererUncertainCommit(t *testing.T) {
+	testOrdererUncertainCommit(t, true)
+}
+
+func TestPQ40B1CheckpointWriteFailureClosesAdmission(t *testing.T) {
+	fixture := testfixture.New(t)
+	genesis := testfixture.TransportGenesis(t)
+	base := testfixture.Config(t, genesis)
+	dir := t.TempDir()
+	store, err := activation.OpenStore(dir, nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, base)
+	lgr, view := ordererActivationLedger(t, t.TempDir(), func(string) {})
+	require.NoError(t, lgr.Append(genesis))
+	controller := fixture.Channel(store, view)
+	controller.Validate = checkResources
+	require.NoError(t, controller.Recover(true))
+	writer, _ := activationWriter(t, fixture, lgr, genesis)
+	update := fixture.Update(t, base)
+	next := writer.CreateNextBlock([]*cb.Envelope{fixture.Envelope(t, update)})
+	approval := fixture.Authorize(t, 1, base, update.GetConfig())
+	checkpoint := filepath.Join(dir, "checkpoint")
+	backup := filepath.Join(dir, "checkpoint-backup")
+	err = controller.Apply(next, approval, func() error {
+		writer.WriteConfigBlock(next, nil)
+		if err := os.Rename(checkpoint, backup); err != nil {
+			return err
+		}
+		return os.Mkdir(checkpoint, 0o700)
+	})
+	require.Error(t, err)
+	require.False(t, controller.Ready())
+	require.EqualValues(t, 2, lgr.Height(), "the ledger must retain the committed block")
+	require.NoError(t, os.Remove(checkpoint))
+	require.NoError(t, os.Rename(backup, checkpoint))
+	require.NoError(t, controller.Recover(true))
+	require.True(t, controller.Ready())
+}
+
+func testOrdererUncertainCommit(t *testing.T, transportCapability bool) {
 	for _, scenario := range []struct {
 		name   string
 		append bool
@@ -203,6 +264,9 @@ func TestPQ40COrdererUncertainCommit(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			fixture := testfixture.New(t)
 			genesis := testfixture.Genesis(t)
+			if transportCapability {
+				genesis = testfixture.TransportGenesis(t)
+			}
 			base := testfixture.Config(t, genesis)
 			store, err := activation.OpenStore(t.TempDir(), nil)
 			require.NoError(t, err)
@@ -240,6 +304,14 @@ func TestPQ40COrdererUncertainCommit(t *testing.T) {
 }
 
 func TestPQ40COrdererCrashRecovery(t *testing.T) {
+	testOrdererCrashRecovery(t, false)
+}
+
+func TestPQ40B1OrdererCrashRecovery(t *testing.T) {
+	testOrdererCrashRecovery(t, true)
+}
+
+func testOrdererCrashRecovery(t *testing.T, transportCapability bool) {
 	for _, scenario := range []struct {
 		point      string
 		occurrence int
@@ -265,7 +337,7 @@ func TestPQ40COrdererCrashRecovery(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/%d", scenario.point, scenario.occurrence), func(t *testing.T) {
 			root := t.TempDir()
 			worker := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPQ40COrdererCrashWorker$")
-			worker.Env = append(os.Environ(), "PQ40C_CRASH_ROOT="+root, "PQ40C_CRASH_POINT="+fmt.Sprintf("%s/%d", scenario.point, scenario.occurrence))
+			worker.Env = append(os.Environ(), "PQ40C_CRASH_ROOT="+root, "PQ40C_CRASH_POINT="+fmt.Sprintf("%s/%d", scenario.point, scenario.occurrence), fmt.Sprintf("PQ40B1_CAPABILITY=%t", transportCapability))
 			output, err := worker.CombinedOutput()
 			var exit *exec.ExitError
 			require.ErrorAs(t, err, &exit, "%s", output)
@@ -321,6 +393,9 @@ func TestPQ40COrdererCrashWorker(t *testing.T) {
 	}
 	fixture := testfixture.New(t)
 	genesis := testfixture.Genesis(t)
+	if os.Getenv("PQ40B1_CAPABILITY") == "true" {
+		genesis = testfixture.TransportGenesis(t)
+	}
 	base := testfixture.Config(t, genesis)
 	policyDir := filepath.Join(root, "policy")
 	require.NoError(t, os.Mkdir(policyDir, 0o700))

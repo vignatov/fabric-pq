@@ -19,6 +19,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"github.com/hyperledger/fabric/common/capabilities"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/common/util"
@@ -79,6 +80,44 @@ func Genesis(t *testing.T) *cb.Block {
 	t.Helper()
 	block, err := configtxtest.MakeGenesisBlock(ChannelID)
 	require.NoError(t, err)
+	return block
+}
+
+// TransportGenesis makes a fresh test genesis declaring the real capability.
+func TransportGenesis(t *testing.T) *cb.Block {
+	t.Helper()
+	return WithTransportCapability(t, Genesis(t))
+}
+
+// WithTransportCapability adds the declaration to a test genesis block.
+func WithTransportCapability(t *testing.T, original *cb.Block) *cb.Block {
+	t.Helper()
+	block := proto.CloneOf(original)
+	envelope, err := protoutil.ExtractEnvelope(block, 0)
+	require.NoError(t, err)
+	payload, err := protoutil.UnmarshalPayload(envelope.GetPayload())
+	require.NoError(t, err)
+	config := &cb.ConfigEnvelope{}
+	require.NoError(t, proto.Unmarshal(payload.GetData(), config))
+	group := config.GetConfig().GetChannelGroup()
+	value := group.GetValues()[channelconfig.CapabilitiesKey]
+	if value == nil {
+		value = &cb.ConfigValue{}
+		group.Values[channelconfig.CapabilitiesKey] = value
+	}
+	caps := &cb.Capabilities{}
+	if len(value.GetValue()) != 0 {
+		require.NoError(t, proto.Unmarshal(value.GetValue(), caps))
+	}
+	if caps.Capabilities == nil {
+		caps.Capabilities = make(map[string]*cb.Capability)
+	}
+	caps.Capabilities[capabilities.PactwayPQTransportV1] = &cb.Capability{}
+	value.Value = protoutil.MarshalOrPanic(caps)
+	payload.Data = protoutil.MarshalOrPanic(config)
+	envelope.Payload = protoutil.MarshalOrPanic(payload)
+	block.Data.Data[0] = protoutil.MarshalOrPanic(envelope)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.GetData())
 	return block
 }
 
@@ -147,13 +186,28 @@ func (f Fixture) Provision(t *testing.T, store *activation.Store, config *cb.Con
 }
 
 func (f Fixture) Authorize(t *testing.T, version uint64, base, next *cb.Config) activation.Authorization {
+	return f.AuthorizeWithProfile(t, version, base, next, pqtransport.ProfileV1)
+}
+
+// AuthorizeWithProfile signs an explicit profile for adversarial transition tests.
+func (f Fixture) AuthorizeWithProfile(t *testing.T, version uint64, base, next *cb.Config, profile string) activation.Authorization {
+	return f.authorize(t, version, base, next, profile, Network, ChannelID)
+}
+
+// AuthorizeWithIdentity signs explicit identities for adversarial transition tests.
+func (f Fixture) AuthorizeWithIdentity(t *testing.T, version uint64, base, next *cb.Config, network, channel string) activation.Authorization {
+	return f.authorize(t, version, base, next, pqtransport.ProfileV1, network, channel)
+}
+
+func (f Fixture) authorize(t *testing.T, version uint64, base, next *cb.Config, profile, network, channel string) activation.Authorization {
 	t.Helper()
 	previous, err := json.Marshal(document(t, version, base))
 	require.NoError(t, err)
 	candidate := document(t, version+1, next)
+	candidate.Profile = profile
 	payload, signature := f.sign(t, candidate)
 	transition, transitionSignature := f.sign(t, pqtransport.TransitionDocument{
-		Network: Network, Node: Node, Channel: ChannelID, Profile: pqtransport.ProfileV1,
+		Network: network, Node: Node, Channel: channel, Profile: profile,
 		PreviousVersion: version, PreviousDigest: digest(previous),
 		NewVersion: version + 1, NewPolicyDigest: digest(payload),
 		NewConfigSequence: next.GetSequence(), NewConfigDigest: candidate.Channels[ChannelID].Digest,

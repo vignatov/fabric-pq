@@ -461,6 +461,19 @@ func TestHybridCertificateCapabilityCannotBeRemoved(t *testing.T) {
 	require.NoError(t, classical.ValidateNew(required))
 }
 
+func TestPQ40B1TransportCapabilityIsGenesisOnly(t *testing.T) {
+	protected := &Bundle{channelConfig: &ChannelConfig{protos: &ChannelProtos{
+		Capabilities: &cb.Capabilities{Capabilities: map[string]*cb.Capability{cc.PactwayPQTransportV1: {}}},
+	}}}
+	baseline := &Bundle{channelConfig: &ChannelConfig{}}
+	require.True(t, PQTransportRequired(protected))
+	require.False(t, PQTransportRequired(baseline))
+	require.ErrorContains(t, baseline.ValidateNew(protected), "only be selected in genesis")
+	require.ErrorContains(t, protected.ValidateNew(baseline), "cannot be removed")
+	require.NoError(t, protected.ValidateNew(protected))
+	require.NoError(t, baseline.ValidateNew(baseline))
+}
+
 func TestPermanentHybridCertificateProfileCannotBeRemovedOrDowngraded(t *testing.T) {
 	permanent := &Bundle{
 		channelConfig: &ChannelConfig{

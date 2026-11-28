@@ -319,6 +319,18 @@ func (p *Peer) CreateChannel(
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
 	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
 ) error {
+	envelope, err := protoutil.ExtractEnvelope(cb, 0)
+	if err != nil {
+		return errors.Wrap(err, "extract channel genesis")
+	}
+	genesisBundle, err := channelconfig.NewBundleFromEnvelope(envelope, p.CryptoProvider)
+	if err != nil {
+		return errors.Wrap(err, "validate channel genesis")
+	}
+	if channelconfig.PQTransportRequired(genesisBundle) &&
+		(p.ProtectedRegistry == nil || !p.ProtectedRegistry.RequiresProtection(cid)) {
+		return errors.New("PQ transport capability requires authenticated managed channel protection")
+	}
 	if p.ProtectedRegistry != nil {
 		if controller := p.ProtectedRegistry.Controller(cid, p.CryptoProvider); controller != nil {
 			controller.Validate = validateProtectedPeerConfig
@@ -432,6 +444,9 @@ func (p *Peer) createChannel(
 	bundle, err := channelconfig.NewBundle(cid, chanConf, p.CryptoProvider)
 	if err != nil {
 		return err
+	}
+	if controller == nil && channelconfig.PQTransportRequired(bundle) {
+		return errors.New("PQ transport capability requires authenticated managed channel protection")
 	}
 
 	if controller == nil {

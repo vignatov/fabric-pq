@@ -95,10 +95,21 @@ func TestPQ40ECreateChannelRecoversProtectedResources(t *testing.T) {
 }
 
 func TestPQ40CPeerActivation(t *testing.T) {
-	for _, scenario := range []string{"authorized", "staged authorized", "staged publish retry", "staged missing operator", "missing operator", "missing Fabric signature", "committed without preparation", "mismatching join"} {
+	testPeerActivation(t, false)
+}
+
+func TestPQ40B1PeerActivation(t *testing.T) {
+	testPeerActivation(t, true)
+}
+
+func testPeerActivation(t *testing.T, transportCapability bool) {
+	for _, scenario := range []string{"authorized", "staged authorized", "staged publish retry", "staged missing operator", "missing operator", "invalid policy signature", "skipped operator generation", "wrong network", "wrong channel", "missing Fabric signature", "committed without preparation", "mismatching join"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := testfixture.New(t)
 			genesis := testfixture.Genesis(t)
+			if transportCapability {
+				genesis = testfixture.TransportGenesis(t)
+			}
 			base := testfixture.Config(t, genesis)
 			update := fixture.Update(t, base)
 			auth := fixture.Authorize(t, 1, base, update.GetConfig())
@@ -107,6 +118,18 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			}
 			if scenario == "missing operator" {
 				auth = activation.Authorization{}
+			}
+			if scenario == "invalid policy signature" {
+				auth.PolicySignature[0] ^= 1
+			}
+			if scenario == "skipped operator generation" {
+				auth = fixture.Authorize(t, 2, base, update.GetConfig())
+			}
+			if scenario == "wrong network" {
+				auth = fixture.AuthorizeWithIdentity(t, 1, base, update.GetConfig(), "wrong-network", testfixture.ChannelID)
+			}
+			if scenario == "wrong channel" {
+				auth = fixture.AuthorizeWithIdentity(t, 1, base, update.GetConfig(), testfixture.Network, "wrong-channel")
 			}
 			block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
 			block.Data.Data = [][]byte{protoutil.MarshalOrPanic(fixture.Envelope(t, update))}
@@ -266,7 +289,7 @@ func TestPQ40CPeerActivation(t *testing.T) {
 				} else {
 					require.ErrorContains(t, err, "load operator approval")
 				}
-			case "missing operator":
+			case "missing operator", "invalid policy signature", "skipped operator generation", "wrong network", "wrong channel":
 				require.ErrorContains(t, controller.Apply(block, auth, commit), "operator authorization")
 			case "missing Fabric signature":
 				require.ErrorContains(t, controller.Apply(block, auth, commit), "Fabric config authorization")
@@ -281,7 +304,7 @@ func TestPQ40CPeerActivation(t *testing.T) {
 			require.NoError(t, err)
 			controller.Gate = &activation.Gate{}
 			err = controller.Recover(true)
-			if scenario == "missing operator" || scenario == "staged missing operator" || scenario == "committed without preparation" {
+			if scenario == "missing operator" || scenario == "invalid policy signature" || scenario == "skipped operator generation" || scenario == "wrong network" || scenario == "wrong channel" || scenario == "staged missing operator" || scenario == "committed without preparation" {
 				require.ErrorContains(t, err, "quarantined")
 				require.ErrorContains(t, controller.Recover(true), "quarantined")
 				require.Equal(t, []uint64{0}, published)

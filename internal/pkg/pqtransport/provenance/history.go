@@ -187,6 +187,9 @@ func VerifyHistory(request Request) (*VerifiedHistory, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize genesis channel configuration: %w", err)
 	}
+	if err := currentBundle.ChannelConfig().Capabilities().Supported(); err != nil {
+		return nil, fmt.Errorf("unsupported genesis channel capability: %w", err)
+	}
 	genesisOrderer, hasOrderer := currentBundle.OrdererConfig()
 	if !hasOrderer {
 		return nil, errors.New("genesis channel configuration has no orderer section")
@@ -235,6 +238,9 @@ func VerifyHistory(request Request) (*VerifiedHistory, error) {
 		nextBundle, err := channelconfig.NewBundle(request.Channel, configEnvelope.GetConfig(), request.Crypto)
 		if err != nil {
 			return nil, fmt.Errorf("load configuration block %d: %w", number, err)
+		}
+		if err := nextBundle.ChannelConfig().Capabilities().Supported(); err != nil {
+			return nil, fmt.Errorf("unsupported channel capability at block %d: %w", number, err)
 		}
 		if err := currentBundle.ValidateNew(nextBundle); err != nil {
 			return nil, fmt.Errorf("validate configuration compatibility at block %d: %w", number, err)

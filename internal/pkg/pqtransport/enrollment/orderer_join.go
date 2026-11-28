@@ -64,6 +64,9 @@ func (r *Registry) VerifyOrdererJoin(id string, block *cb.Block, crypto bccsp.BC
 }
 
 func (r *Registry) joinAnchor(controller *activation.Channel, genesis, block *cb.Block) (JoinAnchor, error) {
+	if err := controller.VerifyCapabilityBinding(genesis, block); err != nil {
+		return JoinAnchor{}, err
+	}
 	if err := controller.ValidateBlockShape(block); err != nil {
 		return JoinAnchor{}, err
 	}
