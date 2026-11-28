@@ -1,13 +1,15 @@
-# PQ4.0E development gate decision proposal
+# PQ4.0E development gate decision
 
-**Proposed decision: PQ4.0E COMPLETE (DEVELOPMENT), conditioned on explicit
-independent architecture/security acceptance of this decision and its bounded
-trust model.** This proposal is not that acceptance. The authoritative
-[PQ4.0E status](pq4.0e-status.md) remains INCOMPLETE until independent acceptance
-is recorded and the accepted decision is merged to `main`. The reviewer must
-record an explicit disposition on this decision in the PR; prior reviews support
-the proposal but do not self-certify it. After approval, update the authoritative
-status to COMPLETE (DEVELOPMENT) as part of the accepted record on `main`.
+**Accepted: PQ4.0E COMPLETE (DEVELOPMENT).** The [architecture/security
+assessment](https://github.com/vignatov/fabric-pq/pull/17#issuecomment-7231283221)
+explicitly accepted the bounded decision at PR #17 head
+`37c5c60f9bfb63e368f4c34e876f61dc32189ff0` and requested this recording
+update. It is a conversation comment posted by the authenticated PR author,
+who could not submit a formal self-approval; the comment describes the
+assessment as independent. It assesses the evidence and does not claim to
+have re-executed the VM. This record becomes effective on `main` when merged;
+the [authoritative status](pq4.0e-status.md) on `main` remains incomplete
+until then.
 
 ## Evidence inventory
 
@@ -25,7 +27,7 @@ reconciled the evidence at merge commit `4c75149e18248a898e6d1a224a63c25d9cba21f
 | Ubuntu VM, snapshot and provisioning | The [property matrix and artifact inventory](pq4.0e3-development-gate.md) identify hosted Ubuntu 24.04 jobs, disposable service-manager VM, separate identities, controlled Ledger A/B export, signed authorization and execution record, snapshot inventory, protected import, fresh-process recovery and baseline continuity. The [snapshot report](pq4.0e2-acceptance.md) and [provisioning guide](pq4.0e3-provisioning.md) describe their respective boundaries. The [PR #15 artifact record](https://github.com/vignatov/fabric-pq/pull/15#issuecomment-7201333814) reports payload verification; the [implementation review](https://github.com/vignatov/fabric-pq/pull/15#pullrequestreview-6081072626) inspected source and hosted logs. |
 | PR #16 reconciliation | Its [second review](https://github.com/vignatov/fabric-pq/pull/16#issuecomment-7223561423) supports bounded development completion after a separate decision on `main`, and identifies documentation-branch [Verify Build](https://github.com/vignatov/fabric-pq/actions/runs/46015489267) (19 jobs) and [PQ3](https://github.com/vignatov/fabric-pq/actions/runs/46015489026) successes. It is a conversation comment because the authenticated PR author could not submit a self-approval review. These checks do not replace PR #15 implementation evidence. |
 
-## Accepted scope proposed for review
+## Accepted development scope
 
 The demonstration trusts the privileged provisioner and service manager,
 authorized test-harness exporter, and Linux kernel. The signed execution record
@@ -40,5 +42,5 @@ and [snapshot provenance](pq4.0e2-snapshot-provenance.md). Distributed CCAAS
 and production topology are also outside this decision.
 
 PQ4.0B network-wide enforcement remains INCOMPLETE. This decision does not
-authorize PQ4.1. PQ4.0B.1 is blocked until independent acceptance of this
-decision and its recording on `main`; only then is PQ4.0B.1 authorized.
+authorize PQ4.1. PQ4.0B.1 remains blocked until this accepted decision is
+recorded on `main`; only then is PQ4.0B.1 authorized.

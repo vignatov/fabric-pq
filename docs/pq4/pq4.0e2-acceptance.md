@@ -1,5 +1,9 @@
 # PQ4.0E development acceptance report
 
+> Historical evidence report: its incomplete decision and pending statements
+> describe the PQ4.0E.2 checkpoint. See the [later development decision](pq4.0e-development-decision.md)
+> for the accepted disposition and effective status on `main`.
+
 **Decision: INCOMPLETE — ADDITIONAL EVIDENCE REQUIRED**
 
 PQ4.0E.3 adds an independently signed exporter authorization, an OS-controlled

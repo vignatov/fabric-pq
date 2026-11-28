@@ -1,5 +1,9 @@
 # PQ4.0B gate report: INCOMPLETE
 
+> Historical PQ4.0E status statements in this report describe earlier
+> checkpoints. The [PQ4.0E development decision](pq4.0e-development-decision.md)
+> records the later bounded disposition. PQ4.0B remains incomplete.
+
 PQ4.0E demonstrates authenticated managed startup, bounded channel admission
 and staging. Production verification and the broader network transport proof
 remain open. [PQ4.0E status and service inventory](pq4.0e-status.md)
