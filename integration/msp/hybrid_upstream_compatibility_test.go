@@ -213,7 +213,10 @@ func expectUnsupportedOrdererToRejectCapability(binary, requiredCapability strin
 	defer func() {
 		if ordererProcess != nil {
 			ordererProcess.Signal(syscall.SIGTERM)
-			Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive())
+			var exitErr error
+			Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive(&exitErr))
+			_, writeErr := fmt.Fprintf(GinkgoWriter, "CAPABILITY_ORDERER process_exit=%v after=SIGTERM\n", exitErr)
+			Expect(writeErr).NotTo(HaveOccurred())
 		}
 		if network != nil {
 			network.Cleanup()
@@ -270,7 +273,7 @@ func expectUnsupportedOrdererToRejectCapability(binary, requiredCapability strin
 	Expect(err).NotTo(HaveOccurred())
 	Expect(response.StatusCode).NotTo(Equal(http.StatusCreated))
 	Expect(string(body)).To(ContainSubstring(fmt.Sprintf("Channel capability %s is required but not supported", requiredCapability)))
-	_, err = fmt.Fprintf(GinkgoWriter, "CAPABILITY_ORDERER join_http_status=%d channel_ready=false diagnostic=%q\n", response.StatusCode, string(body))
+	_, err = fmt.Fprintf(GinkgoWriter, "CAPABILITY_ORDERER process_ready=true join_http_status=%d channel_ready=false diagnostic=%q\n", response.StatusCode, string(body))
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(ordererRunner.Err(), network.EventuallyTimeout).Should(gbytes.Say(requiredCapability))
 }

@@ -98,7 +98,7 @@ jobs:
           go version
           uname -a
           printf 'GOFIPS140=%s\n' "$GOFIPS140"
-          go test -mod=vendor -count=1 -timeout 20m -v ./integration/msp -run '^TestMSP$' -args -ginkgo.focus='PQ4.0B.1 real capability compatibility'
+          go test -mod=vendor -count=1 -timeout 20m -v ./integration/msp -run '^TestMSP$' -args -ginkgo.v -ginkgo.focus='PQ4.0B.1 real capability compatibility'
 
       - name: Run temporary-profile PQ3 acceptance
         run: integration/pq3/pq3.sh acceptance
