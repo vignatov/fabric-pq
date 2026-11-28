@@ -349,14 +349,16 @@ func testMixedPeerPublicationFailureAndRestart(t *testing.T, transportCapability
 		require.NoError(t, enqueue(p, testfixture.ChannelID, attempt))
 		require.Eventually(t, func() bool {
 			_, release, admitted := p.AcquireChannelAdmission(testfixture.ChannelID)
-			if admitted {
+			if release != nil {
 				release()
 			}
 			return !admitted
 		}, 10*time.Second, 50*time.Millisecond)
 		_, release, admitted := p.AcquireChannelAdmission(baseline)
 		require.True(t, admitted)
-		release()
+		if release != nil {
+			release()
+		}
 		persisted, err := RetrievePersistedChannelConfig(p.Channel(testfixture.ChannelID).Ledger())
 		require.NoError(t, err)
 		require.EqualValues(t, 1, persisted.GetSequence())
