@@ -186,6 +186,13 @@ func testOrdererActivation(t *testing.T, transportCapability bool) {
 		t.Fatal("replayed configuration entered native commit")
 		return nil
 	}), "Fabric config authorization")
+	secondUpdate := fixture.Update(t, update.GetConfig())
+	secondBlock := writer.CreateNextBlock([]*cb.Envelope{fixture.Envelope(t, secondUpdate)})
+	require.ErrorContains(t, controller.Apply(secondBlock, auth, func() error {
+		t.Fatal("replayed operator authorization entered native commit")
+		return nil
+	}), "transition previous checkpoint conflicts")
+	require.False(t, controller.Ready())
 }
 
 func verifyActivationMetadata(t *testing.T, block *cb.Block, bundle *channelconfig.Bundle, raftMetadata []byte) {
