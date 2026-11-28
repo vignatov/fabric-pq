@@ -409,3 +409,10 @@ passed against the configured older Pactway and upstream binaries; its
 [Basic Checks](https://github.com/vignatov/fabric-pq/actions/runs/46175305129)
 failed on a protobuf getter lint and unit and integration jobs were skipped.
 These results are not final-head evidence, and skipped jobs are not passes.
+For commit `50f9f3f9fb475fedb82742b7196c09b8d574b1ed`,
+[Verify Build](https://github.com/vignatov/fabric-pq/actions/runs/46175600895)
+failed Basic Checks on another protobuf getter and the managed-binary test
+because its binary filenames did not match the authenticated launcher contract;
+dependent unit and integration jobs were skipped. Superseded runs for commits
+`3a7c4ba56`, `f3ad03de5` and `90b87e370` were cancelled while in progress;
+their incomplete jobs are not passes.

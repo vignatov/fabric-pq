@@ -84,10 +84,11 @@ jobs:
         run: go test -mod=vendor -race -count=1 -run '^TestPQ40B1' ./common/capabilities ./common/channelconfig ./core/peer ./orderer/common/multichannel ./internal/pkg/pqtransport/activation/...
       - name: Test real managed orderer and record binary hashes
         run: |
-          go build -mod=vendor -o "$RUNNER_TEMP/pq40b1-orderer" ./cmd/orderer
-          go build -mod=vendor -o "$RUNNER_TEMP/pq40b1-peer" ./cmd/peer
-          sha256sum "$RUNNER_TEMP/pq40b1-orderer" "$RUNNER_TEMP/pq40b1-peer"
-          PQ40E_MANAGED_ORDERER="$RUNNER_TEMP/pq40b1-orderer" PQ40E_MANAGED_PEER="$RUNNER_TEMP/pq40b1-peer" \
+          mkdir -p "$RUNNER_TEMP/pq40b1"
+          go build -mod=vendor -o "$RUNNER_TEMP/pq40b1/orderer" ./cmd/orderer
+          go build -mod=vendor -o "$RUNNER_TEMP/pq40b1/peer" ./cmd/peer
+          sha256sum "$RUNNER_TEMP/pq40b1/orderer" "$RUNNER_TEMP/pq40b1/peer"
+          PQ40E_MANAGED_ORDERER="$RUNNER_TEMP/pq40b1/orderer" PQ40E_MANAGED_PEER="$RUNNER_TEMP/pq40b1/peer" \
             go test -mod=vendor -race -count=1 -v -run '^TestPQ40B1Managed(Orderer|Peer)Restart$' ./cmd/pq-launcher
   pq40b-component:
     name: PQ4.0B Component Checks (gate incomplete)

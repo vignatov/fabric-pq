@@ -51,7 +51,7 @@ func TestPQ40B1OrdererRejectsFabricAuthorizedCapabilityChanges(t *testing.T) {
 			if tc.add {
 				caps.Capabilities[capabilities.PactwayPQTransportV1] = &cb.Capability{}
 			} else {
-				delete(caps.Capabilities, capabilities.PactwayPQTransportV1)
+				delete(caps.GetCapabilities(), capabilities.PactwayPQTransportV1)
 			}
 			value.Value = protoutil.MarshalOrPanic(caps)
 			update := fixture.UpdateTo(t, base, next)
