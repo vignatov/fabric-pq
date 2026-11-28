@@ -29,9 +29,12 @@ func TestPQ40B1OrdererRejectsFabricAuthorizedCapabilityChanges(t *testing.T) {
 		name    string
 		genesis *cb.Block
 		add     bool
+		replace bool
+		want    string
 	}{
-		{name: "add after genesis", genesis: testfixture.Genesis(t), add: true},
-		{name: "remove after genesis", genesis: testfixture.TransportGenesis(t)},
+		{name: "add after genesis", genesis: testfixture.Genesis(t), add: true, want: "only be selected in genesis"},
+		{name: "remove after genesis", genesis: testfixture.TransportGenesis(t), want: "cannot be removed"},
+		{name: "replace with unknown capability", genesis: testfixture.TransportGenesis(t), replace: true, want: "not supported"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := testfixture.Config(t, tc.genesis)
@@ -53,13 +56,16 @@ func TestPQ40B1OrdererRejectsFabricAuthorizedCapabilityChanges(t *testing.T) {
 			} else {
 				delete(caps.GetCapabilities(), capabilities.PactwayPQTransportV1)
 			}
+			if tc.replace {
+				caps.Capabilities["PactwayPQTransportV0"] = &cb.Capability{}
+			}
 			value.Value = protoutil.MarshalOrPanic(caps)
 			update := fixture.UpdateTo(t, base, next)
 			lgr, _ := ordererActivationLedger(t, t.TempDir(), func(string) {})
 			require.NoError(t, lgr.Append(tc.genesis))
 			_, support := activationWriter(t, fixture, lgr, tc.genesis)
 			_, err := support.ProposeConfigUpdate(update.GetLastUpdate())
-			require.ErrorContains(t, err, "only be selected in genesis")
+			require.ErrorContains(t, err, tc.want)
 		})
 	}
 }

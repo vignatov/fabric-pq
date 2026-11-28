@@ -191,6 +191,15 @@ func (f Fixture) Authorize(t *testing.T, version uint64, base, next *cb.Config) 
 
 // AuthorizeWithProfile signs an explicit profile for adversarial transition tests.
 func (f Fixture) AuthorizeWithProfile(t *testing.T, version uint64, base, next *cb.Config, profile string) activation.Authorization {
+	return f.authorize(t, version, base, next, profile, Network, ChannelID)
+}
+
+// AuthorizeWithIdentity signs explicit identities for adversarial transition tests.
+func (f Fixture) AuthorizeWithIdentity(t *testing.T, version uint64, base, next *cb.Config, network, channel string) activation.Authorization {
+	return f.authorize(t, version, base, next, pqtransport.ProfileV1, network, channel)
+}
+
+func (f Fixture) authorize(t *testing.T, version uint64, base, next *cb.Config, profile, network, channel string) activation.Authorization {
 	t.Helper()
 	previous, err := json.Marshal(document(t, version, base))
 	require.NoError(t, err)
@@ -198,7 +207,7 @@ func (f Fixture) AuthorizeWithProfile(t *testing.T, version uint64, base, next *
 	candidate.Profile = profile
 	payload, signature := f.sign(t, candidate)
 	transition, transitionSignature := f.sign(t, pqtransport.TransitionDocument{
-		Network: Network, Node: Node, Channel: ChannelID, Profile: profile,
+		Network: network, Node: Node, Channel: channel, Profile: profile,
 		PreviousVersion: version, PreviousDigest: digest(previous),
 		NewVersion: version + 1, NewPolicyDigest: digest(payload),
 		NewConfigSequence: next.GetSequence(), NewConfigDigest: candidate.Channels[ChannelID].Digest,

@@ -221,6 +221,41 @@ func TestPQ40B1OrdererUncertainCommit(t *testing.T) {
 	testOrdererUncertainCommit(t, true)
 }
 
+func TestPQ40B1CheckpointWriteFailureClosesAdmission(t *testing.T) {
+	fixture := testfixture.New(t)
+	genesis := testfixture.TransportGenesis(t)
+	base := testfixture.Config(t, genesis)
+	dir := t.TempDir()
+	store, err := activation.OpenStore(dir, nil)
+	require.NoError(t, err)
+	fixture.Provision(t, store, base)
+	lgr, view := ordererActivationLedger(t, t.TempDir(), func(string) {})
+	require.NoError(t, lgr.Append(genesis))
+	controller := fixture.Channel(store, view)
+	controller.Validate = checkResources
+	require.NoError(t, controller.Recover(true))
+	writer, _ := activationWriter(t, fixture, lgr, genesis)
+	update := fixture.Update(t, base)
+	next := writer.CreateNextBlock([]*cb.Envelope{fixture.Envelope(t, update)})
+	approval := fixture.Authorize(t, 1, base, update.GetConfig())
+	checkpoint := filepath.Join(dir, "checkpoint")
+	backup := filepath.Join(dir, "checkpoint-backup")
+	err = controller.Apply(next, approval, func() error {
+		writer.WriteConfigBlock(next, nil)
+		if err := os.Rename(checkpoint, backup); err != nil {
+			return err
+		}
+		return os.Mkdir(checkpoint, 0o700)
+	})
+	require.Error(t, err)
+	require.False(t, controller.Ready())
+	require.EqualValues(t, 2, lgr.Height(), "the ledger must retain the committed block")
+	require.NoError(t, os.Remove(checkpoint))
+	require.NoError(t, os.Rename(backup, checkpoint))
+	require.NoError(t, controller.Recover(true))
+	require.True(t, controller.Ready())
+}
+
 func testOrdererUncertainCommit(t *testing.T, transportCapability bool) {
 	for _, scenario := range []struct {
 		name   string

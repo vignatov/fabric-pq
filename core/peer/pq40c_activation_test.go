@@ -103,7 +103,7 @@ func TestPQ40B1PeerActivation(t *testing.T) {
 }
 
 func testPeerActivation(t *testing.T, transportCapability bool) {
-	for _, scenario := range []string{"authorized", "staged authorized", "staged publish retry", "staged missing operator", "missing operator", "invalid policy signature", "skipped operator generation", "missing Fabric signature", "committed without preparation", "mismatching join"} {
+	for _, scenario := range []string{"authorized", "staged authorized", "staged publish retry", "staged missing operator", "missing operator", "invalid policy signature", "skipped operator generation", "wrong network", "wrong channel", "missing Fabric signature", "committed without preparation", "mismatching join"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := testfixture.New(t)
 			genesis := testfixture.Genesis(t)
@@ -124,6 +124,12 @@ func testPeerActivation(t *testing.T, transportCapability bool) {
 			}
 			if scenario == "skipped operator generation" {
 				auth = fixture.Authorize(t, 2, base, update.GetConfig())
+			}
+			if scenario == "wrong network" {
+				auth = fixture.AuthorizeWithIdentity(t, 1, base, update.GetConfig(), "wrong-network", testfixture.ChannelID)
+			}
+			if scenario == "wrong channel" {
+				auth = fixture.AuthorizeWithIdentity(t, 1, base, update.GetConfig(), testfixture.Network, "wrong-channel")
 			}
 			block := protoutil.NewBlock(1, protoutil.BlockHeaderHash(genesis.GetHeader()))
 			block.Data.Data = [][]byte{protoutil.MarshalOrPanic(fixture.Envelope(t, update))}
@@ -283,7 +289,7 @@ func testPeerActivation(t *testing.T, transportCapability bool) {
 				} else {
 					require.ErrorContains(t, err, "load operator approval")
 				}
-			case "missing operator", "invalid policy signature", "skipped operator generation":
+			case "missing operator", "invalid policy signature", "skipped operator generation", "wrong network", "wrong channel":
 				require.ErrorContains(t, controller.Apply(block, auth, commit), "operator authorization")
 			case "missing Fabric signature":
 				require.ErrorContains(t, controller.Apply(block, auth, commit), "Fabric config authorization")
@@ -298,7 +304,7 @@ func testPeerActivation(t *testing.T, transportCapability bool) {
 			require.NoError(t, err)
 			controller.Gate = &activation.Gate{}
 			err = controller.Recover(true)
-			if scenario == "missing operator" || scenario == "invalid policy signature" || scenario == "skipped operator generation" || scenario == "staged missing operator" || scenario == "committed without preparation" {
+			if scenario == "missing operator" || scenario == "invalid policy signature" || scenario == "skipped operator generation" || scenario == "wrong network" || scenario == "wrong channel" || scenario == "staged missing operator" || scenario == "committed without preparation" {
 				require.ErrorContains(t, err, "quarantined")
 				require.ErrorContains(t, controller.Recover(true), "quarantined")
 				require.Equal(t, []uint64{0}, published)
